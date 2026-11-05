@@ -42,13 +42,5 @@ jobs:
       - name: Quickshell integration
         run: env -u WAYLAND_DISPLAY bash scripts/test-quickshell.sh
 
-      - name: Check out the matching companion
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          repository: atlastimed/tunemarchy
-          ref: codex/omaspotify-integration
-          path: .companion
-          persist-credentials: false
-
-      - name: Test the companion socket
-        run: TUNEMARCHY_SOURCE="$GITHUB_WORKSPACE/.companion" scripts/test-companion.sh
+      - name: Test the companion socket contract
+        run: scripts/test-companion.sh
