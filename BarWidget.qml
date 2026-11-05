@@ -3,6 +3,7 @@ import QtQuick.Effects
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 import "Api.js" as Api
@@ -14,8 +15,8 @@ BarWidget {
 
   readonly property var spotify: bar && bar.shell
     ? bar.shell.serviceFor("io.github.atlastimed.omaspotify") : null
-  readonly property color foreground: bar ? bar.foreground : Color.foreground
-  readonly property color muted: Color.muted
+  readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
+  readonly property color muted: Commons.Color.muted
   readonly property string surfaceKey: "spotify-popup-" + String(root)
   readonly property string lyricsRequestKey: surfaceKey + "-lyrics"
   readonly property string barText: spotify
@@ -59,7 +60,7 @@ BarWidget {
     altHeld: root.hintAltHeld
     active: root.shortcutHintsActive
     foreground: root.foreground
-    accent: Color.accent
+    accent: Commons.Color.accent
   }
   readonly property bool opened: popupOpen
   readonly property var miniShortcutRows: spotify && spotify.showLyrics
@@ -827,7 +828,7 @@ BarWidget {
           text: root.spotify ? (root.spotify.lastError
             || root.spotify.auth.lastError
             || root.spotify.daemon.lastError) : ""
-          color: Color.urgent
+          color: Commons.Color.urgent
           font.family: root.bar ? root.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
           wrapMode: Text.WordWrap
@@ -884,8 +885,8 @@ BarWidget {
             anchors.fill: parent
             visible: !root.vinylRecordEnabled
             radius: Style.cornerRadius
-            color: Style.normalFillFor(root.foreground, Color.accent)
-            borderSpec: Border.controlSpec("normal", root.foreground, Color.accent)
+            color: Style.normalFillFor(root.foreground, Commons.Color.accent)
+            borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
 
             RetryImage {
               id: popupArtwork
@@ -916,7 +917,7 @@ BarWidget {
             anchors.fill: parent
             visible: root.vinylRecordEnabled
             radius: width / 2
-            color: Style.normalFillFor(root.foreground, Color.accent)
+            color: Style.normalFillFor(root.foreground, Commons.Color.accent)
             border.width: 1
             border.color: root.foreground
             clip: true
@@ -936,7 +937,7 @@ BarWidget {
               anchors.fill: parent
               anchors.margins: Style.space(3)
               radius: width / 2
-              color: Style.normalFillFor(root.foreground, Color.accent)
+              color: Style.normalFillFor(root.foreground, Commons.Color.accent)
               clip: true
 
               RotationAnimation on rotation {
@@ -976,7 +977,7 @@ BarWidget {
                 width: Math.max(Style.space(8), parent.width * 0.16)
                 height: width
                 radius: width / 2
-                color: Color.background
+                color: Commons.Color.background
                 border.width: 1
                 border.color: Qt.rgba(0, 0, 0, 0.35)
                 visible: popupRecordArtwork.status === Image.Ready
@@ -1031,8 +1032,8 @@ BarWidget {
               iconText: root.spotify && root.spotify.currentTrackSaved
                 ? "󰋑" : "󰋕"
               iconSize: Style.font.body
-              foreground: Color.urgent
-              accent: Color.urgent
+              foreground: Commons.Color.urgent
+              accent: Commons.Color.urgent
               hasCursor: root.miniCursorOn("like")
               enabled: root.spotify && root.spotify.currentTrackSaveAvailable
               horizontalPadding: Style.space(4)
@@ -1076,8 +1077,8 @@ BarWidget {
                 && root.spotify && root.spotify.currentArtistContextAvailable
               color: root.spotify && root.spotify.artist !== ""
                 && root.spotify.currentArtistContextAvailable
-                ? Color.accent : root.muted
-              accent: Color.accent
+                ? Commons.Color.accent : root.muted
+              accent: Commons.Color.accent
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.bodySmall
               onArtistRequested: function(item) { root.openArtist(item) }
@@ -1121,8 +1122,8 @@ BarWidget {
               fallbackClickable: root.spotify
                 && root.spotify.currentAlbumContextAvailable
               color: root.spotify && root.spotify.currentAlbumContextAvailable
-                ? Color.accent : root.muted
-              accent: Color.accent
+                ? Commons.Color.accent : root.muted
+              accent: Commons.Color.accent
               font.family: root.bar ? root.bar.fontFamily : Style.font.family
               font.pixelSize: Style.font.caption
               onFallbackRequested: root.openCurrentAlbum()

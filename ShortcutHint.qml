@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 import "Api.js" as Api
@@ -16,9 +17,9 @@ Item {
   property bool active: false
   property string navHint: ""
   property bool showWash: true
-  property color foreground: Color.foreground
-  property color accent: Color.accent
-  property color hintColor: Color.urgent
+  property color foreground: Commons.Color.foreground
+  property color accent: Commons.Color.accent
+  property color hintColor: Commons.Color.urgent
   readonly property color washColor: Qt.rgba(hintColor.r, hintColor.g,
     hintColor.b, Style.hoverFillAlpha)
   readonly property color washBorder: Qt.rgba(hintColor.r, hintColor.g,

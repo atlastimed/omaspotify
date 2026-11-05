@@ -11,6 +11,10 @@ ShellRoot {
     interval: 1
     running: true
     onTriggered: {
+    check(!auth.validClientId && auth.resolvedClientId === "",
+      "An unconfigured install borrowed another application's identity")
+    auth.beginLogin()
+    check(!auth.loginBusy, "An unconfigured install started authorization")
     var signOuts = 0
     auth.loggedOut.connect(function() { signOuts++ })
     auth.customClientId = "22222222222222222222222222222222"

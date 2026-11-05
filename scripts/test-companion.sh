@@ -12,7 +12,7 @@ cp "$companion_root/Service.qml" "$test_root/companion/"
 if [[ -f $companion_root/Model.js ]]; then cp "$companion_root/Model.js" "$test_root/companion/"; fi
 cp "$source_root/tests/integration/Companion.qml" "$test_root/shell.qml"
 env -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 XDG_RUNTIME_DIR="$test_root/runtime" \
-  timeout 15s dbus-run-session -- qs --no-color -p "$test_root" > "$test_root/output" 2>&1 || { cat "$test_root/output"; exit 1; }
+  timeout 15s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root" > "$test_root/output" 2>&1 || { cat "$test_root/output"; exit 1; }
 cat "$test_root/output"
 rg -q COMPANION_INTEGRATION_PASS "$test_root/output"
 if rg -i 'ReferenceError|TypeError|binding loop|Cannot assign|Unable to assign|Failed to load configuration' "$test_root/output"; then exit 1; fi

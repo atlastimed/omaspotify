@@ -17,16 +17,12 @@ Item {
   height: 0
 
   required property string pluginDir
-  // spotify-player and ncspot use the defaults below for Web API login.
-  // A second internal instance may override them for the streaming-only grant
-  // required by authorization-code Spotify Connect receivers such as Sonos.
-  property string clientId: "d420a117a32841c2b3474932e49fb54b"
-  // A personal Spotify Developer app client ID opts out of the shared
-  // per-app rate-limit bucket. Empty keeps the shipped client above. Only a
-  // 32-hex value is accepted, so a typo can never redirect the OAuth flow or
-  // the keyring entry (both are scoped per client ID).
+  // Web API access requires the user's developer app. Never borrow another
+  // project's application identity. Internal playback grants may supply an
+  // explicit clientId independently of this account/library identity.
+  property string clientId: ""
   property string customClientId: ""
-  readonly property bool validClientId: customClientId === "" || /^[0-9a-f]{32}$/i.test(customClientId)
+  readonly property bool validClientId: /^[0-9a-f]{32}$/i.test(customClientId || clientId)
   readonly property string resolvedClientId: validClientId
     ? (customClientId ? customClientId.toLowerCase() : clientId) : ""
   property bool initialized: false

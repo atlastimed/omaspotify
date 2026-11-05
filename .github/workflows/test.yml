@@ -66,6 +66,9 @@ jobs:
       - name: Check the OAuth callback listener bounds
         run: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_oauth_callback.py
 
+      - name: Check Soloist updates and key handling
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_soloist_runtime.py
+
       - name: Run script tests
         run: ./tests/test-scripts.sh
 

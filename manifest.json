@@ -47,9 +47,18 @@
       "normalizeVolume": "On",
       "volumeLevel": "Normal",
       "clientId": "",
+      "playbackEngine": "soloist",
       "showBarWidget": true
     },
     "schema": [
+      {
+        "key": "playbackEngine",
+        "type": "enum",
+        "label": "Local playback engine",
+        "options": ["soloist", "librespot"],
+        "defaultValue": "soloist",
+        "description": "Spotify Soloist uses a personal key and one Connect pairing. Librespot remains available for accounts that support it. Stop playback before switching engines."
+      },
       {
         "key": "showBarWidget",
         "type": "boolean",
@@ -249,7 +258,7 @@
         "type": "string",
         "label": "Spotify Developer app client ID",
         "defaultValue": "",
-        "description": "Optional personal Spotify Developer app client ID, with its own quota. Empty keeps the plugin's client. A valid 32-hex ID is required. Changing it clears the current session and requires authorization for your app."
+        "description": "Required 32-character Spotify Developer app client ID. Add http://127.0.0.1:8989/login to that app's Redirect URIs. No client secret is needed. Changing the ID requires signing in again."
       }
     ]
   }

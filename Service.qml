@@ -70,6 +70,7 @@ Item {
     normalizeVolume: "On",
     volumeLevel: "Normal",
     clientId: "",
+    playbackEngine: "soloist",
     librarySort: "library",
     libraryView: "list",
     libraryFilter: "all"
@@ -119,7 +120,10 @@ Item {
 
   readonly property alias auth: authManager
   readonly property alias api: spotifyApi
-  readonly property alias daemon: daemonManager
+  readonly property var daemonManager: usesSoloist ? soloistManager : librespotManager
+  readonly property var daemon: daemonManager
+  readonly property bool usesSoloist: String(settings.playbackEngine || "soloist") !== "librespot"
+  readonly property alias soloist: soloistManager
   readonly property alias backend: backendClient
   readonly property alias connectManager: spotifyConnectManager
   readonly property bool accountConnected: authManager.loggedIn
@@ -303,7 +307,7 @@ Item {
     ? displayedRemoteVolumePercent(remoteDevice) / 100
     : (hasLocalPlayer && activePlayer.volumeSupported
       ? Math.max(0, Math.min(1, Number(activePlayer.volume) || 0)) : 0)
-  readonly property real reportedSliderVolume: useRemotePlayback
+  readonly property real reportedSliderVolume: useRemotePlayback || usesSoloist
     ? playbackVolume : Api.engineVolumeToSlider(playbackVolume)
   readonly property real volume: pendingSliderVolume >= 0
     ? pendingSliderVolume : reportedSliderVolume
@@ -629,6 +633,8 @@ Item {
       return "Checking your saved Spotify session"
     if (!daemonManager.requirementsChecked || !daemonManager.credentialsChecked)
       return "Checking local playback"
+    if (usesSoloist && daemonManager.authenticationBusy)
+      return "Select OmaSpotify in the official Spotify app to pair playback"
     if (daemonManager.authenticationBusy)
       return "Approve local playback in your browser"
     return fullyConnected ? "Connected to Spotify" : "Ready to connect"
@@ -648,7 +654,7 @@ Item {
       "showVinylRecord", "shortcutPlayer", "shortcutHints", "showLyrics", "showArtwork", "showTrackTitle", "showArtistName",
       "showPausedTrack", "scrollBarText", "scrollSpeed", "maxBarTextWidth",
       "fixedBarWidth", "audioQuality", "normalizeVolume", "volumeLevel",
-      "clientId", "librarySort", "libraryView", "libraryFilter"]
+      "clientId", "playbackEngine", "librarySort", "libraryView", "libraryFilter"]
     for (var i = 0; i < keys.length; i++) {
       var key = keys[i]
       if (source[key] !== undefined) next[key] = source[key]
@@ -1451,7 +1457,7 @@ Item {
   function sendVolumeCommand(sliderValue) {
     var localVolume = !useRemotePlayback && hasLocalPlayer
       && activePlayer.volumeSupported
-    var normalized = localVolume
+    var normalized = localVolume && !usesSoloist
       ? Api.sliderToEngineVolume(sliderValue) : sliderValue
     var remoteSerial = 0
     if (!localVolume && useRemotePlayback && remoteDevice) {
@@ -1647,9 +1653,9 @@ Item {
     loadSidebarPlaylists()
   }
 
-  // Only the shipped client sees Spotify's own playlists, so they are read there on their own.
+  // Optional catalog fallback. This fork configures no borrowed application identity.
   function fillSpotifyPlaylists() {
-    if (!usingPersonalClientId) return
+    if (!spotifyApi.fallbackAuth) return
     var expected = dataSerial
     var found = []
     var ask = function(path, query, depth) {
@@ -4274,6 +4280,10 @@ Item {
   }
 
   function login() {
+    if (!authManager.validClientId) {
+      fail("Add your Spotify Developer app client ID before signing in.")
+      return
+    }
     if (authManager.loginBusy || authManager.sessionBusy
         || daemonManager.setupBusy || daemonManager.authenticationBusy) return
     noteActivity()
@@ -5034,16 +5044,6 @@ Item {
     customClientId: settings.clientId
   }
 
-  // Pinned to the shipped client id, which predates Spotify closing the catalog
-  // endpoints to new apps and so still reaches them. Only used for what a
-  // personal client id is refused, and only when one is configured: without
-  // that, authManager is already this identity.
-  AuthManager {
-    id: catalogAuthManager
-    pluginDir: root.pluginDir
-    restoreOnStart: true
-  }
-
   AuthManager {
     id: connectAuthManager
     pluginDir: root.pluginDir
@@ -5055,8 +5055,6 @@ Item {
   SpotifyApi {
     id: spotifyApi
     auth: authManager
-    // Offered even while it is still signing in, so the playlist list can wait for it.
-    fallbackAuth: root.usingPersonalClientId ? catalogAuthManager : null
   }
 
   SpotifyConnectManager {
@@ -5065,13 +5063,20 @@ Item {
   }
 
   DaemonManager {
-    id: daemonManager
-    pluginDir: root.pluginDir
+    id: librespotManager
+    pluginDir: root.usesSoloist ? "" : root.pluginDir
     deviceName: root.deviceName
     bitrateKbps: root.bitrateKbps
     normalizeVolume: root.normalizeVolume
     normalizationPregainDb: root.normalizationPregainDb
     mprisPresent: root.hasLocalPlayer
+  }
+
+  SoloistManager {
+    id: soloistManager
+    pluginDir: root.usesSoloist ? root.pluginDir : ""
+    deviceName: root.deviceName
+    sessionConnected: root.usesSoloist && backendClient.sessionConnected
   }
 
   BackendClient {

@@ -259,7 +259,7 @@ async fn handle_line<'a>(
         crate::protocol::Command::Hello => Ok(serde_json::json!({
             "protocol_version": PROTOCOL_VERSION,
             "backend_version": env!("CARGO_PKG_VERSION"),
-            "engine": "librespot"
+            "engine": state.with(|snapshot| snapshot.engine.clone())
         })),
         crate::protocol::Command::Ping => Ok(serde_json::json!({ "pong": true })),
         crate::protocol::Command::GetState => state

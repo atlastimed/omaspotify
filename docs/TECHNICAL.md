@@ -8,7 +8,7 @@ details out of the user-facing README.
 OmaSpotify runs as a plugin inside Omarchy's existing `omarchy-shell`
 Quickshell process. It provides a shared service, a bar widget, and a lazy-loaded
 panel. There is no embedded website, browser engine, second shell process, or
-resident helper process.
+separate shell for the compact companion. Local playback uses the processes described below.
 
 Local playback state and ordinary controls use MPRIS. Starting playback on this
 computer uses the backend's private Unix socket (`load`, `add_to_queue`) when
@@ -18,45 +18,33 @@ rate while that device is playing. Fast `/me/player` polling is reserved for
 remote or unknown targets. Spotify data and other user actions also use the
 Web API.
 
-Local audio runs in the plugin-owned `omaspotify-backend` Rust process,
-supervised by a static systemd user unit that is never enabled at login. The
-backend embeds a commit-pinned librespot revision rather than duplicating its
-private-protocol implementation. It owns configuration, cache/authentication,
-MPRIS, lifecycle, and a stable private Unix-socket boundary. The app starts the
-unit whenever its full player or mini-player is open, when you play on this
-computer, or when you choose it in Devices. Once every player surface closes,
-it stops after the configured idle period; 0 keeps it available indefinitely.
-This backend is the only playback engine; there is no second daemon.
+Local audio defaults to Spotify Soloist, supervised as a child of the Rust
+`omaspotify-backend --soloist` adapter in `omaspotify-soloist.service`. The adapter
+translates Soloist's loopback WebSocket events into the existing private Unix
+socket and MPRIS interfaces. Commands are serialized and acknowledged, with bounded
+frames and timeouts. Position uses a monotonic clock and publishes once a second.
+Playlist offsets that Soloist cannot express locally fall back to the Spotify
+Web API, preserving the chosen context and song. Volume uses Soloist's linear scale.
 
-The unit sets `PULSE_LATENCY_MSEC=250` only for local playback and caps
-librespot's private player runtime at two Tokio workers. That buffer is what
-stands between a stall anywhere in the decoder and a hole in the audio, and
-librespot drains it before it pauses. Measured on the sink monitor: 250 ms
-rides out a 140 ms stall, and the audio already queued plays for about 150 ms
-after Pause is pressed. The backend's own control runtime is single-threaded;
-keeping two player workers still allows network fetching, preloading, and
-blocking decoder work to overlap. Quickshell interpolates MPRIS position
-locally, so the backend publishes one authoritative position update per second
-instead of four.
+The official binary lives in `~/.local/lib/omaspotify/soloist`. A bounded download
+from Spotify's CDN extracts only the executable, checks its reported build age,
+and atomically replaces it. The daily user timer checks the 90-day lifetime and
+renews after 75 days; it does not interrupt the currently running inode. The
+SHA-256 record describes the downloaded binary, not a vendor signature. Spotify
+does not publish a signature in this workflow; HTTPS is the download trust boundary.
 
-Pause and Play from this app fade over 200 ms. The backend wraps librespot's
-audio output and ramps the volume of what it writes: a pause first fades the
-next 200 ms of audio to silence and only then asks librespot to pause, so the
-sound goes quiet about 350 ms after the press. A resume ramps up from
-silence. Pauses and resumes started from another Spotify device are not faded.
-If a pause never lands, the sound comes back after two seconds of silence
-rather than playing on muted.
+The masked UI passes the key over stdin to `secret-tool`. Only the runtime helper
+retrieves it. Soloist's CLI requires an argument, so the key remains visible to
+same-user process inspection while Soloist runs. Its unauthenticated WebSocket
+binds to `127.0.0.1` with an ephemeral port. This is a local-user interface, not a
+security boundary against untrusted local programs or browser pages.
 
-MPRIS uses a PID-qualified instance bus name, as required by the server library.
-Quickshell discovers the backend by its `librespot` identity and desktop entry.
-This lets diagnostic instances coexist without replacing the supervised
-player's bus ownership or making the app lose local playback state.
-
-The pinned librespot revision also applies an endpoint-continuous 20 ms fade
-out/in around manual track replacement. Natural end-of-track gapless
-transitions, seeks, and passthrough are unchanged. This fixes both the queued
-tail and the smaller waveform discontinuity without changing PipeWire routing
-or speaker tuning.
+The optional `librespot` engine retains the commit-pinned upstream implementation,
+its 250 ms PulseAudio buffer, 200 ms play/pause fades and square-root volume mapping.
+Those behaviors and upstream audio/memory measurements do not describe Soloist.
+Both engines identify as OmaSpotify through a PID-qualified MPRIS name and desktop
+entry. Only one engine should run at a time; the Soloist unit conflicts with the
+legacy unit. The existing configured idle-stop policy applies to both.
 
 Volume sliders apply while the knob moves; the seek slider still commits on
 release so a drag cannot make the player re-buffer per frame. A drag emits a
@@ -76,8 +64,8 @@ is capped at two of the four slots, spaced apart, and stands aside for three
 seconds after anything you open, so a page you are waiting on is never behind
 the crawl.
 
-The rate limit belongs to the client ID, which we share with every other app
-built on it, so a refusal can arrive without us having sent much at all. On a
+The rate limit belongs to your configured client ID and is shared with any other
+clients you configure to use that same developer app. On a
 429 the app honours `Retry-After` for everything, and the gap between background
 requests doubles and stays wide for the rest of the run. One page you are
 waiting on may try once during a cooldown, in case the refusal has slack in it;
@@ -87,7 +75,7 @@ diagnosable at all. See `docs/LIBRARY-DATA.md` for the measurements.
 
 ## Runtime requirements
 
-- Omarchy 4 with the Quickshell shell enabled
+- Omarchy 4.5 with the Quickshell shell enabled
 - Spotify Premium
 - the exact-commit attested plugin backend, or a local source build
 - Omarchy base tools: `secret-tool`, `openssl`, `xdg-open`, `wl-copy`,
@@ -97,8 +85,8 @@ The verified-release fast path also uses `curl` and GitHub CLI when available;
 neither is trusted as a bypass when provenance verification cannot complete.
 
 Omarchy's plugin installer deliberately clones and validates plugins without
-running install hooks or privileged code. The enabled plugin therefore prepares
-local playback on first load. It downloads the raw backend for the current
+running install hooks or privileged code. The user starts Soloist setup from the
+plugin. Native bridge setup downloads the raw backend for the current
 architecture from the matching version tag, checks the release checksum, then
 requires GitHub's signed build provenance to match this repository, the pinned
 release workflow, the exact tag and tagged commit, and a GitHub-hosted runner.
@@ -122,9 +110,10 @@ from reloading the plugin — and killing the build — mid-setup. A stale
 ## Authentication
 
 Web API access uses Spotify's Authorization Code with PKCE flow and the public
-application identity also used by `spotify-player` and ncspot. The fixed callback
-is `http://127.0.0.1:8989/login`. The playback backend performs its independent
-browser authorization on loopback port `8000`. Receivers that advertise the
+application identity from the user’s own developer app. The fixed callback
+is `http://127.0.0.1:8989/login`. Soloist pairs once through an official Spotify
+client and stores its personal key in the desktop keyring. Only the optional
+librespot backend performs independent browser authorization on loopback port `8000`. Receivers that advertise the
 `accesstoken` or `authorization_code` token type use a separate, on-demand,
 streaming-only PKCE grant on port `8990`.
 

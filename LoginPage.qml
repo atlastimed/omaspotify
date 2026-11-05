@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 import "Api.js" as Api
@@ -120,11 +121,57 @@ Item {
 
           Text {
             width: parent.width
-            text: "Two short steps. First connect your Spotify account so you can browse. Then approve playback on this computer if you want to listen here."
+            text: page.panel.service && page.panel.service.usesSoloist
+              ? "Connect your Spotify account to browse your library. Set up Soloist below for playback on this computer."
+              : "First connect your Spotify account to browse. Then approve playback on this computer."
             color: page.panel.muted
             font.family: page.panel.fontFamily
             font.pixelSize: Style.font.body
             wrapMode: Text.WordWrap
+          }
+
+          Column {
+            width: parent.width
+            spacing: Style.space(7)
+            visible: page.panel.service && !page.panel.service.auth.validClientId
+
+            Text {
+              width: parent.width
+              text: "Connect your developer app"
+              color: page.panel.foreground
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.subtitle
+              font.bold: true
+            }
+            Text {
+              width: parent.width
+              text: "In your Spotify Developer Dashboard, add http://127.0.0.1:8989/login to your app's Redirect URIs, then paste its client ID below. No client secret is needed."
+              color: page.panel.muted
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              wrapMode: Text.WordWrap
+            }
+            TextField {
+              width: parent.width
+              foreground: page.panel.foreground
+              placeholderText: "Your app's 32-character client ID"
+              text: page.panel.draftClientId
+              onTextEdited: page.panel.draftClientId = text
+            }
+            Row {
+              spacing: Style.space(7)
+              Button {
+                text: "Developer dashboard"
+                foreground: page.panel.foreground
+                onClicked: Qt.openUrlExternally("https://developer.spotify.com/dashboard")
+              }
+              Button {
+                text: "Use this app"
+                foreground: page.panel.foreground
+                enabled: /^[0-9a-f]{32}$/i.test(page.panel.draftClientId.trim())
+                onClicked: page.panel.service.persistSettings({ clientId: page.panel.draftClientId.trim() })
+              }
+            }
           }
 
           Column {
@@ -186,7 +233,8 @@ Item {
               iconText: "󰍂"
               foreground: page.panel.foreground
               selected: page.panel.fullyConnected
-              enabled: page.panel.service && !page.panel.fullyConnected && !page.panel.service.loginBusy
+              enabled: page.panel.service && page.panel.service.auth.validClientId
+                && !page.panel.fullyConnected && !page.panel.service.loginBusy
               onClicked: if (page.panel.service) page.panel.service.login()
             }
 
@@ -197,6 +245,12 @@ Item {
               visible: page.panel.service && page.panel.service.loginBusy
               onClicked: if (page.panel.service) page.panel.service.cancelLogin()
             }
+          }
+
+          SoloistSetup {
+            width: parent.width
+            panel: page.panel
+            visible: page.panel.service && page.panel.service.usesSoloist
           }
 
           Text {
@@ -216,7 +270,7 @@ Item {
           Text {
             width: parent.width
             text: page.panel.connectionErrorText()
-            color: Color.urgent
+            color: Commons.Color.urgent
             font.family: page.panel.fontFamily
             font.pixelSize: Style.font.bodySmall
             wrapMode: Text.WordWrap

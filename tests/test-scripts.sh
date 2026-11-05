@@ -386,7 +386,10 @@ TEST_SYSTEMCTL_LOG="$systemctl_log" \
 [[ ! -e $runtime_session/omaspotify ]]
 [[ ! -e $runtime_backend ]]
 grep -qx -- '--user disable --now omaspotify.service' "$systemctl_log"
+grep -qx -- '--user disable --now omaspotify-soloist.service' "$systemctl_log"
+grep -qx -- '--user disable --now omaspotify-soloist-update.timer' "$systemctl_log"
 grep -q 'clear service omaspotify kind refresh-token' "$secret_log"
+grep -q 'clear service omaspotify kind soloist-api-key' "$secret_log"
 
 set +e
 PATH="$mock_bin:$PATH" \
@@ -512,8 +515,9 @@ grep -q 'omaspotify-backend' "$source_root/scripts/playback-auth.sh"
 grep -q -- '--config-path "$config_root/omaspotify/playback.conf"' \
   "$source_root/scripts/playback-auth.sh"
 grep -q -- '--oauth-port 8000' "$source_root/scripts/playback-auth.sh"
-grep -q 'property string clientId: "d420a117a32841c2b3474932e49fb54b"' \
+grep -q 'property string clientId: ""' \
   "$source_root/AuthManager.qml"
+! grep -q 'catalogAuthManager' "$source_root/Service.qml"
 grep -q 'readonly property string redirectUri: "http://127.0.0.1:"' \
   "$source_root/AuthManager.qml"
 grep -q 'resolvedClientId' "$source_root/AuthManager.qml"
@@ -593,6 +597,13 @@ printf '#!/usr/bin/env bash\nprintf "500;250;\\n"\n' >"$equalizer_bin/cava"
 chmod +x "$equalizer_bin/pw-dump" "$equalizer_bin/cava"
 equalizer_output=$(PATH="$equalizer_bin:$PATH" timeout 1 \
   "$source_root/scripts/equalizer.sh" "$test_root/equalizer/cava.conf" 2 2>/dev/null || true)
+grep -qx '500;250;' <<<"$equalizer_output"
+grep -qx 'source = 6655' "$test_root/equalizer/cava.conf"
+
+# Soloist owns the audio stream when selected; Chromium and other audio stay out.
+sed -i 's/"omaspotify-backend"/"soloist"/' "$equalizer_bin/pw-dump"
+equalizer_output=$(PATH="$equalizer_bin:$PATH" timeout 1 \
+  "$source_root/scripts/equalizer.sh" "$test_root/equalizer/cava.conf" 2 soloist 2>/dev/null || true)
 grep -qx '500;250;' <<<"$equalizer_output"
 grep -qx 'source = 6655' "$test_root/equalizer/cava.conf"
 

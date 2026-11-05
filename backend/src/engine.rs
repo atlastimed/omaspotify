@@ -53,8 +53,8 @@ pub type EngineSender = mpsc::Sender<EngineRequest>;
 
 pub struct EngineRuntime {
     pub commands: EngineSender,
-    shutdown: watch::Sender<bool>,
-    done: oneshot::Receiver<Result<()>>,
+    pub(crate) shutdown: watch::Sender<bool>,
+    pub(crate) done: oneshot::Receiver<Result<()>>,
 }
 
 impl EngineRuntime {

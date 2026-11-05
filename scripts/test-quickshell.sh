@@ -4,6 +4,9 @@ source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
 mkdir -m 700 "$test_root/runtime"
+if [[ -n ${WAYLAND_DISPLAY:-} && $WAYLAND_DISPLAY != /* ]]; then
+  export WAYLAND_DISPLAY="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+fi
 export XDG_RUNTIME_DIR="$test_root/runtime"
 export QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1
 cp "$source_root/"{AuthManager.qml,Api.js,OAuth.js} "$test_root/"
@@ -20,6 +23,23 @@ rg -q AUTH_IDENTITY_PASS "$test_root/output" || {
 }
 echo 'Quickshell authorization integration passed.'
 
+mkdir -p "$test_root/soloist/plugin/scripts"
+cp "$source_root/SoloistManager.qml" "$test_root/soloist/plugin/"
+cp "$source_root/tests/integration/SoloistLifecycle.qml" "$test_root/soloist/shell.qml"
+cp "$source_root/tests/integration/soloist-runtime-fixture.py" "$test_root/soloist/plugin/scripts/soloist-runtime.py"
+printf '#!/bin/sh\nread -r device\n' > "$test_root/soloist/plugin/scripts/configure-playback.sh"
+env QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 \
+  timeout 15s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root/soloist" > "$test_root/soloist-output" 2>&1 || {
+  cat "$test_root/soloist-output"
+  exit 1
+}
+if ! rg -q SOLOIST_LIFECYCLE_PASS "$test_root/soloist-output" || \
+  rg -i 'ReferenceError|TypeError|binding loop|Cannot assign|Unable to assign' "$test_root/soloist-output"; then
+  cat "$test_root/soloist-output"
+  exit 1
+fi
+echo 'Quickshell Soloist key/start/replacement integration passed.'
+
 mkdir -p "$test_root/app/plugin" "$test_root/state"
 cp "$source_root/"*.qml "$source_root/"*.js "$test_root/app/plugin/"
 cp -r /usr/share/omarchy/shell/Commons /usr/share/omarchy/shell/Ui "$test_root/app/"
@@ -32,7 +52,7 @@ else
   app_platform=wayland
 fi
 env QT_QPA_PLATFORM="$app_platform" QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 XDG_STATE_HOME="$test_root/state" \
-  timeout 15s dbus-run-session -- qs --no-color -p "$test_root/app" > "$test_root/app-output" 2>&1 || {
+  timeout 15s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root/app" > "$test_root/app-output" 2>&1 || {
   cat "$test_root/app-output"
   exit 1
 }
@@ -57,7 +77,7 @@ printf '{"id":"%s","status":"controlled","action":"%s"}\n' "$device" "$action"
 HELPER
 chmod +x "$test_root/sonos/plugin/scripts/spotify-connect-device.py"
 env QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 XDG_STATE_HOME="$test_root/sonos-state" \
-  timeout 15s dbus-run-session -- qs --no-color -p "$test_root/sonos" > "$test_root/sonos-output" 2>&1 || {
+  timeout 15s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root/sonos" > "$test_root/sonos-output" 2>&1 || {
   cat "$test_root/sonos-output"
   exit 1
 }
@@ -91,7 +111,7 @@ BACKEND
 backend_pid=$!
 env QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 XDG_STATE_HOME="$test_root/local-state" \
   XDG_RUNTIME_DIR="$test_root/local-runtime" \
-  timeout 15s dbus-run-session -- qs --no-color -p "$test_root/local" > "$test_root/local-output" 2>&1 || true
+  timeout 15s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root/local" > "$test_root/local-output" 2>&1 || true
 kill "$backend_pid" 2>/dev/null || true
 rg -q LOCAL_PLAYBACK_SENT "$test_root/local-output" || {
   cat "$test_root/local-output"

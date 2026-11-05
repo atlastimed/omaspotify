@@ -1,5 +1,6 @@
 import QtQuick
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 // One entry in the library sidebar. Renders as a row or as a grid cell, with or
@@ -8,9 +9,9 @@ BorderSurface {
   id: row
 
   property var item: null
-  property color foreground: Color.foreground
-  property color accent: Color.accent
-  property color muted: Color.muted
+  property color foreground: Commons.Color.foreground
+  property color accent: Commons.Color.accent
+  property color muted: Commons.Color.muted
   property string fontFamily: Style.font.family
   property bool compact: false
   property bool grid: false

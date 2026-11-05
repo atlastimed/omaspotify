@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 import "Api.js" as Api
@@ -112,7 +113,7 @@ Item {
         Text {
           width: parent.width
           text: page.panel.connectionErrorText()
-          color: Color.urgent
+          color: Commons.Color.urgent
           font.family: page.panel.fontFamily
           font.pixelSize: Style.font.bodySmall
           wrapMode: Text.WordWrap
@@ -126,7 +127,7 @@ Item {
         id: localPlaybackSetup
         width: parent.width
         spacing: Style.space(7)
-        visible: page.panel.service && !page.panel.service.daemon.playbackReady
+        visible: page.panel.service && !page.panel.service.usesSoloist && !page.panel.service.daemon.playbackReady
 
         Text {
           text: "PLAYBACK ON THIS COMPUTER"
@@ -181,6 +182,12 @@ Item {
       PanelSeparator {
         foreground: page.panel.foreground
         visible: localPlaybackSetup.visible
+      }
+
+      SoloistSetup {
+        width: parent.width
+        panel: page.panel
+        visible: page.panel.service && page.panel.service.usesSoloist
       }
 
       Column {
@@ -256,7 +263,7 @@ Item {
           spacing: Style.space(6)
 
           Text {
-            text: "PERSONAL SPOTIFY APP · OPTIONAL"
+            text: "SPOTIFY DEVELOPER APP"
             color: page.panel.muted
             font.family: page.panel.fontFamily
             font.pixelSize: Style.font.caption
@@ -266,7 +273,7 @@ Item {
           TextField {
             width: parent.width
             foreground: page.panel.foreground
-            placeholderText: "Leave empty to use the shared app"
+            placeholderText: "Your app's 32-character client ID"
             text: page.panel.draftClientId
             onTextEdited: page.panel.draftClientId = text
           }
@@ -276,7 +283,7 @@ Item {
             text: page.panel.draftClientId.trim()
                   && !/^[0-9a-f]{32}$/i.test(page.panel.draftClientId.trim())
               ? "Enter a client ID with exactly 32 hexadecimal characters."
-              : "Uses your developer app's quota. Changing this clears the current session and requires authorization for the selected app."
+              : "Register http://127.0.0.1:8989/login in your app's Redirect URIs. Changing the client ID requires signing in again. No client secret is needed."
             color: page.panel.muted
             font.family: page.panel.fontFamily
             font.pixelSize: Style.font.caption
@@ -287,8 +294,7 @@ Item {
             text: "Apply app"
             foreground: page.panel.foreground
             enabled: page.panel.service
-              && (page.panel.draftClientId.trim() === ""
-                || /^[0-9a-f]{32}$/i.test(page.panel.draftClientId.trim()))
+              && /^[0-9a-f]{32}$/i.test(page.panel.draftClientId.trim())
               && page.panel.draftClientId.trim().toLowerCase()
                 !== String(page.panel.service.settings.clientId || "")
             onClicked: page.panel.service.persistSettings({

@@ -2,6 +2,7 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import qs.Commons
+import qs.Commons as Commons
 
 // Live spectrum for the expanded now-playing view.
 //
@@ -24,11 +25,12 @@ Item {
   property bool playing: false
   property string configPath: ""
   property string scriptPath: ""
+  property string backendBinary: "omaspotify-backend"
   property int barCount: 48
   property string mode: "bars"
-  property color barColor: Color.accent
-  property color foreground: Color.foreground
-  property color muted: Color.muted
+  property color barColor: Commons.Color.accent
+  property color foreground: Commons.Color.foreground
+  property color muted: Commons.Color.muted
   property string fontFamily: Style.font.family
   property real barGap: Style.space(4)
 
@@ -102,7 +104,7 @@ Item {
   Process {
     id: helper
     command: ["/usr/bin/bash", root.scriptPath, root.configPath,
-      String(root.barCount)]
+      String(root.barCount), root.backendBinary]
     stdout: SplitParser {
       splitMarker: "\n"
       onRead: function(line) { root.handleLine(line) }
