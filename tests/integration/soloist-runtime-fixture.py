@@ -12,6 +12,9 @@ elif action in ("start", "stop"):
     state["running"] = action == "start"
 elif action == "status":
     print(json.dumps(dict(state, installed=True, unit=True, paired=False)))
+    raise SystemExit(0)
 else:
     raise SystemExit(1)
-path.write_text(json.dumps(state))
+temporary = path.with_suffix(".tmp")
+temporary.write_text(json.dumps(state))
+temporary.replace(path)

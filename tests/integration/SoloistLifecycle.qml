@@ -31,5 +31,16 @@ ShellRoot {
       manager.saveKey("first-fixture-key")
     }
   }
-  Timer { interval: 8000; running: true; onTriggered: { console.log("SOLOIST_LIFECYCLE_FAIL: timed out"); Qt.quit() } }
+  Timer {
+    interval: 8000
+    running: true
+    onTriggered: {
+      console.log("SOLOIST_LIFECYCLE_FAIL: timed out; starts=" + root.starts
+        + " stops=" + root.stops + " ready=" + manager.playbackReady
+        + " checked=" + manager.requirementsChecked + " key=" + manager.keyAvailable
+        + " active=" + manager.serviceActive + " busy=" + manager.busy
+        + " error=" + manager.lastError)
+      Qt.quit()
+    }
+  }
 }
