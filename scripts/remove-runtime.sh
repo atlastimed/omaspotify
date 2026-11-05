@@ -47,8 +47,14 @@ if [[ ${runtime_dir##*/} == omaspotify ]]; then
 fi
 
 systemctl --user disable --now omaspotify.service >/dev/null 2>&1 || true
+for unit in omaspotify-soloist.service omaspotify-soloist-update.timer omaspotify-soloist-update.service; do
+  systemctl --user disable --now "$unit" >/dev/null 2>&1 || true
+  rm -f -- "$config_root/systemd/user/$unit"
+done
 rm -f -- "$backend_unit_file" "$backend_binary" \
-  "$backend_source_id_file" "$backend_binary_hash_file" "$backend_origin_file"
+  "$backend_source_id_file" "$backend_binary_hash_file" "$backend_origin_file" \
+  "$runtime_dir/soloist" "$runtime_dir/soloist-runtime.py" "$runtime_dir/soloist-build.json" \
+  "$runtime_dir/.soloist-install.lock"
 systemctl --user daemon-reload
 systemctl --user reset-failed omaspotify.service >/dev/null 2>&1 || true
 
@@ -105,6 +111,7 @@ if (( purge )); then
     for _ in {1..100}; do
       secret-tool clear service omaspotify kind refresh-token >/dev/null 2>&1 || break
     done
+    secret-tool clear service omaspotify kind soloist-api-key >/dev/null 2>&1 || true
     echo "Cleared matching OmaSpotify keyring entries."
   fi
 else

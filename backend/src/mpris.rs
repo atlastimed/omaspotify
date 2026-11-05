@@ -51,7 +51,9 @@ impl RootInterface for MprisAdapter {
         Ok(false)
     }
     async fn identity(&self) -> fdo::Result<String> {
-        Ok("OmaSpotify (librespot)".into())
+        Ok(self
+            .state
+            .with(|state| format!("OmaSpotify ({})", state.engine)))
     }
     async fn desktop_entry(&self) -> fdo::Result<String> {
         Ok("omaspotify".into())

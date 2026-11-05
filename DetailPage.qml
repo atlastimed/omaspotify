@@ -1,6 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
+import qs.Commons as Commons
 import qs.Ui
 
 import "Api.js" as Api
@@ -197,8 +198,8 @@ Item {
               ? "Saved" : "Save"
             iconText: page.panel.service && page.panel.service.isSaved(page.panel.service.detailItem)
               ? "󰓎" : "󰋑"
-            foreground: Color.urgent
-            accent: Color.urgent
+            foreground: Commons.Color.urgent
+            accent: Commons.Color.urgent
             focusable: false
             hasCursor: page.panel.cursorShown("page", "detail-save")
             enabled: page.panel.service && page.panel.service.detailItem

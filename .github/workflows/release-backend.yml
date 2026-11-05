@@ -56,7 +56,8 @@ jobs:
           CARGO_TARGET_DIR: ${{ runner.temp }}/backend-target
           CARGO_TERM_COLOR: never
         run: |
-          export SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)
+          export SOURCE_DATE_EPOCH
           cargo build --locked --release --manifest-path backend/Cargo.toml --target "${{ matrix.target }}"
 
       - name: Stage exact install artifact

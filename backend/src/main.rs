@@ -5,6 +5,7 @@ mod failure;
 mod mpris;
 mod protocol;
 mod socket;
+mod soloist;
 mod state;
 
 use std::path::PathBuf;
@@ -19,6 +20,9 @@ use crate::{config::BackendConfig, state::StateStore};
 #[derive(Debug, Parser)]
 #[command(version, about)]
 struct Cli {
+    /// Use Spotify's official Soloist receiver with the native MPRIS/socket adapter.
+    #[arg(long, global = true)]
+    soloist: bool,
     #[arg(long, global = true)]
     config_path: Option<PathBuf>,
     #[arg(long, global = true)]
@@ -99,14 +103,20 @@ async fn launch(cli: Cli) -> Result<()> {
     run(
         config,
         cli.socket_path.unwrap_or_else(config::default_socket_path),
+        cli.soloist,
     )
     .await
 }
 
-async fn run(config: BackendConfig, socket_path: PathBuf) -> Result<()> {
+async fn run(config: BackendConfig, socket_path: PathBuf, use_soloist: bool) -> Result<()> {
     let state = StateStore::new(BackendState::default());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
-    let mut runtime = match engine::start(config, state.clone()).await {
+    let started = if use_soloist {
+        soloist::start(config, state.clone()).await
+    } else {
+        engine::start(config, state.clone()).await
+    };
+    let mut runtime = match started {
         Ok(runtime) => runtime,
         Err(error) => {
             state.update(|current| {
@@ -139,8 +149,8 @@ async fn run(config: BackendConfig, socket_path: PathBuf) -> Result<()> {
         }
         _ = requested_shutdown.changed() => {}
         result = runtime.wait_done() => {
-            result.context("librespot engine stopped")?;
-            anyhow::bail!("librespot engine stopped unexpectedly");
+            result.context("playback engine stopped")?;
+            anyhow::bail!("playback engine stopped unexpectedly");
         }
         result = &mut mpris_task => {
             match result {

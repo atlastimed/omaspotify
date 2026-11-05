@@ -10,6 +10,10 @@ ShellRoot {
     interval: 20
     running: true
     onTriggered: {
+      for (var section of ["centerBegin", "centerEnd", "tray"]) {
+        var layout = {}; layout[section] = [{id: spotifyService.pluginId, deviceName: "Placed"}]
+        if (!spotifyService.entryInLayout(layout)) throw new Error("Settings lost in " + section)
+      }
       spotifyService.applySettings({ deviceName: "Desk" })
       spotifyService.applySettings({})
       if (spotifyService.deviceName !== "Desk")

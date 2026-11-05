@@ -796,7 +796,7 @@ function playlistEditRequest(playlist, userId, cached) {
     id: String(playlist.id),
     uri: String(playlist.uri || ""),
     snapshot: String(playlist.snapshotId || ""),
-    path: "/playlists/" + playlist.id + "/tracks",
+    path: "/playlists/" + encodeURIComponent(String(playlist.id)) + "/items",
     query: { fields: "items(added_at)", limit: 1, offset: total - 1 }
   }
 }

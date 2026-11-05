@@ -13,7 +13,7 @@ jobs:
     name: Rust backend
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
 
@@ -38,7 +38,7 @@ jobs:
     name: QML and scripts
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
 
@@ -65,6 +65,9 @@ jobs:
 
       - name: Check the OAuth callback listener bounds
         run: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_oauth_callback.py
+
+      - name: Check Soloist updates and key handling
+        run: PYTHONDONTWRITEBYTECODE=1 python3 tests/test_soloist_runtime.py
 
       - name: Run script tests
         run: ./tests/test-scripts.sh

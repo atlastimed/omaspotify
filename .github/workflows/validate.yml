@@ -17,7 +17,8 @@ jobs:
     steps:
       - name: Install snapshot dependencies
         run: |
-          echo 'Server = https://archive.archlinux.org/repos/2026/09/07/$repo/os/$arch' > /etc/pacman.d/mirrorlist
+          # shellcheck disable=SC2016 # pacman expands these repository variables.
+          echo 'Server = https://archive.archlinux.org/repos/2026/11/05/$repo/os/$arch' > /etc/pacman.d/mirrorlist
           pacman -Syyuu --noconfirm
           pacman -S --needed --noconfirm git jq ripgrep python qt6-declarative quickshell libpulse openssl pkgconf rustup dbus socat xdg-utils avahi libgcrypt
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
@@ -26,7 +27,7 @@ jobs:
       - name: Install supported Omarchy source and Rust toolchain
         run: |
           git clone --filter=blob:none --no-checkout https://github.com/basecamp/omarchy.git /usr/share/omarchy
-          git -C /usr/share/omarchy checkout 97a86af116b71ffd6b6dd0afc27cdefce5cacee2
+          git -C /usr/share/omarchy checkout 97e664bd971fa5a8691d89440d3738143499c438
           rustup toolchain install 1.97.1 --profile minimal --component rustfmt --component clippy
           rustup default 1.97.1
           echo '/usr/share/omarchy/bin' >> "$GITHUB_PATH"
@@ -38,3 +39,9 @@ jobs:
           chmod 700 /tmp/spotify-runtime
           export XDG_RUNTIME_DIR=/tmp/spotify-runtime
           bash scripts/test.sh
+
+      - name: Quickshell integration
+        run: env -u WAYLAND_DISPLAY bash scripts/test-quickshell.sh
+
+      - name: Test the companion socket contract
+        run: scripts/test-companion.sh

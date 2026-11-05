@@ -143,6 +143,7 @@ Item {
       anchors.bottom: parent.bottom
       active: page.active
       playing: page.service && page.service.playing
+      backendBinary: page.service && page.service.usesSoloist ? "soloist" : "omaspotify-backend"
       configPath: page.service && page.service.stateDir
         ? page.service.stateDir + "/cava.conf" : ""
       scriptPath: page.service && page.service.pluginDir

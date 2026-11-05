@@ -34,7 +34,7 @@ close_playback_callback_tab() {
 
 return_to_spotify() {
   command -v omarchy-shell >/dev/null 2>&1 || return 0
-  omarchy-shell -q shell summon io.github.jeremylanger.omaspotify '{"tab":"search"}' \
+  omarchy-shell -q shell summon io.github.atlastimed.omaspotify '{"tab":"search"}' \
     >/dev/null 2>&1 || true
 
   command -v hyprctl >/dev/null 2>&1 || return 0

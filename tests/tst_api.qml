@@ -1035,7 +1035,7 @@ TestCase {
     var mine = { id: "p1", uri: "spotify:playlist:p1", ownerId: "me", snapshotId: "s1", total: 40 }
     var theirs = { id: "p2", uri: "spotify:playlist:p2", ownerId: "you", snapshotId: "s2", total: 40 }
     var q = Api.playlistEditRequest(mine, "me", ({}))
-    compare(q.path, "/playlists/p1/tracks")
+    compare(q.path, "/playlists/p1/items")
     compare(q.query.offset, 39, "the last track added is the newest edit")
     compare(q.query.limit, 1)
     compare(Api.playlistEditRequest(theirs, "me", ({})), null)

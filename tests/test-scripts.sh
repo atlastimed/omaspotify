@@ -233,8 +233,8 @@ printf '%s\n' \
 printf '%s\n' \
   '#!/bin/sh' \
   'printf "%s\n" "$*" >>"${TEST_OMARCHY_LOG:?}"' \
-  'if [ "$*" = "plugin remove io.github.jeremylanger.omaspotify --yes" ]; then' \
-  '  rm -f -- "$HOME/.config/omarchy/plugins/io.github.jeremylanger.omaspotify"' \
+  'if [ "$*" = "plugin remove io.github.atlastimed.omaspotify --yes" ]; then' \
+  '  rm -f -- "$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify"' \
   'fi' \
   'exit 0' >"$mock_bin/omarchy"
 chmod 755 "$mock_bin/cargo" "$mock_bin/systemctl" \
@@ -386,7 +386,10 @@ TEST_SYSTEMCTL_LOG="$systemctl_log" \
 [[ ! -e $runtime_session/omaspotify ]]
 [[ ! -e $runtime_backend ]]
 grep -qx -- '--user disable --now omaspotify.service' "$systemctl_log"
+grep -qx -- '--user disable --now omaspotify-soloist.service' "$systemctl_log"
+grep -qx -- '--user disable --now omaspotify-soloist-update.timer' "$systemctl_log"
 grep -q 'clear service omaspotify kind refresh-token' "$secret_log"
+grep -q 'clear service omaspotify kind soloist-api-key' "$secret_log"
 
 set +e
 PATH="$mock_bin:$PATH" \
@@ -398,8 +401,8 @@ set -e
 
 # The top-level uninstaller wraps the runtime purge, removes the plugin through
 # Omarchy, clears exact-ID backups, restarts the shell, and remains idempotent.
-plugin_dir="$runtime_home/.config/omarchy/plugins/io.github.jeremylanger.omaspotify"
-plugin_backup="$runtime_home/.config/omarchy/plugins/.io.github.jeremylanger.omaspotify.bak.20260827000000"
+plugin_dir="$runtime_home/.config/omarchy/plugins/io.github.atlastimed.omaspotify"
+plugin_backup="$runtime_home/.config/omarchy/plugins/.io.github.atlastimed.omaspotify.bak.20260827000000"
 mkdir -p "$(dirname -- "$plugin_dir")" "$plugin_backup" \
   "$runtime_config/omaspotify" "$runtime_cache/spotifyd" \
   "$runtime_state/omaspotify" "$runtime_session/omaspotify" \
@@ -425,8 +428,8 @@ printf '%s\n' stale >"$runtime_backend/omaspotify-backend"
 [[ ! -e $runtime_config/omaspotify && ! -e $runtime_cache/spotifyd ]]
 [[ ! -e $runtime_state/omaspotify && ! -e $runtime_session/omaspotify ]]
 [[ ! -e $runtime_backend ]]
-grep -qx 'plugin disable io.github.jeremylanger.omaspotify' "$omarchy_log"
-grep -qx 'plugin remove io.github.jeremylanger.omaspotify --yes' "$omarchy_log"
+grep -qx 'plugin disable io.github.atlastimed.omaspotify' "$omarchy_log"
+grep -qx 'plugin remove io.github.atlastimed.omaspotify --yes' "$omarchy_log"
 grep -qx 'restart shell' "$omarchy_log"
 
 PATH="$mock_bin:$PATH" \
@@ -440,7 +443,7 @@ TEST_SECRET_LOG="$secret_log" \
 TEST_SYSTEMCTL_LOG="$systemctl_log" \
 TEST_OMARCHY_LOG="$omarchy_log" \
   "$source_root/scripts/uninstall.sh" >/dev/null
-[[ $(grep -c '^plugin remove io.github.jeremylanger.omaspotify --yes$' "$omarchy_log") -eq 1 ]]
+[[ $(grep -c '^plugin remove io.github.atlastimed.omaspotify --yes$' "$omarchy_log") -eq 1 ]]
 
 mkdir -p "$runtime_state/omaspotify/oauth" "$runtime_cache/spotifyd/oauth"
 printf '%s\n' '{"mock":"credential"}' \
@@ -490,7 +493,7 @@ PATH="$mock_bin:$PATH" \
   "$source_root/scripts/return-from-auth.sh"
 grep -q 'send_shortcut.*address:0xabc' "$handoff_hypr_log"
 grep -q 'focus.*address:0xdef' "$handoff_hypr_log"
-grep -q 'shell summon io.github.jeremylanger.omaspotify' "$handoff_shell_log"
+grep -q 'shell summon io.github.atlastimed.omaspotify' "$handoff_shell_log"
 
 printf '' >"$handoff_hypr_log"
 TEST_CLIENTS_JSON='[{"address":"0xabc","class":"chromium","title":"Unrelated tab - Chromium"},{"address":"0xdef","class":"org.quickshell","title":"OmaSpotify"}]' \
@@ -505,15 +508,16 @@ grep -qx 'umask 077' "$source_root/scripts/playback-auth.sh"
 [[ -x $source_root/scripts/backend-source-id.sh ]]
 [[ -x $source_root/scripts/uninstall.sh ]]
 grep -q 'remove-runtime.sh.*--purge' "$source_root/scripts/uninstall.sh"
-grep -q 'omarchy plugin remove io.github.jeremylanger.omaspotify --yes' "$source_root/scripts/uninstall.sh"
+grep -q 'omarchy plugin remove io.github.atlastimed.omaspotify --yes' "$source_root/scripts/uninstall.sh"
 grep -q '^## Remove it completely$' "$source_root/README.md"
 ! grep -q 'sudo\|pkexec' "$source_root/scripts/setup-playback.sh"
 grep -q 'omaspotify-backend' "$source_root/scripts/playback-auth.sh"
 grep -q -- '--config-path "$config_root/omaspotify/playback.conf"' \
   "$source_root/scripts/playback-auth.sh"
 grep -q -- '--oauth-port 8000' "$source_root/scripts/playback-auth.sh"
-grep -q 'property string clientId: "d420a117a32841c2b3474932e49fb54b"' \
+grep -q 'property string clientId: ""' \
   "$source_root/AuthManager.qml"
+! grep -q 'catalogAuthManager' "$source_root/Service.qml"
 grep -q 'readonly property string redirectUri: "http://127.0.0.1:"' \
   "$source_root/AuthManager.qml"
 grep -q 'resolvedClientId' "$source_root/AuthManager.qml"
@@ -593,6 +597,13 @@ printf '#!/usr/bin/env bash\nprintf "500;250;\\n"\n' >"$equalizer_bin/cava"
 chmod +x "$equalizer_bin/pw-dump" "$equalizer_bin/cava"
 equalizer_output=$(PATH="$equalizer_bin:$PATH" timeout 1 \
   "$source_root/scripts/equalizer.sh" "$test_root/equalizer/cava.conf" 2 2>/dev/null || true)
+grep -qx '500;250;' <<<"$equalizer_output"
+grep -qx 'source = 6655' "$test_root/equalizer/cava.conf"
+
+# Soloist owns the audio stream when selected; Chromium and other audio stay out.
+sed -i 's/"omaspotify-backend"/"soloist"/' "$equalizer_bin/pw-dump"
+equalizer_output=$(PATH="$equalizer_bin:$PATH" timeout 1 \
+  "$source_root/scripts/equalizer.sh" "$test_root/equalizer/cava.conf" 2 soloist 2>/dev/null || true)
 grep -qx '500;250;' <<<"$equalizer_output"
 grep -qx 'source = 6655' "$test_root/equalizer/cava.conf"
 

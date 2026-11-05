@@ -1,22 +1,41 @@
 # OmaSpotify
 
-**Spotify in Quickshell—not Chromium.**
+This is [atlastimed’s fork](https://github.com/atlastimed/omaspotify) of
+[jeremylanger/omaspotify](https://github.com/jeremylanger/omaspotify), targeting
+**Omarchy 4.5** and paired with [Tunemarchy](https://github.com/atlastimed/tunemarchy).
+The upstream player and MIT attribution are retained.
 
-OmaSpotify brings the Spotify experience you already know into a fast,
-beautiful Omarchy plugin. It uses about **60 MB of RAM** instead of roughly
-**950 MB** for the Spotify desktop client, follows your active Omarchy theme,
-and keeps your music close with an integrated mini player.
+Tunemarchy supplies a compact bar panel; this plugin owns the full library,
+account sign-in and playback. Hide this plugin’s own bar entry with
+`omarchy bar set io.github.atlastimed.omaspotify showBarWidget false --json`.
+The full player remains available through Tunemarchy’s **Open** action or
+`omarchy-shell shell summon io.github.atlastimed.omaspotify '{}'`.
 
-Pair it with **Omasing** and lyrics for the song you are playing are fetched
-for you, ready when you want them.
+The companion connection carries public playback state and a fixed list of
+controls over a display-scoped Unix socket in your private runtime directory.
+It never exposes access or refresh tokens. Queue and device requests happen
+when expanded; progress updates stop when the companion closes. The service
+is available for the companion without opening a second bar player. Local
+audio playback still starts on demand.
+
+This fork uses the upstream runtime name `omaspotify` for its audio service,
+configuration and caches. Use one OmaSpotify fork at a time; do not enable
+this and the original together. No official Spotify installation is replaced.
+
+
+A native Qt Quick player that follows your Omarchy theme. The default local
+audio engine is [Spotify Soloist](https://developer.spotify.com/documentation/soloist),
+with a small Rust adapter for MPRIS and playback commands. The official Spotify
+app is needed once for pairing; it can be closed afterwards. This fork has no
+new memory benchmark; upstream measurements describe the former librespot setup.
 
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/jeremylanger/omaspotify.git --enable
+omarchy plugin add https://github.com/atlastimed/omaspotify.git --enable
 ```
 
-Requires Omarchy 4 and a personal Spotify Premium account.
+Requires Omarchy 4.5, a personal Spotify Premium account, and your own Spotify Developer app.
 
 ## Why you will love it
 
@@ -106,7 +125,7 @@ listen, and top artists and songs sit underneath it across three ranges.
 `E` or `Alt+Shift+N` gives the current track the whole window—artwork, title,
 and a live equalizer drawn in your theme's colours. `V` switches between bars,
 pixels, scope and matrix. The equalizer listens only to OmaSpotify's own audio
-and needs `cava` (`sudo pacman -S cava`).
+and needs `cava` (`omarchy pkg add cava`).
 
 ![The Now playing screen with album artwork above a live equalizer](docs/screenshots/now-playing.png)
 
@@ -138,7 +157,7 @@ To replace Omarchy's existing **Super+Shift+M · Music** binding, add this to
 ```lua
   hl.unbind("SUPER + SHIFT + M") -- previously: Music
   o.bind("SUPER + SHIFT + M", "OmaSpotify",
-    "omarchy shell -q io.github.jeremylanger.omaspotify.player togglePlayer")
+    "omarchy shell -q io.github.atlastimed.omaspotify.player togglePlayer")
 ```
 
 Run `hyprctl reload` and check `hyprctl configerrors` after saving. Until the
@@ -148,19 +167,19 @@ Settings choice below has no effect on the shortcut.
 In OmaSpotify's Settings, choose whether that shortcut launches Omarchy's
 Music app, toggles the full player, or toggles the mini-player. Separate
 bindings can call `toggleMiniPlayer` or `toggleFullPlayer` on the same
-`io.github.jeremylanger.omaspotify.player` target.
+`io.github.atlastimed.omaspotify.player` target.
 
 Raise or lower Spotify volume from a keybinding without opening the player:
 
 ```bash
-omarchy shell -q io.github.jeremylanger.omaspotify.player volumeUp
-omarchy shell -q io.github.jeremylanger.omaspotify.player volumeDown
+omarchy shell -q io.github.atlastimed.omaspotify.player volumeUp
+omarchy shell -q io.github.atlastimed.omaspotify.player volumeDown
 ```
 
 Each step is 5%, the same as Ctrl+Up / Ctrl+Down. This changes Spotify's own
 volume, including speakers, not the computer's output level.
 
-### Connect your Spotify account
+## Connect your Spotify account
 
 1. Click the Spotify icon in your bar (on the left by default; your layout may
    place it elsewhere).
@@ -179,43 +198,55 @@ provenance matches this plugin version's tag and the checkout's backend inputs
 still match that tagged source. If verification is unavailable, setup builds
 the locked Rust source locally instead of executing an unverified download.
 
-## Seeing "Spotify is busy." or slow searches?
+## Connect your Spotify account
 
-The plugin's Spotify Web API client ID is shared by every install worldwide,
-and Spotify rate-limits requests **per app**, not per user. When that shared
-quota runs out you see `Spotify is busy. Try again in N seconds.` and searches
-that stall even though nothing is wrong on your side.
+1. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+   and create or select your own app with **Web API** enabled.
+2. Add `http://127.0.0.1:8989/login` to its Redirect URIs, exactly. Existing
+   redirects can remain. Spotify requires an explicit loopback IP, not `localhost`.
+3. Paste the app's **Client ID** into OmaSpotify's sign-in page and choose
+   **Use this app**. No client secret is needed. You can change it later in Settings.
+4. Choose **Continue with Spotify**, authorize your account. Stored account sessions are isolated by client ID.
+5. In Settings, choose **Install / repair Soloist**. Create a personal Soloist
+   key in Spotify’s dashboard after reviewing its terms, paste it into the
+   masked field, and choose **Save key and start pairing**.
+6. Open the official Spotify phone or desktop app on the same network. Select
+   **OmaSpotify** in its device picker and play a song once. If the phone does
+   not discover it, try the desktop client on this computer. You can close
+   that client after pairing.
 
-You can use a personal [Spotify Developer app](https://developer.spotify.com/dashboard),
-which has a quota of its own that nobody else is spending.
+If Spotify reports `redirect_uri: Not matching configuration`, check that the
+callback above is saved on the same app whose client ID you entered, then
+restart sign-in from OmaSpotify. Reloading an old authorization tab retains
+its old app ID and callback.
 
-1. Create the app, and tick **Web API** under "Which API/SDKs are you planning to
-   use?". Nothing else is needed.
-2. Add `http://127.0.0.1:8989/login` as the app's redirect URI, exactly.
-3. Set **Spotify Developer app client ID** in the plugin settings and apply.
-   Leave it empty to use the shipped app. Invalid IDs produce an error.
-4. Authorize your app. Changing the ID clears the current session; stored
-   sessions are kept separate per client ID.
+This fork does not borrow ncspot's app ID or silently use its catalog session.
+Spotify restricts some discovery/catalog endpoints and Spotify-owned playlists
+for development-mode apps, so those results may be unavailable. Core library
+and playback features use your app. See Spotify's
+[quota modes](https://developer.spotify.com/documentation/web-api/concepts/quota-modes)
+for current account, allowed-user, and usage limits. A personal app is for your
+own use; do not distribute your ID as the default for other installations.
 
-**Keep the shipped app authorized as well.** Spotify
-[closed several endpoints to apps registered after November 2024](https://developer.spotify.com/blog/2024-11-27-changes-to-the-web-api),
-and a personal app cannot reach an artist's albums, an artist's top songs,
-related artists, new releases, or several tracks at once. Spotify also leaves
-its own playlists, like On Repeat and Your Top Songs, out of your playlist list.
-The shipped app predates that change, so OmaSpotify sends everything through
-your app and quietly asks the shipped one for just those. If you have never
-signed in with the shipped app, those parts of the artist page and the Home
-tab stay empty, and Spotify's playlists are missing from your library.
+### Local playback and updates
 
-This is a power-user option, not a recommendation for everyone. A
-development-mode app allows [five authorized users](https://developer.spotify.com/documentation/web-api/concepts/quota-modes),
-so it cannot be handed out to the people who install your fork, and it requires
-a Premium account. Since
-[July 2026](https://developer.spotify.com/blog/2026-07-23-web-api-quota-updates)
-a developer account may hold up to 25 client IDs, but the quota is counted per
-developer account rather than per ID, so making more of them does not buy more
-requests.
-The local Connect authorization remains separate.
+Soloist is downloaded directly from Spotify, not redistributed in this repository.
+Its builds expire after 90 days. The installed user timer checks daily and renews
+builds after 75 days; startup also checks. A running player keeps playing during
+an update and uses the new build on its next start. Internet access is required
+for renewal. The cache is capped at 512 MB.
+
+The API key is stored in GNOME Keyring, and pairing state lives in the private
+`$XDG_STATE_HOME/omaspotify/soloist` directory. Do not paste your key into an issue
+or commit it. Soloist currently accepts its key as a process argument, so other
+processes running as your Linux user can inspect it. Its control WebSocket binds
+only to loopback; local clients, including browser pages, must be trusted.
+
+`omaspotify-soloist.service` starts on demand. The update timer is enabled at login;
+the player itself is not. Inspect either with `systemctl --user status`.
+The previous librespot engine remains available through the `playbackEngine`
+setting for troubleshooting; stop playback before changing engines. It uses a
+separate browser authorization and may be affected by Spotify audio-key refusals.
 
 ### If playback setup fails
 
@@ -226,8 +257,8 @@ directory so Rustup uses the version in `rust-toolchain.toml`:
 
 ```bash
 omarchy pkg add rustup
-cd "$HOME/.config/omarchy/plugins/io.github.jeremylanger.omaspotify"
-./scripts/setup.sh
+cd "$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify"
+./scripts/setup-soloist.sh
 ```
 
 If you already have a working Rustup installation, skip the first command.
@@ -236,7 +267,7 @@ minutes. After it succeeds, restart the shell with `omarchy restart shell`,
 open OmaSpotify, and continue signing in.
 
 **Playback setup could not be completed** is a general setup error, not a
-Spotify password error. Running `./scripts/setup.sh` in a terminal shows the
+Spotify password error. Running `./scripts/setup-soloist.sh` in a terminal shows the
 underlying error. Missing Rust/Cargo is one possible cause; see the
 [technical prerequisites](docs/TECHNICAL.md) for the other requirements.
 
@@ -245,22 +276,22 @@ underlying error. Missing Rust/Cargo is one possible cause; see the
 Run the bundled uninstaller from outside the plugin directory:
 
 ```bash
-cd "$HOME" && "$HOME/.config/omarchy/plugins/io.github.jeremylanger.omaspotify/scripts/uninstall.sh"
+cd "$HOME" && "$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify/scripts/uninstall.sh"
 ```
 
 It disables and removes the plugin, stops and removes its user service,
 restarts the shell, and deletes all plugin-owned configuration, cached audio,
-backend build files, installed binaries, playback state, runtime sockets, old
+the Soloist update timer, backend build files, installed binaries, playback state, runtime sockets, old
 configuration backups, and matching GNOME Keyring entries.
 
 If you prefer to inspect and paste the main steps individually:
 
 ```bash
-plugin_dir="$HOME/.config/omarchy/plugins/io.github.jeremylanger.omaspotify"
+plugin_dir="$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify"
 cd "$HOME"
-omarchy plugin disable io.github.jeremylanger.omaspotify 2>/dev/null || true
+omarchy plugin disable io.github.atlastimed.omaspotify 2>/dev/null || true
 "$plugin_dir/scripts/remove-runtime.sh" --purge
-omarchy plugin remove io.github.jeremylanger.omaspotify --yes
+omarchy plugin remove io.github.atlastimed.omaspotify --yes
 omarchy restart shell
 ```
 
@@ -282,9 +313,9 @@ Remove only the matching custom lines, apply the dotfiles change, and run
 `hyprctl reload`. Omarchy's stock **Super+Shift+M** Music shortcut will then be
 used again.
 
-## More music, less app
+## Library features
 
-- Discover Weekly, Release Radar, Daily Mixes, daylist, and more in **Discover**.
+- Browse discovery results where Spotify makes them available to your developer app.
 - Browse Liked Songs, saved albums, followed artists, podcasts, and books.
 - Create playlists, add songs, reorder tracks, and turn followed playlists
   into your own editable copies when Spotify makes their contents available.
@@ -294,7 +325,7 @@ used again.
   keyboard shortcut, use optional spinning vinyl artwork in the mini-player,
   show the title, artist, or both, and softly scroll overflowing text at an
   adjustable speed.
-- Choose up to 320 kbps for local playback.
+- Soloist manages local streaming quality; the legacy quality setting applies only to librespot.
 
 Your Spotify password is entered only on Spotify's own page. OmaSpotify
 stores your saved session in GNOME Keyring and clears it when you log out.

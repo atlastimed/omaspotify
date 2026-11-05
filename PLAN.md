@@ -1,7 +1,7 @@
 # OmaSpotify — Development Plan
 
 > Fork of [stappmus/Omarchy-Spotify](https://github.com/stappmus/Omarchy-Spotify) →
-> **[jeremylanger/omaspotify](https://github.com/jeremylanger/omaspotify)**
+> **[jeremylanger/omaspotify](https://github.com/atlastimed/omaspotify)**
 > Full Spotify player for Omarchy: local playback engine, library, playlists, search — not just an MPRIS popup.
 
 Local clone: `~/jeremy/omaspotify` (origin = our fork, upstream = stappmus, kept for cherry-picks)
@@ -194,7 +194,7 @@ playback. They were misleadingly named, so they were renamed, not removed:
 Identity was threaded through systemd, state paths, IPC and the keyring. All of it now
 renames, so OmaSpotify installs **alongside** the original without collision.
 
-- [x] `manifest.json`: `id` → `io.github.jeremylanger.omaspotify`, `name` → `OmaSpotify`,
+- [x] `manifest.json`: `id` → `io.github.atlastimed.omaspotify`, `name` → `OmaSpotify`,
       `author` → `jeremylanger`, bar widget `displayName`, `deviceName` default
 - [x] `systemd/omarchy-spotify.service` → `systemd/omaspotify.service`
 - [x] Config path `~/.config/omarchy-spotify/` → `~/.config/omaspotify/`,
@@ -507,7 +507,7 @@ All three can coexist **as long as identities don't collide**.
   `~/.config/omarchy/plugins/quickshell.spotify/`
 - Native app: separate Electron app, its own state — no conflicts
 - OmaSpotify: new id/units/paths (Phase C) → installable via
-  `omarchy plugin add https://github.com/jeremylanger/omaspotify.git --enable`
+  `omarchy plugin add https://github.com/atlastimed/omaspotify.git --enable`
 - **Watch out:** two engines with the same Connect `device_name` fight for playback;
   keep names distinct
 - A/B recipe: same track, same quality; toggle normalization in each to reproduce the

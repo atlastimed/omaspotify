@@ -1,3 +1,12 @@
+## 2.1.0 — Omarchy 4.5 companion fork
+
+- Separate `io.github.atlastimed.omaspotify` plugin identity and release source.
+- Push public playback state and bounded controls to Tunemarchy without sharing tokens.
+- Load queue and devices only when expanded, and update position only for visible companion panels.
+- Retain settings in centerBegin, centerEnd and tray placements.
+- Allow the standalone bar widget to be hidden while retaining playback and the full player.
+- Resolve Arch Qt tools explicitly and isolate integration-test sockets from the live session.
+
 # Changelog
 
 ## Unreleased
@@ -16,11 +25,11 @@
 - Clicking a song in a playlist now plays that song. Playing on this computer
   used to go by the row number alone, which can point at a different song
   when the playlist has songs that are unavailable. From Fred Nix's
-  [#11](https://github.com/jeremylanger/omaspotify/pull/11).
+  [#11](https://github.com/atlastimed/omaspotify/pull/11).
 - When Spotify is limiting the shared app every install uses, an empty
   playlist now says so and points to setting up your own app, instead of
   asking you to try again in a moment. From Fred Nix's
-  [#10](https://github.com/jeremylanger/omaspotify/pull/10).
+  [#10](https://github.com/atlastimed/omaspotify/pull/10).
 - Reloading the shell while OmaSpotify was still starting up no longer throws
   an error in the shell log. From wtyler2505's upstream
   [#104](https://github.com/stappmus/Omarchy-Spotify/pull/104).

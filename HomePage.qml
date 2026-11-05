@@ -63,6 +63,8 @@ Item {
       stateKey: "home:" + page.panel.homeType
       emptyMessage: page.panel.service && page.panel.service.homeLoading
         ? "Loading your listening history…"
+        : (page.panel.homeType === "releases" && page.panel.service && page.panel.service.newReleasesRestricted)
+          ? "Spotify does not provide New releases to this developer app. Search for an artist or album instead."
         : (page.panel.homeFilter.trim() ? "No matches in " + page.panel.activeSearchScope.label + "."
           : "No listening history is available yet.")
       onActivated: function(item, items, uri) {

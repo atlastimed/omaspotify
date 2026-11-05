@@ -1,17 +1,16 @@
 {
   "schemaVersion": 1,
-  "id": "io.github.jeremylanger.omaspotify",
+  "id": "io.github.atlastimed.omaspotify",
   "name": "OmaSpotify",
-  "version": "2.0.1",
-  "author": "jeremylanger",
+  "version": "2.1.0",
+  "author": "atlastimed (fork of jeremylanger/omaspotify)",
   "license": "MIT",
-  "description": "Spotify in Quickshell with all the features you need\u2014using about 60 MB of memory versus roughly 950 MB for the official client.",
+  "description": "Native Spotify player for Omarchy 4.5, with a shared playback connection for Tunemarchy.",
   "kinds": [
     "service",
     "bar-widget",
     "panel"
   ],
-  "activation": "on-demand",
   "entryPoints": {
     "service": "Service.qml",
     "barWidget": "BarWidget.qml",
@@ -47,9 +46,26 @@
       "showArtwork": "On",
       "normalizeVolume": "On",
       "volumeLevel": "Normal",
-      "clientId": ""
+      "clientId": "",
+      "playbackEngine": "soloist",
+      "showBarWidget": true
     },
     "schema": [
+      {
+        "key": "playbackEngine",
+        "type": "enum",
+        "label": "Local playback engine",
+        "options": ["soloist", "librespot"],
+        "defaultValue": "soloist",
+        "description": "Spotify Soloist uses a personal key and one Connect pairing. Librespot remains available for accounts that support it. Stop playback before switching engines."
+      },
+      {
+        "key": "showBarWidget",
+        "type": "boolean",
+        "label": "Show OmaSpotify bar widget",
+        "defaultValue": true,
+        "description": "Turn off when using Tunemarchy as your bar player. The full player and playback remain available."
+      },
       {
         "key": "deviceName",
         "type": "string",
@@ -242,8 +258,7 @@
         "type": "string",
         "label": "Spotify Developer app client ID",
         "defaultValue": "",
-        "description": "Optional personal Spotify Developer app client ID, with its own quota. Empty keeps the plugin's client. A valid 32-hex ID is required. Changing it clears the current session and requires authorization for your app."
-
+        "description": "Required 32-character Spotify Developer app client ID. Add http://127.0.0.1:8989/login to that app's Redirect URIs. No client secret is needed. Changing the ID requires signing in again."
       }
     ]
   }
