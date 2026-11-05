@@ -102,7 +102,7 @@ Item {
   property string createPlaylistName: ""
 
   readonly property string pluginId: manifest && manifest.id
-    ? String(manifest.id) : "io.github.jeremylanger.omaspotify"
+    ? String(manifest.id) : "io.github.atlastimed.omaspotify"
   readonly property string appName: manifest && manifest.name
     ? String(manifest.name) : "OmaSpotify"
   readonly property string lyricsRequestKey: "spotify-panel-lyrics"

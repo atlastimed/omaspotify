@@ -9,7 +9,7 @@ source_id_file="$runtime_dir/backend-source.sha256"
 binary_hash_file="$runtime_dir/backend-binary.sha256"
 origin_file="$runtime_dir/backend-origin"
 architecture=$(uname -m)
-repository=jeremylanger/omaspotify
+repository=atlastimed/omaspotify
 workflow_identity="https://github.com/$repository/.github/workflows/release-backend.yml"
 
 # download_verified_release() reports why it gave up. A release that is merely

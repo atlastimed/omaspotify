@@ -16,12 +16,14 @@ Item {
   width: 0
   height: 0
 
+  CompanionBridge { service: root }
+
   property var shell: null
   property var manifest: null
   property var pluginRegistry: null
 
   readonly property string pluginId: manifest && manifest.id
-    ? String(manifest.id) : "io.github.jeremylanger.omaspotify"
+    ? String(manifest.id) : "io.github.atlastimed.omaspotify"
   // Third-party public manifests omit __sourceDir in newer Omarchy versions;
   // the sanitization is intentional on Omarchy's side. Fall back to this
   // file's own directory, which every host resolves identically and no host
@@ -1129,7 +1131,7 @@ Item {
 
   function entryInLayout(layout) {
     if (!layout) return null
-    var sections = ["left", "center", "right"]
+    var sections = ["left", "centerBegin", "center", "centerEnd", "right", "tray"]
     for (var s = 0; s < sections.length; s++) {
       var rows = Array.isArray(layout[sections[s]]) ? layout[sections[s]] : []
       for (var i = 0; i < rows.length; i++)

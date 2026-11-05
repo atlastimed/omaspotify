@@ -216,7 +216,7 @@ From a checkout on Omarchy 4:
 
 The command validates the manifest, installs the user-level playback files,
 links the checkout at
-`~/.config/omarchy/plugins/io.github.jeremylanger.omaspotify`, and enables the bar widget. It
+`~/.config/omarchy/plugins/io.github.atlastimed.omaspotify`, and enables the bar widget. It
 refuses to replace an existing plugin.
 
 To install only the playback integration:
@@ -250,7 +250,7 @@ See [Benchmark](BENCHMARK.md) for methodology and recorded results.
 Run the bundled uninstaller from outside the plugin directory:
 
 ```bash
-cd "$HOME" && "$HOME/.config/omarchy/plugins/io.github.jeremylanger.omaspotify/scripts/uninstall.sh"
+cd "$HOME" && "$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify/scripts/uninstall.sh"
 ```
 
 This removes the plugin and all plugin-owned services, binaries, config, state,

@@ -8,7 +8,7 @@ fi
 
 source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 plugins_dir="$HOME/.config/omarchy/plugins"
-plugin_dir="$plugins_dir/io.github.jeremylanger.omaspotify"
+plugin_dir="$plugins_dir/io.github.atlastimed.omaspotify"
 
 [[ $HOME == /* && $HOME != / ]] || {
   echo "uninstall.sh: refusing an unsafe home path" >&2
@@ -21,16 +21,16 @@ command -v omarchy >/dev/null 2>&1 || {
 
 # Disable first so the shell drops its widget and service before the runtime
 # files and plugin checkout disappear. This is intentionally safe to repeat.
-omarchy plugin disable io.github.jeremylanger.omaspotify >/dev/null 2>&1 || true
+omarchy plugin disable io.github.atlastimed.omaspotify >/dev/null 2>&1 || true
 "$source_root/scripts/remove-runtime.sh" --purge
 
 if [[ -e $plugin_dir || -L $plugin_dir ]]; then
-  omarchy plugin remove io.github.jeremylanger.omaspotify --yes
+  omarchy plugin remove io.github.atlastimed.omaspotify --yes
 fi
 
 # Omarchy backs up unmanaged plugin folders instead of deleting them. A full
 # uninstall explicitly removes only backups bearing this plugin's exact ID.
-for backup in "$plugins_dir"/.io.github.jeremylanger.omaspotify.bak.*; do
+for backup in "$plugins_dir"/.io.github.atlastimed.omaspotify.bak.*; do
   [[ -e $backup ]] || continue
   rm -rf -- "$backup"
 done

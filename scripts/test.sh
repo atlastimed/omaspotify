@@ -4,7 +4,8 @@ set -euo pipefail
 source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 cd "$source_root"
 
-for command_name in qmllint omarchy; do
+qmllint=${QMLLINT:-/usr/lib/qt6/bin/qmllint}
+for command_name in "$qmllint" omarchy; do
   command -v "$command_name" >/dev/null 2>&1 || {
     echo "test.sh: missing test command: $command_name" >&2
     exit 1
@@ -25,7 +26,7 @@ qml_test_runner=/usr/lib/qt6/bin/qmltestrunner
 
 omarchy plugin validate .
 # Lint every source file so a new one is never missed.
-qmllint -I /usr/share/omarchy/shell ./*.js ./*.qml
+"$qmllint" -I /usr/share/omarchy/shell ./*.js ./*.qml
 
 QT_QPA_PLATFORM=offscreen "$qml_test_runner" \
   -input tests \

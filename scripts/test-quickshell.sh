@@ -3,6 +3,9 @@ set -euo pipefail
 source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
+mkdir -m 700 "$test_root/runtime"
+export XDG_RUNTIME_DIR="$test_root/runtime"
+export QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1
 cp "$source_root/"{AuthManager.qml,Api.js,OAuth.js} "$test_root/"
 sed 's|import "../.." as Plugin|import "." as Plugin|' \
   "$source_root/tests/integration/AuthIdentity.qml" > "$test_root/shell.qml"

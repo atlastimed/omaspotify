@@ -1,5 +1,28 @@
 # OmaSpotify
 
+This is [atlastimed’s fork](https://github.com/atlastimed/omaspotify) of
+[jeremylanger/omaspotify](https://github.com/jeremylanger/omaspotify), targeting
+**Omarchy 4.5** and paired with [Tunemarchy](https://github.com/atlastimed/tunemarchy).
+The upstream player and MIT attribution are retained.
+
+Tunemarchy supplies a compact bar panel; this plugin owns the full library,
+account sign-in and playback. Hide this plugin’s own bar entry with
+`omarchy bar set io.github.atlastimed.omaspotify showBarWidget false --json`.
+The full player remains available through Tunemarchy’s **Open** action or
+`omarchy-shell shell summon io.github.atlastimed.omaspotify '{}'`.
+
+The companion connection carries public playback state and a fixed list of
+controls over a display-scoped Unix socket in your private runtime directory.
+It never exposes access or refresh tokens. Queue and device requests happen
+when expanded; progress updates stop when the companion closes. The service
+is available for the companion without opening a second bar player. Local
+audio playback still starts on demand.
+
+This fork uses the upstream runtime name `omaspotify` for its audio service,
+configuration and caches. Use one OmaSpotify fork at a time; do not enable
+this and the original together. No official Spotify installation is replaced.
+
+
 **Spotify in Quickshell—not Chromium.**
 
 OmaSpotify brings the Spotify experience you already know into a fast,
@@ -13,7 +36,7 @@ for you, ready when you want them.
 ## Install
 
 ```bash
-omarchy plugin add https://github.com/jeremylanger/omaspotify.git --enable
+omarchy plugin add https://github.com/atlastimed/omaspotify.git --enable
 ```
 
 Requires Omarchy 4 and a personal Spotify Premium account.
@@ -138,7 +161,7 @@ To replace Omarchy's existing **Super+Shift+M · Music** binding, add this to
 ```lua
   hl.unbind("SUPER + SHIFT + M") -- previously: Music
   o.bind("SUPER + SHIFT + M", "OmaSpotify",
-    "omarchy shell -q io.github.jeremylanger.omaspotify.player togglePlayer")
+    "omarchy shell -q io.github.atlastimed.omaspotify.player togglePlayer")
 ```
 
 Run `hyprctl reload` and check `hyprctl configerrors` after saving. Until the
@@ -148,13 +171,13 @@ Settings choice below has no effect on the shortcut.
 In OmaSpotify's Settings, choose whether that shortcut launches Omarchy's
 Music app, toggles the full player, or toggles the mini-player. Separate
 bindings can call `toggleMiniPlayer` or `toggleFullPlayer` on the same
-`io.github.jeremylanger.omaspotify.player` target.
+`io.github.atlastimed.omaspotify.player` target.
 
 Raise or lower Spotify volume from a keybinding without opening the player:
 
 ```bash
-omarchy shell -q io.github.jeremylanger.omaspotify.player volumeUp
-omarchy shell -q io.github.jeremylanger.omaspotify.player volumeDown
+omarchy shell -q io.github.atlastimed.omaspotify.player volumeUp
+omarchy shell -q io.github.atlastimed.omaspotify.player volumeDown
 ```
 
 Each step is 5%, the same as Ctrl+Up / Ctrl+Down. This changes Spotify's own
@@ -226,7 +249,7 @@ directory so Rustup uses the version in `rust-toolchain.toml`:
 
 ```bash
 omarchy pkg add rustup
-cd "$HOME/.config/omarchy/plugins/io.github.jeremylanger.omaspotify"
+cd "$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify"
 ./scripts/setup.sh
 ```
 
@@ -245,7 +268,7 @@ underlying error. Missing Rust/Cargo is one possible cause; see the
 Run the bundled uninstaller from outside the plugin directory:
 
 ```bash
-cd "$HOME" && "$HOME/.config/omarchy/plugins/io.github.jeremylanger.omaspotify/scripts/uninstall.sh"
+cd "$HOME" && "$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify/scripts/uninstall.sh"
 ```
 
 It disables and removes the plugin, stops and removes its user service,
@@ -256,11 +279,11 @@ configuration backups, and matching GNOME Keyring entries.
 If you prefer to inspect and paste the main steps individually:
 
 ```bash
-plugin_dir="$HOME/.config/omarchy/plugins/io.github.jeremylanger.omaspotify"
+plugin_dir="$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify"
 cd "$HOME"
-omarchy plugin disable io.github.jeremylanger.omaspotify 2>/dev/null || true
+omarchy plugin disable io.github.atlastimed.omaspotify 2>/dev/null || true
 "$plugin_dir/scripts/remove-runtime.sh" --purge
-omarchy plugin remove io.github.jeremylanger.omaspotify --yes
+omarchy plugin remove io.github.atlastimed.omaspotify --yes
 omarchy restart shell
 ```
 

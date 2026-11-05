@@ -10,10 +10,10 @@ import "Api.js" as Api
 BarWidget {
   id: root
 
-  moduleName: "io.github.jeremylanger.omaspotify"
+  moduleName: "io.github.atlastimed.omaspotify"
 
   readonly property var spotify: bar && bar.shell
-    ? bar.shell.serviceFor("io.github.jeremylanger.omaspotify") : null
+    ? bar.shell.serviceFor("io.github.atlastimed.omaspotify") : null
   readonly property color foreground: bar ? bar.foreground : Color.foreground
   readonly property color muted: Color.muted
   readonly property string surfaceKey: "spotify-popup-" + String(root)
@@ -240,14 +240,14 @@ BarWidget {
       // Remap an existing full player onto the workspace containing this bar.
       // Splitting hide and summon across event-loop turns lets Wayland finish
       // unmapping the old surface before the shell opens it here.
-      bar.shell.hide("io.github.jeremylanger.omaspotify")
+      bar.shell.hide("io.github.atlastimed.omaspotify")
       Qt.callLater(function() {
         if (root.bar && root.bar.shell)
-          root.bar.shell.summon("io.github.jeremylanger.omaspotify", encoded)
+          root.bar.shell.summon("io.github.atlastimed.omaspotify", encoded)
       })
     } else if (payload && typeof bar.shell.summon === "function")
-      bar.shell.summon("io.github.jeremylanger.omaspotify", encoded)
-    else bar.shell.toggle("io.github.jeremylanger.omaspotify", encoded)
+      bar.shell.summon("io.github.atlastimed.omaspotify", encoded)
+    else bar.shell.toggle("io.github.atlastimed.omaspotify", encoded)
   }
 
   ShortcutModifiers {
@@ -501,8 +501,9 @@ BarWidget {
     if (spotify) spotify.applySettings(settings)
   }
 
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  visible: root.setting("showBarWidget", true) !== false
+  implicitWidth: visible ? button.implicitWidth : 0
+  implicitHeight: visible ? button.implicitHeight : 0
 
   onSettingsChanged: syncSettings()
   onSpotifyChanged: {

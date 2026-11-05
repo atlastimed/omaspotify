@@ -1,6 +1,6 @@
 [Unit]
 Description=OmaSpotify plugin playback backend
-Documentation=https://github.com/jeremylanger/omaspotify
+Documentation=https://github.com/atlastimed/omaspotify
 After=graphical-session.target sound.target
 Wants=sound.target
 
