@@ -17,6 +17,7 @@ jobs:
     steps:
       - name: Install snapshot dependencies
         run: |
+          # shellcheck disable=SC2016 # pacman expands these repository variables.
           echo 'Server = https://archive.archlinux.org/repos/2026/11/05/$repo/os/$arch' > /etc/pacman.d/mirrorlist
           pacman -Syyuu --noconfirm
           pacman -S --needed --noconfirm git jq ripgrep python qt6-declarative quickshell libpulse openssl pkgconf rustup dbus socat xdg-utils avahi libgcrypt
