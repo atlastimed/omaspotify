@@ -463,6 +463,7 @@ Item {
   property var topTracks: []
   property var topArtists: []
   property var newReleases: []
+  property bool newReleasesRestricted: false
   property bool homeLoaded: false
   property int homeRequestsPending: 0
   readonly property bool homeLoading: homeRequestsPending > 0
@@ -3184,8 +3185,8 @@ Item {
     if (homeLoading) return
     var expected = dataSerial
     homeLoaded = false
-    homeRequestsPending = 4
-    spotifyApi.request("GET", "/browse/new-releases", { limit: 40 }, null,
+    homeRequestsPending = newReleasesRestricted ? 3 : 4
+    if (!newReleasesRestricted) spotifyApi.request("GET", "/browse/new-releases", { limit: 40 }, null,
       function(status, payload, error) {
         if (expected !== root.dataSerial) return
         if (!error) {
@@ -3193,7 +3194,11 @@ Item {
             function(value) { return Api.normalizeContext(value, 96) }).items
           root.checkSavedItems(root.newReleases)
         }
-        root.finishHomeRequest(error)
+        if (status === 403) {
+          root.newReleasesRestricted = true
+          root.newReleases = []
+        }
+        root.finishHomeRequest(status === 403 ? "" : error)
       })
     // The play-history poll already fetched this; asking twice within a couple
     // of minutes is a request spent for nothing.
@@ -4443,6 +4448,8 @@ Item {
     topArtists = []
     homeLoaded = false
     homeRequestsPending = 0
+    newReleasesRestricted = false
+    newReleases = []
     discoverSerial++
     discoverPlaylists = []
     discoverCandidates = []

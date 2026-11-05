@@ -697,6 +697,7 @@ Item {
 
           Button {
             text: "Audio quality · " + page.panel.audioQualityLabel()
+            visible: page.panel.service && !page.panel.service.usesSoloist
             iconText: "󰎈"
             foreground: page.panel.foreground
             tooltipText: "Change streaming quality"
@@ -706,6 +707,7 @@ Item {
           Button {
             text: "Normalize volume · "
               + (page.panel.draftNormalizeVolume ? "On" : "Off")
+            visible: page.panel.service && !page.panel.service.usesSoloist
             iconText: "󰕾"
             foreground: page.panel.foreground
             tooltipText: "Play quiet and loud tracks at a similar level"
@@ -714,17 +716,27 @@ Item {
 
           Button {
             text: "Volume level · " + page.panel.volumeLevelLabel()
+            visible: page.panel.service && !page.panel.service.usesSoloist
             iconText: "󰝝"
             foreground: page.panel.foreground
             enabled: page.panel.draftNormalizeVolume
             tooltipText: "How loud normalized playback aims to be"
             onClicked: page.panel.cycleVolumeLevel()
           }
+          Text {
+            width: parent.width
+            visible: page.panel.service && page.panel.service.usesSoloist
+            text: "Spotify Soloist manages streaming quality and audio normalization."
+            color: page.panel.muted
+            font.family: page.panel.fontFamily
+            font.pixelSize: Style.font.bodySmall
+            wrapMode: Text.WordWrap
+          }
         }
 
         Text {
           width: parent.width
-          text: "This computer stays visible in Spotify Connect while the player is open. After it closes, an empty receiver sleeps at the idle timeout; paused media stays available to resume. Use 0 minutes to keep this computer available even while the player is closed. Device name, audio quality and volume settings apply the next time local playback starts."
+          text: "This computer stays visible in Spotify Connect while the player is open. After it closes, an empty receiver sleeps at the idle timeout; paused media stays available to resume. Use 0 minutes to keep this computer available even while the player is closed."
           color: page.panel.muted
           font.family: page.panel.fontFamily
           font.pixelSize: Style.font.bodySmall
@@ -733,7 +745,9 @@ Item {
 
         Text {
           width: parent.width
-          text: "Changes apply immediately. Device name and audio quality update the next time local playback starts."
+          text: page.panel.service && page.panel.service.usesSoloist
+            ? "Changes apply immediately. Device name updates the next time local playback starts."
+            : "Changes apply immediately. Device name and audio quality update the next time local playback starts."
           color: page.panel.muted
           font.family: page.panel.fontFamily
           font.pixelSize: Style.font.bodySmall
