@@ -273,3 +273,7 @@ backend pending-command cancellation on disconnect, and the Tunemarchy protocol.
 See the catalog loader tests and native lifecycle/disconnect fixtures. Spotify
 editorial/algorithmic playlists and unavailable recommendation endpoints remain
 platform restrictions; no private Spotify APIs are used.
+
+Soloist volume changes are saved atomically as a private percentage file and
+passed through its supported `--initial-volume` option on restart, including mute.
+The state directory is created or repaired with mode 0700 on startup.

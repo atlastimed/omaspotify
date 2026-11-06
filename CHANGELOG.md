@@ -6,7 +6,8 @@
 - Label the supported radio fallback as an artist mix and expose release actions to keyboard navigation.
 - Honor Spotify Retry-After for every request, including interactive requests.
 - Ignore stale Soloist status checks, retry failed credential checks, and clear pending commands after backend disconnects.
-- Reset the displayed position when Soloist changes tracks.
+- Reset the displayed position when Soloist changes tracks and preserve volume across receiver restarts.
+- Keep listening history and release caches in a private state directory.
 
 ## 2.1.0 — Omarchy 4.5 companion fork
 

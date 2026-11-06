@@ -4677,6 +4677,7 @@ Item {
       root.releaseCacheReady = true
     }
     onLoadFailed: root.releaseCacheReady = true
+    onSaveFailed: if (!ensureStateDir.running) ensureStateDir.running = true
   }
 
   // Pages you have already opened, so reopening one draws it at once and the
@@ -4824,7 +4825,9 @@ Item {
   Process {
     id: ensureStateDir
     running: false
-    command: ["/usr/bin/mkdir", "-p", root.stateDir]
+    // Also repairs permissions on existing installations: listening history
+    // and followed-artist caches belong only to this login.
+    command: ["/usr/bin/install", "-d", "-m", "0700", "--", root.stateDir]
     onExited: {
       // The mkdir can finish after the service instance is torn down (shell
       // reload, on-demand deactivation); `root` is null by then.
@@ -4835,6 +4838,8 @@ Item {
       else if (root.playHistoryDirty) root.flushPlayHistoryFile()
       if (!root.libraryCacheReady) libraryCacheFile.reload()
       if (!root.queryCacheReady) queryCacheFile.reload()
+      if (!root.releaseCacheReady) releaseCacheFile.reload()
+      else releaseCacheFile.setText(followedReleases.serialize())
     }
   }
 

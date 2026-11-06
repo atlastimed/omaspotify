@@ -2,7 +2,7 @@
 //! Only the runtime helper sees the API key. This module consumes public events.
 use std::{
     collections::VecDeque,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant},
 };
@@ -352,6 +352,23 @@ struct Pending {
     deadline: Instant,
 }
 
+async fn persist_volume(directory: &Path, volume: u16) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let temporary = directory.join("volume.tmp");
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temporary)
+        .await?;
+    let percent = (u32::from(volume) * 100 + 32767) / 65535;
+    file.write_all(format!("{percent}\n").as_bytes()).await?;
+    file.flush().await?;
+    drop(file);
+    tokio::fs::rename(temporary, directory.join("volume")).await
+}
+
 async fn drive<S>(
     mut socket: tokio_tungstenite::WebSocketStream<S>,
     mut commands: mpsc::Receiver<EngineRequest>,
@@ -402,6 +419,10 @@ where
                             }
                         } else {
                             state.update(|s| apply_event(s, &event, &mut position));
+                            if event["type"] == "volume_changed"
+                                && persist_volume(&directory, state.with(|s| s.volume)).await.is_err() {
+                                log::warn!("Could not save Soloist volume");
+                            }
                             if event["type"] == "auth_state" {
                                 if event["logged_in"] == true { let _ = std::fs::write(directory.join("paired"), "1\n"); }
                                 else { let _ = std::fs::remove_file(directory.join("paired")); }
@@ -427,6 +448,21 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn volume_persistence_preserves_mute_and_full_volume() {
+        let directory =
+            std::env::temp_dir().join(format!("omaspotify-soloist-volume-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        for (volume, expected) in [(0, "0\n"), (54394, "83\n"), (u16::MAX, "100\n")] {
+            persist_volume(&directory, volume).await.unwrap();
+            assert_eq!(
+                std::fs::read_to_string(directory.join("volume")).unwrap(),
+                expected
+            );
+        }
+        assert!(!directory.join("volume.tmp").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn track_change_does_not_inherit_previous_position() {
         let mut s = BackendState::default();
