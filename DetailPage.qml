@@ -266,7 +266,7 @@ Item {
         spacing: Style.space(10)
 
         readonly property bool showLiked: page.panel.service
-          && page.panel.service.artistLikedSongs.length > 0
+          && (page.panel.service.artistLikedSongs.length > 0 || page.panel.service.artistLikedSongsLoading)
         readonly property real columnWidth: Api.evenColumnWidth(width, spacing,
           showLiked ? 3 : 2)
 
@@ -278,7 +278,7 @@ Item {
           Text {
             id: artistAlbumsHeading
             width: parent.width
-            text: page.panel.artistSearchText.trim() ? "ALBUMS & EPS" : "TOP ALBUMS & EPS"
+            text: "ALBUMS & EPS"
             color: page.panel.foreground
             font.family: page.panel.fontFamily
             font.pixelSize: Style.font.caption
@@ -321,7 +321,7 @@ Item {
           Text {
             id: artistSongsHeading
             width: parent.width
-            text: page.panel.artistSearchText.trim() ? "SONGS" : "TOP 10 SONGS"
+            text: "SONGS"
             color: page.panel.foreground
             font.family: page.panel.fontFamily
             font.pixelSize: Style.font.caption

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
 mkdir -m 700 "$test_root/runtime"
@@ -105,6 +105,10 @@ while True:
     for line in connection.makefile():
         with open(sys.argv[2], "a") as log:
             log.write(line)
+        if json.loads(line)["command"] == "disconnect_fixture":
+            connection.shutdown(socket.SHUT_RDWR)
+            connection.close()
+            break
         reply = {"type": "response", "id": json.loads(line)["id"], "ok": True, "result": {}}
         connection.sendall((json.dumps(reply) + "\n").encode())
 BACKEND

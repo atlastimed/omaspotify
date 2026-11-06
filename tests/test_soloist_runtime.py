@@ -64,6 +64,7 @@ class SoloistRuntimeTests(unittest.TestCase):
             ),
         ):
             runtime.update()
+
         self.assertEqual((runtime.RUNTIME / "soloist").read_bytes(), b"test")
         self.assertFalse((runtime.RUNTIME / "escaped").exists())
         metadata = runtime.installed_metadata()
@@ -75,6 +76,16 @@ class SoloistRuntimeTests(unittest.TestCase):
             side_effect=AssertionError("fresh build should not download"),
         ):
             runtime.update()
+
+    def test_restart_restores_volume_including_mute_and_rejects_bad_state(self):
+        with patch.object(runtime, "STATE", self.root):
+            self.assertEqual(runtime.initial_volume_args(), [])
+            for value, expected in [("0", "0"), ("83\n", "83"), ("100", "100")]:
+                (self.root / "volume").write_text(value)
+                self.assertEqual(runtime.initial_volume_args(), ["--initial-volume", expected])
+            for value in ("-1", "101", "nan", "--verbose", ""):
+                (self.root / "volume").write_text(value)
+                self.assertEqual(runtime.initial_volume_args(), [])
 
     def test_symlink_executable_rejected_without_replacing_old_build(self):
         runtime.RUNTIME.mkdir()

@@ -37,12 +37,9 @@ Item {
   // only the slow ones.
   property int slowRequestMs: 0
   property double rateLimitedUntil: 0
-  // Set only when a request someone is waiting on is refused. Background
-  // refusals must not hold an opened page back.
-  property double interactiveLimitedUntil: 0
-  // When the current pause began, so an opened page only waits a moment of it.
-  property double rateLimitedSince: 0
-  property bool cooldownProbeUsed: false
+  property var quotaRoutes: ({})
+  readonly property bool quotaExhausted: Object.keys(quotaRoutes).length > 0
+  readonly property string quotaMessage: "Spotify's quota for this feature is exhausted. Use Refresh to retry after the quota resets."
   property bool restrictInFlight: false
   property bool pumpingRequests: false
   property bool cancellingAll: false
@@ -172,9 +169,18 @@ Item {
       && payload.error.reason === "QUOTA_EXCEEDED"
   }
 
+  function quotaRoute(method, path) {
+    // Spotify groups endpoints into undisclosed quota buckets. Block routes
+    // known to be refused, across IDs and query strings, without disabling
+    // unrelated playback/library endpoints that may still have quota.
+    return String(method || "GET") + " " + String(path || "").split("?")[0]
+      .replace(/^https:\/\/api.spotify.com\/v1/, "")
+      .replace(/\/(users|artists|albums|tracks|playlists|shows|episodes|audiobooks)\/[^/]+/g, "/$1/:id")
+  }
+
   function requestError(status, payload, xhr, fallback) {
     if (status === 429 && quotaExceeded(payload))
-      return "This Spotify app has exhausted its developer quota. Check the app configuration or use another authorized client."
+      return quotaMessage
     if (status === 429)
       return Api.rateLimitMessage(Api.responseRetryAfter(xhr))
     return Api.responseError(status, payload, fallback)
@@ -214,22 +220,10 @@ Item {
         && backgroundInFlight < Api.backgroundInFlightLimit(limit)
       var taken = Api.dequeueApiJob(requestQueue, allowBackground)
       var job = taken.job
-      // The pause that applies to this job, which for a page someone opened is
-      // only ever its own refusals.
-      var jobCooldown = Api.jobCooldownMs(job, now(), rateLimitedUntil,
-        interactiveLimitedUntil)
-      if (job && jobCooldown > 0
-          && !Api.jobMayRunDuringCooldown(job, cooldownProbeUsed)) job = null
-      if (job) {
-        var wait = Api.foregroundCooldownMs(now(), interactiveLimitedUntil,
-          rateLimitedSince, Api.API_FOREGROUND_COOLDOWN_CAP_MS)
-        if (wait > 0) {
-          // Timer.interval is a signed int; recheck longer cooldowns in chunks.
-          rateLimitTimer.interval = Math.min(2147483647, Math.max(50, wait))
-          rateLimitTimer.restart()
-          break
-        }
-      }
+      // Retry-After applies to the app's requests, including newly opened
+      // pages. Probing early spends the same quota and can extend the refusal.
+      var jobCooldown = cooldown
+      if (cooldown > 0) job = null
       if (!job) {
         if (jobCooldown > 0 || cooldown > 0) {
           // Timer.interval is a signed int; recheck longer cooldowns in chunks.
@@ -243,7 +237,6 @@ Item {
         }
         break
       }
-      if (jobCooldown > 0) cooldownProbeUsed = true
       requestQueue = taken.queue
       job.handle.slotOpen = true
       job.startedAt = now()
@@ -264,6 +257,10 @@ Item {
 
   function startJob(job) {
     var handle = job.handle
+    if (quotaRoutes[quotaRoute(job.method, job.path)]) {
+      finishJob(job, 429, { error: { reason: "QUOTA_EXCEEDED" } }, quotaMessage, null)
+      return
+    }
     job.startedAt = now()
     job.activeDeadlineAt = job.startedAt + activeTimeoutMs
     var url = Api.safeApiUrl(job.path)
@@ -312,14 +309,8 @@ Item {
           if (xhr.status === 429 && !quotaExceeded(payload)) {
             restrictInFlight = true
             backgroundRefusals += 1
-            rateLimitedSince = now()
-            cooldownProbeUsed = false
             rateLimitedUntil = Api.nextRateLimitedUntil(now(),
               Api.responseRetryAfter(xhr), rateLimitedUntil, job.rateLimitRetries)
-            if (Api.apiJobPriority(job) >= 1)
-              interactiveLimitedUntil = Api.nextRateLimitedUntil(now(),
-                Api.responseRetryAfter(xhr), interactiveLimitedUntil,
-                job.rateLimitRetries)
             console.warn("Spotify API rate limited on "
               + String(job.method || "GET") + " " + Api.redact(String(job.path || ""))
               + "; pausing every request for "
@@ -336,6 +327,11 @@ Item {
             }
           } else {
             restrictInFlight = false
+          }
+          if (xhr.status === 429 && quotaExceeded(payload)) {
+            var blocked = Api.shallowCopy(quotaRoutes)
+            blocked[quotaRoute(job.method, job.path)] = true
+            quotaRoutes = blocked
           }
           // Refused by the personal client: try the shipped one, which still
           // reaches the catalog endpoints Spotify closed to new apps.
@@ -411,6 +407,14 @@ Item {
     for (var i = 0; i < jobs.length; i++) abortRequest(jobs[i].handle)
     cancelSearch()
     cancellingAll = false
+  }
+
+  // A quota refusal has no documented reset duration. Stop polling until an
+  // explicit retry, then allow one probe before reopening the shared queue.
+  function retryQuota() {
+    if (!quotaExhausted) return
+    quotaRoutes = ({})
+    restrictInFlight = true
   }
 
   function cancelSearch() {

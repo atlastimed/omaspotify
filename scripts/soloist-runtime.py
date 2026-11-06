@@ -214,6 +214,17 @@ def status():
     }
 
 
+def initial_volume_args():
+    try:
+        with (STATE / "volume").open() as saved:
+            value = int(saved.read(64).strip())
+        if 0 <= value <= 100:
+            return ["--initial-volume", str(value)]
+    except (OSError, ValueError):
+        pass
+    return []
+
+
 def start_receiver():
     # Updates cannot replace the key or pairing. Failed renewal can use a still-valid build.
     try:
@@ -244,6 +255,7 @@ def start_receiver():
             "512",
             "--ws",
             "127.0.0.1:0",
+            *initial_volume_args(),
         ],
     )
 

@@ -2,7 +2,7 @@
 //! Only the runtime helper sees the API key. This module consumes public events.
 use std::{
     collections::VecDeque,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::Stdio,
     time::{Duration, Instant},
 };
@@ -283,18 +283,25 @@ fn apply_event(s: &mut BackendState, event: &Value, position: &mut Position) -> 
     }
     if ["playback_state", "track_changed"].contains(&kind) {
         s.track = track(&event["item"]);
+        if kind == "track_changed" {
+            // The following position_sync is authoritative. Until it arrives,
+            // do not display the previous song's position on the new track.
+            *position = Position::default();
+            s.position_ms = 0;
+        }
     }
     if ["playback_state", "playback_changed"].contains(&kind) {
         position.ms = position.value(s);
         position.received = Some(Instant::now());
         s.playback = match event["status"].as_str() {
-            Some("playing") => PlaybackStatus::Playing,
+            // Buffering retains playback intent. Reporting it as Stopped made
+            // a pause clicked immediately after seeking toggle back to Play.
+            Some("playing" | "buffering") => PlaybackStatus::Playing,
             Some("paused") => PlaybackStatus::Paused,
-            Some("buffering") => PlaybackStatus::Loading,
             _ => PlaybackStatus::Stopped,
         };
         if kind == "playback_changed" {
-            position.speed = if s.playback == PlaybackStatus::Playing {
+            position.speed = if event["status"] == "playing" {
                 1.0
             } else {
                 0.0
@@ -344,6 +351,23 @@ struct Pending {
     messages: VecDeque<Value>,
     reply: Option<oneshot::Sender<Result<Value, ProtocolError>>>,
     deadline: Instant,
+}
+
+async fn persist_volume(directory: &Path, volume: u16) -> std::io::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let temporary = directory.join("volume.tmp");
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(&temporary)
+        .await?;
+    let percent = (u32::from(volume) * 100 + 32767) / 65535;
+    file.write_all(format!("{percent}\n").as_bytes()).await?;
+    file.flush().await?;
+    drop(file);
+    tokio::fs::rename(temporary, directory.join("volume")).await
 }
 
 async fn drive<S>(
@@ -396,6 +420,10 @@ where
                             }
                         } else {
                             state.update(|s| apply_event(s, &event, &mut position));
+                            if event["type"] == "volume_changed"
+                                && persist_volume(&directory, state.with(|s| s.volume)).await.is_err() {
+                                log::warn!("Could not save Soloist volume");
+                            }
                             if event["type"] == "auth_state" {
                                 if event["logged_in"] == true { let _ = std::fs::write(directory.join("paired"), "1\n"); }
                                 else { let _ = std::fs::remove_file(directory.join("paired")); }
@@ -421,6 +449,61 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[tokio::test]
+    async fn volume_persistence_preserves_mute_and_full_volume() {
+        let directory =
+            std::env::temp_dir().join(format!("omaspotify-soloist-volume-{}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        for (volume, expected) in [(0, "0\n"), (54394, "83\n"), (u16::MAX, "100\n")] {
+            persist_volume(&directory, volume).await.unwrap();
+            assert_eq!(
+                std::fs::read_to_string(directory.join("volume")).unwrap(),
+                expected
+            );
+        }
+        assert!(!directory.join("volume.tmp").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+    #[test]
+    fn track_change_does_not_inherit_previous_position() {
+        let mut s = BackendState::default();
+        let mut p = Position::default();
+        apply_event(
+            &mut s,
+            &json!({"type":"playback_state", "status":"playing",
+            "position":{"position_ms":90000,"speed":1}}),
+            &mut p,
+        );
+        apply_event(
+            &mut s,
+            &json!({"type":"track_changed", "item":null}),
+            &mut p,
+        );
+        assert_eq!(s.position_ms, 0);
+        assert_eq!(p.value(&s), 0);
+        apply_event(
+            &mut s,
+            &json!({"type":"position_sync",
+            "position":{"position_ms":1200,"speed":1}}),
+            &mut p,
+        );
+        assert!(p.value(&s) >= 1200);
+    }
+    #[test]
+    fn pause_during_seek_buffering_does_not_resume_playback() {
+        let mut s = BackendState::default();
+        let mut p = Position::default();
+        apply_event(
+            &mut s,
+            &json!({"type":"playback_changed", "status":"buffering"}),
+            &mut p,
+        );
+        assert_eq!(s.playback, PlaybackStatus::Playing);
+        assert_eq!(p.speed, 0.0);
+        let commands =
+            commands_for(Command::Toggle, s.playback == PlaybackStatus::Playing).unwrap();
+        assert_eq!(commands[0]["command"], "pause");
+    }
     #[test]
     fn context_offsets_explicitly_use_web_api() {
         let error = commands_for(

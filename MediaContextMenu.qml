@@ -201,7 +201,7 @@ Popup {
     ContextMenuButton {
       contextAction: "ctx-radio"
       visible: popup.panel.contextItem && popup.panel.contextItem.type === "track"
-      text: "Start track radio"
+      text: "Play artist mix"
       iconText: "󰎆"
       onClicked: {
         popup.close()
