@@ -438,23 +438,6 @@ TestCase {
     compare(Api.backgroundDispatchDelay(0, 0, 10000, 500), 0)
   }
 
-  // One early try is worth it in case the refusal has slack in it. Five in a
-  // row just spends the retries and shows an error instead of the page.
-  function test_openedPageGetsOneEarlyTryThenWaitsItsTurn() {
-    var opened = { method: "GET", priority: "interactive", rateLimitRetries: 0 }
-    verify(Api.jobMayRunDuringCooldown(opened, false))
-    verify(!Api.jobMayRunDuringCooldown(opened, true),
-      "one try per refusal, however many pages are waiting")
-    verify(!Api.jobMayRunDuringCooldown(
-      { method: "GET", priority: "interactive", rateLimitRetries: 1 }, false),
-      "refused once, so it stops pushing")
-    verify(!Api.jobMayRunDuringCooldown({ method: "GET" }, false),
-      "ordinary work waits")
-    verify(Api.jobMayRunDuringCooldown({ method: "PUT" }, false),
-      "a button someone pressed is not background")
-    verify(!Api.jobMayRunDuringCooldown(null, false))
-  }
-
   // A personal client id has its own quota but loses the catalog endpoints a
   // grandfathered app still reaches, so what it refuses is tried once through
   // the shared one.
@@ -511,42 +494,6 @@ TestCase {
     var merged = Api.withSpotifyPlaylists([mine, stale, unfollowed], [fresh])
     compare(merged.map(function(p) { return p.id + ":" + (p.name || "") }),
       ["m:", "r:new"])
-  }
-
-  // A refusal aimed at the library crawl must not freeze the page someone just
-  // opened. Only their own request being refused holds them back.
-  function test_apiCooldown_keepsBackgroundRefusalsOffTheOpenPage() {
-    var opened = { method: "GET", priority: "interactive" }
-    var crawl = { method: "GET", priority: "background" }
-    var poll = { method: "GET" }
-    var save = { method: "PUT" }
-
-    compare(Api.jobCooldownMs(opened, 1000, 20000, 0), 0,
-      "the page someone opened goes now")
-    compare(Api.jobCooldownMs(save, 1000, 20000, 0), 0,
-      "so does something they just clicked")
-    compare(Api.jobCooldownMs(crawl, 1000, 20000, 0), 19000, "the crawl waits")
-    compare(Api.jobCooldownMs(poll, 1000, 20000, 0), 19000,
-      "so does polling, which nobody is waiting on")
-
-    compare(Api.jobCooldownMs(opened, 1000, 20000, 6000), 5000,
-      "their own refusal does hold them back")
-    compare(Api.jobCooldownMs(null, 1000, 20000, 6000), 0)
-  }
-
-  // A refusal often comes from the shared budget rather than from us, and it
-  // can last twenty seconds. Waiting all of that out leaves an opened page
-  // blank, so a page someone is watching pauses briefly and then tries.
-  function test_openedPageWaitsAMomentRatherThanTheWholeCooldown() {
-    compare(Api.foregroundCooldownMs(1000, 21000, 1000, 1500), 1500,
-      "a pause, not nothing")
-    compare(Api.foregroundCooldownMs(2000, 21000, 1000, 1500), 500)
-    compare(Api.foregroundCooldownMs(2500, 21000, 1000, 1500), 0,
-      "then it goes, even though Spotify is still cross")
-    compare(Api.foregroundCooldownMs(1000, 1200, 1000, 1500), 200,
-      "a short pause is honoured in full")
-    compare(Api.foregroundCooldownMs(30000, 21000, 1000, 1500), 0,
-      "no pause left to serve")
   }
 
   // The budget is shared with every other app using this client ID, so it
@@ -869,18 +816,19 @@ TestCase {
 
   // Searching by artist name returns other artists' work, so it had to be
   // filtered and re-paged. Spotify answers both questions directly.
-  function test_artistCatalog_usesTheDirectEndpointsInsteadOfSearch() {
+  function test_artistCatalog_usesSupportedEndpointsAndLimits() {
     var artist = { id: "a1", type: "artist", name: "Someone" }
-    compare(Api.artistTopTracksRequest(artist).path, "/artists/a1/top-tracks")
+    compare(Api.artistSongsRequest(artist).path, "/search")
     // Spotify takes the country off the signed-in account. "from_token" is an
     // old spelling of that and is no longer a country code it accepts.
-    compare(Api.artistTopTracksRequest(artist).query, null)
-    compare(Api.artistTopTracksRequest(null), null)
+    compare(Api.artistSongsRequest(artist).query.limit, 10)
+    compare(Api.artistSongsRequest(artist).query.type, "track")
+    compare(Api.artistSongsRequest(null), null)
 
     var albums = Api.artistAlbumsRequest(artist)
     compare(albums.path, "/artists/a1/albums")
     compare(albums.query.market, undefined)
-    compare(albums.query.limit, 50)
+    compare(albums.query.limit, 10)
     verify(albums.query.include_groups.indexOf("album") >= 0)
     verify(albums.query.include_groups.indexOf("single") >= 0)
   }

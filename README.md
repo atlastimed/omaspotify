@@ -106,9 +106,9 @@ albums, artists and podcasts together, sorted however you like.
 
 ### Everything from an artist, in one view
 
-Followers and genres, top albums and EPs, the artist's ten biggest songs, every
-liked song you already have by them, and who else they sit next to—one page, no
-digging.
+Browse albums and EPs, songs found by artist-scoped search, and your indexed
+liked songs together. Artist search results are filtered by artist ID; they
+are not Spotify's unavailable top-track ranking.
 
 ![The Lane 8 artist page, with top releases, top songs and liked songs side by side](docs/screenshots/artist-page.png)
 
@@ -133,6 +133,17 @@ and needs `cava` (`omarchy pkg add cava`).
 
 Recently played, your top songs and artists, and new releases from the artists
 you follow—each one a tab away.
+
+**Followed releases** checks 25 artists at a time when opened. Use **Check more
+artists** to continue. Results are sorted newest first and deduplicated across
+collaborations; the status shows how much of your followed list has been checked.
+Each artist's first 10 albums/singles are cached for 24 hours, with up to 250
+releases displayed and 1,000 followed artists supported. Closing the page cancels
+outstanding work. This is a personal release feed, not Spotify's editorial feed.
+
+**Play artist mix** plays the chosen song plus other search results by its artist.
+Spotify's recommendations and related-artist APIs remain unavailable to personal
+developer apps; this fork does not use another project's client ID to bypass them.
 
 ![The For you screen listing recently played songs](docs/screenshots/for-you.png)
 
@@ -319,7 +330,7 @@ used again.
 - Browse Liked Songs, saved albums, followed artists, podcasts, and books.
 - Create playlists, add songs, reorder tracks, and turn followed playlists
   into your own editable copies when Spotify makes their contents available.
-- Build a queue, start track radio, use shuffle and repeat, or set a sleep timer.
+- Build a queue, play an artist mix, use shuffle and repeat, or set a sleep timer.
 - Listen on this computer or switch to another Spotify Connect speaker or player.
 - Choose the mini-player or full player independently for the bar icon and
   keyboard shortcut, use optional spinning vinyl artwork in the mini-player,

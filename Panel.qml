@@ -1033,7 +1033,10 @@ Item {
   function pageCursorActions() {
     var actions = []
     if (currentTab === "home")
-      actions.push("home-recent", "home-tracks", "home-artists")
+      actions.push("home-recent", "home-tracks", "home-artists", "home-releases")
+    if (currentTab === "home" && homeType === "releases" && service
+        && service.releaseFeed.hasMore && !service.releaseFeed.loading)
+      actions.push("releases-more")
     if (currentTab === "library")
       actions.push("library-tracks", "library-albums", "library-artists",
         "library-shows", "library-episodes", "library-audiobooks")
@@ -1297,6 +1300,7 @@ Item {
     else if (action === "devices") chooseTab("devices")
     else if (action === "sleep") sleepPopup.open()
     else if (action === "volume") toggleMute()
+    else if (action === "releases-more" && service) service.releaseFeed.load()
     else if (action.indexOf("home-") === 0) homeType = action.substring(5)
     else if (action.indexOf("library-") === 0) {
       libraryType = action.substring(8)

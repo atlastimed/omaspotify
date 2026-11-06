@@ -368,41 +368,6 @@ function apiCooldownMs(now, until) {
   return wait > 0 ? Math.ceil(wait) : 0
 }
 
-// A refusal usually comes from the shared budget rather than from us, so
-// waiting the whole of it out leaves an opened page blank for that long.
-// Whatever the person is watching pauses this much and then tries anyway.
-var API_FOREGROUND_COOLDOWN_CAP_MS = 1500
-
-// Which pause applies to a job. A refusal is nearly always the shared budget
-// running dry on background work, and freezing the page someone just opened
-// because the library crawl was told to wait is the whole of why a page took
-// twenty seconds. Their own request being refused is the only thing that
-// holds them back.
-function jobCooldownMs(job, nowMs, backgroundUntil, interactiveUntil) {
-  if (!job) return 0
-  return apiJobPriority(job) >= 1
-    ? apiCooldownMs(nowMs, interactiveUntil)
-    : apiCooldownMs(nowMs, backgroundUntil)
-}
-
-// One early try per refusal, in case it has slack in it. Only for a page
-// someone is watching, only once however many are waiting, and never again for
-// a request that has already been refused itself.
-function jobMayRunDuringCooldown(job, probeUsed) {
-  if (!job || probeUsed === true) return false
-  return apiJobPriority(job) >= 1 && (Number(job.rateLimitRetries) || 0) === 0
-}
-
-function foregroundCooldownMs(nowMs, until, since, capMs) {
-  var wait = apiCooldownMs(nowMs, until)
-  if (wait <= 0) return 0
-  var cap = Number(capMs)
-  if (!isFinite(cap) || cap < 0) cap = API_FOREGROUND_COOLDOWN_CAP_MS
-  var waited = (Number(nowMs) || 0) - (Number(since) || 0)
-  var remaining = cap - waited
-  return remaining > 0 ? Math.ceil(Math.min(wait, remaining)) : 0
-}
-
 // A personal client id gets its own quota, but Spotify stopped giving new apps
 // the catalog endpoints, so it answers 403 for related artists and a bogus
 // "Invalid limit" 400 for an artist's albums. The shipped id predates that
@@ -2227,7 +2192,8 @@ function searchScope(tab, detailItem, selectedPlaylist, homeType, libraryType) {
     var homeLabels = {
       recent: "Recently played",
       tracks: "Top songs",
-      artists: "Top artists"
+      artists: "Top artists",
+      releases: "Followed releases"
     }
     var selectedHome = String(homeType || "recent")
     label = homeLabels[selectedHome] || "For you"
@@ -2313,16 +2279,13 @@ function artworkUrls(items, cached) {
   return out
 }
 
-// Searching by artist name returns other artists' work, so results had to be
-// filtered and the search re-paged until enough matched. These ask Spotify the
-// question directly, in one request each.
-function artistTopTracksRequest(artist) {
-  if (!artist || !artist.id || artist.type !== "artist") return null
-  // No market: with a signed-in account Spotify uses that account's country,
-  // which is what we want and one less thing to get wrong.
+// Development-mode apps cannot read the artist top-tracks endpoint. Search
+// is supported; callers filter the result by artist identity, not name alone.
+function artistSongsRequest(artist) {
+  if (!artist || !artist.id || !artist.name || artist.type !== "artist") return null
   return {
-    path: "/artists/" + encodeURIComponent(String(artist.id)) + "/top-tracks",
-    query: null
+    path: "/search",
+    query: { q: catalogSearchText(artist.name, ""), type: "track", limit: 10 }
   }
 }
 
@@ -2330,7 +2293,7 @@ function artistAlbumsRequest(artist) {
   if (!artist || !artist.id || artist.type !== "artist") return null
   return {
     path: "/artists/" + encodeURIComponent(String(artist.id)) + "/albums",
-    query: { include_groups: "album,single", limit: 50 }
+    query: { include_groups: "album,single", limit: 10 }
   }
 }
 

@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.atlastimed.omaspotify",
   "name": "OmaSpotify",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "author": "atlastimed (fork of jeremylanger/omaspotify)",
   "license": "MIT",
   "description": "Native Spotify player for Omarchy 4.5, with a shared playback connection for Tunemarchy.",
@@ -18,7 +18,7 @@
   },
   "barWidget": {
     "displayName": "OmaSpotify",
-    "description": "Spotify in Quickshell with all the features you need\u2014using about 60 MB of memory versus roughly 950 MB for the official client.",
+    "description": "Native Spotify playback and library browsing, with an optional Tunemarchy companion.",
     "category": "Media",
     "aliases": [
       "spotify",

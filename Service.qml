@@ -462,8 +462,9 @@ Item {
     || canResumeLastPlayed
   property var topTracks: []
   property var topArtists: []
-  property var newReleases: []
-  property bool newReleasesRestricted: false
+  readonly property var newReleases: followedReleases.items
+  readonly property alias releaseFeed: followedReleases
+  property bool releaseCacheReady: false
   property bool homeLoaded: false
   property int homeRequestsPending: 0
   readonly property bool homeLoading: homeRequestsPending > 0
@@ -905,7 +906,7 @@ Item {
     artistPlaylists = Array.isArray(snapshot.playlists) ? snapshot.playlists : []
     artistPlaylistsNext = String(snapshot.playlistsNext || "")
     artistThisIsPlaylist = snapshot.thisIs || null
-    artistRelated = Array.isArray(snapshot.related) ? snapshot.related : []
+    artistRelated = [] // The related-artists endpoint is unavailable to this app.
     artistLikedSongs = Array.isArray(snapshot.likedSongs) ? snapshot.likedSongs : []
   }
 
@@ -1006,6 +1007,9 @@ Item {
         if (error || !payload) return
         root.noteTouched(Api.touchDatesFromSavedTracks(payload))
         root.noteLikedTracks(Api.likedTrackIdsByArtist(payload))
+        artistLikes.remember(Api.normalizePage(payload, function(item) {
+          return Api.normalizeTrack(item, 96)
+        }).items)
         var step = Api.savedTrackCrawlStep(payload, offset, root.savedTracksMark)
         if (step.newest > root.savedTracksNewest) root.savedTracksNewest = step.newest
         if (!step.done) {
@@ -2201,7 +2205,10 @@ Item {
       }
       changed = true
     }
-    if (changed) savedUrisRevision++
+    if (changed) {
+      savedUrisRevision++
+      artistLikedSongs = artistLikedSongs.filter(function(item) { return root.savedUris[item.uri] !== false })
+    }
   }
 
   function savedStateIsFresh(uri, now) {
@@ -2311,6 +2318,16 @@ Item {
         root.setSavedBusy(item.uri, false)
         if (!ok) return
         root.setSavedState(item.uri, !removing)
+        if (track) {
+          root.likedByArtist = Api.withoutLikedTrack(root.likedByArtist, item.id)
+          if (!removing) root.noteLikedTracks(Api.likedTrackIdsByArtist({ items: [{ track: item }] }))
+          root.playHistoryDirty = true
+          playHistorySaveTimer.restart()
+          if (root.detailItem && root.detailItem.type === "artist")
+            root.loadArtistLikedSongs(root.detailSerial, root.detailItem)
+          pageCache.drop(root.detailCacheKeyFor(root.detailItem, root.artistCatalogQuery))
+        }
+        if (item.type === "artist") followedReleases.artistsAt = 0
         if (item.type === "track" && root.savedTracksLoaded) root.loadSavedTracks(false)
         else if (item.type === "album" && root.savedAlbumsLoaded) root.loadSavedAlbums(false)
         else if (item.type === "artist" && root.followedArtistsLoaded) root.loadFollowedArtists(false)
@@ -2791,6 +2808,7 @@ Item {
     if (!item || !item.id || item.kind !== "context") return
     var type = String(item.type || "")
     if (["artist", "album", "playlist", "show", "audiobook"].indexOf(type) < 0) return
+    artistLikes.cancel()
     var serial = ++detailSerial
     detailRestoreTargetCount = type === "playlist"
       ? Api.normalizedPlaylistRestoreCount(restoredItemCount) : 0
@@ -2831,6 +2849,7 @@ Item {
       detailRestoreTargetCount = Math.min(cacheLimit,
         Math.max(detailRestoreTargetCount, detailItems.length))
     if (held === "fresh") {
+      if (type === "artist") loadArtistLikedSongs(serial, detailItem || item)
       detailRevalidating = false
       if (Api.playlistRestoreShouldContinue(detailItems.length,
           detailRestoreTargetCount, detailNext)) loadMoreDetail()
@@ -2858,7 +2877,6 @@ Item {
       if (type === "artist") {
         root.loadArtistThisIs(serial, parent)
         root.loadArtistLikedSongs(serial, parent)
-        root.loadArtistRelated(serial, parent)
         root.findArtistMusic(initialArtistQuery, serial, parent)
         return
       }
@@ -2877,50 +2895,11 @@ Item {
     }, !!kept)
   }
 
-  // The index holds ids only, so the tracks themselves are fetched here, 50 at
-  // a time. Most artists need a single request.
   function loadArtistLikedSongs(expectedDetail, artist) {
     if (!artist || artist.type !== "artist" || !artist.uri) return
-    var ids = likedByArtist[String(artist.uri)]
-    if (!Array.isArray(ids) || ids.length === 0) return
-    var batches = Api.idBatches(ids, 50)
-    artistLikedSongsLoading = true
-    var pending = batches.length
-    var collected = []
-    for (var i = 0; i < batches.length; i++) {
-      spotifyApi.request("GET", "/tracks", { ids: batches[i].join(",") }, null,
-        function(status, payload, error) {
-          pending--
-          if (expectedDetail !== root.detailSerial) return
-          if (!error && payload && Array.isArray(payload.tracks)) {
-            for (var t = 0; t < payload.tracks.length; t++) {
-              var track = Api.normalizeTrack(payload.tracks[t], 96)
-              if (track) collected.push(track)
-            }
-          }
-          if (pending > 0) return
-          root.artistLikedSongs = collected
-          root.artistLikedSongsLoading = false
-          root.markItemsSaved(collected, true)
-        })
-    }
-  }
-
-  // Who else this artist sits next to. Spotify has no bio to show instead.
-  function loadArtistRelated(expectedDetail, artist) {
-    if (!artist || artist.type !== "artist" || !artist.id) return
-    spotifyApi.request("GET",
-      "/artists/" + encodeURIComponent(String(artist.id)) + "/related-artists",
-      null, null, function(status, payload, error) {
-        if (expectedDetail !== root.detailSerial || error || !payload) return
-        var rows = Array.isArray(payload.artists) ? payload.artists : []
-        var out = []
-        for (var i = 0; i < rows.length && out.length < 8; i++) {
-          var one = Api.normalizeContext(rows[i], 96)
-          if (one) out.push(one)
-        }
-        root.artistRelated = out
-      })
+    if (expectedDetail !== detailSerial) return
+    artistLikes.load(likedByArtist[String(artist.uri)] || [],
+      artistLikedSongs.concat(savedTracks))
   }
 
   function loadArtistThisIs(expectedDetail, artist) {
@@ -2972,7 +2951,7 @@ Item {
       return
     }
     requestArtistDiscography(expectedDetail, expectedCatalog, parent)
-    requestArtistTopSongs(false, expectedDetail, expectedCatalog, parent, 0)
+    requestArtistCatalog("track", false, expectedDetail, expectedCatalog, parent)
   }
 
   function requestArtistCatalog(type, append, expectedDetail, expectedCatalog, artist) {
@@ -2987,7 +2966,8 @@ Item {
     else if (playlists) artistPlaylistsLoading = true
     else artistSongsLoading = true
     var query = append ? null : discography
-      ? { include_groups: "album,single,compilation", limit: 50 } : {
+      ? { include_groups: "album,single,compilation", limit: 10 }
+      : type === "track" && !artistCatalogQuery ? Api.artistSongsRequest(artist).query : {
       q: playlists
         ? Api.artistPlaylistSearchText(artist.name, artistCatalogQuery)
         : Api.catalogSearchText(artist.name, artistCatalogQuery),
@@ -3002,10 +2982,11 @@ Item {
       else root.artistSongsLoading = false
       root.detailLoading = root.artistCatalogLoading
       if (error) { root.fail(error); return }
-      root.applyArtistCatalogPage(type, append,
-        discography ? Api.normalizePage(payload, function(item) {
-          return Api.normalizeContext(item, 96)
-        }) : Api.normalizeSearchPage(payload, type, 96))
+      var page = discography ? Api.normalizePage(payload, function(item) {
+        return Api.normalizeContext(item, 96)
+      }) : Api.normalizeSearchPage(payload, type, 96)
+      if (type === "track") page.items = Api.tracksForArtist(page.items, artist)
+      root.applyArtistCatalogPage(type, append, page)
     })
   }
 
@@ -3026,26 +3007,6 @@ Item {
       artistSongsNext = next
     }
     checkSavedItems(page.items)
-  }
-
-  // One request, already the artist's own tracks, already ranked.
-  function requestArtistTopSongs(append, expectedDetail, expectedCatalog, artist,
-      automaticPage) {
-    var ask = Api.artistTopTracksRequest(artist)
-    if (!ask) return
-    artistSongsLoading = true
-    spotifyApi.request("GET", ask.path, ask.query, null,
-      function(status, payload, error) {
-        if (expectedDetail !== root.detailSerial
-          || expectedCatalog !== root.artistCatalogSerial) return
-        root.artistSongsLoading = false
-        root.artistSongsNext = ""
-        root.detailLoading = root.artistCatalogLoading
-        if (error) { root.fail(error); return }
-        var songs = Api.normalizeArtistTopTracks(payload, 96)
-        root.artistSongs = songs
-        root.checkSavedItems(songs)
-      })
   }
 
   // The artist's own releases, newest first, rather than a name search.
@@ -3185,21 +3146,7 @@ Item {
     if (homeLoading) return
     var expected = dataSerial
     homeLoaded = false
-    homeRequestsPending = newReleasesRestricted ? 3 : 4
-    if (!newReleasesRestricted) spotifyApi.request("GET", "/browse/new-releases", { limit: 40 }, null,
-      function(status, payload, error) {
-        if (expected !== root.dataSerial) return
-        if (!error) {
-          root.newReleases = Api.normalizePage(payload && payload.albums,
-            function(value) { return Api.normalizeContext(value, 96) }).items
-          root.checkSavedItems(root.newReleases)
-        }
-        if (status === 403) {
-          root.newReleasesRestricted = true
-          root.newReleases = []
-        }
-        root.finishHomeRequest(status === 403 ? "" : error)
-      })
+    homeRequestsPending = 3
     // The play-history poll already fetched this; asking twice within a couple
     // of minutes is a request spent for nothing.
     if (recentTracks.length > 0 && Date.now() - lastPlayHistoryFetch < 120000)
@@ -3965,83 +3912,20 @@ Item {
 
   function startRadio(item) {
     if (!item || item.type !== "track" || !item.id || !item.uri) {
-      fail("Track radio is available for Spotify songs")
+      fail("An artist mix is available for Spotify songs")
       return
     }
     var expected = ++radioSerial
     noteActivity()
-    succeed("Finding similar tracks…")
-    // Development-mode recommendation requests can succeed with no payload.
-    // Spotify's generated radio playlists provide a real playback context, so
-    // prefer an exact Spotify-owned match and verify its first track is the seed.
-    spotifyApi.request("GET", "/search", {
-      q: String(item.name || "") + " Radio",
-      type: "playlist",
-      limit: 10
-    }, null, function(status, payload, error) {
-      if (expected !== root.radioSerial) return
-      if (!error) {
-        var page = Api.normalizeSearchPage(payload, "playlist", 96)
-        var candidates = Api.trackRadioPlaylists(page.items, item.name)
-        if (candidates.length) {
-          root.tryRadioPlaylist(item, candidates, 0, expected)
-          return
-        }
-      }
-      root.requestRadioRecommendations(item, expected)
-    })
-  }
-
-  function tryRadioPlaylist(item, candidates, index, expected) {
-    if (expected !== radioSerial) return
-    if (index >= candidates.length) {
-      requestRadioRecommendations(item, expected)
-      return
-    }
-    var candidate = candidates[index]
-    spotifyApi.request("GET", "/playlists/"
-      + encodeURIComponent(String(candidate.id)) + "/items", { limit: 1 }, null,
-      function(status, payload, error) {
-        if (expected !== root.radioSerial) return
-        var source = payload && Array.isArray(payload.items) ? payload.items : []
-        var first = !error && source.length ? Api.normalizeTrack(source[0], 96) : null
-        if (first && Api.radioSeedMatches(first, item)) {
-          root.rememberRadioPlaylist(candidate)
-          root.playItem(candidate, null, "", "Track radio started", candidate)
-          root.radioPlaylistReady(candidate)
-          return
-        }
-        root.tryRadioPlaylist(item, candidates, index + 1, expected)
-      })
-  }
-
-  function requestRadioRecommendations(item, expected) {
-    if (expected !== radioSerial) return
-    spotifyApi.request("GET", "/recommendations", {
-      limit: 49,
-      seed_tracks: item.id
-    }, null, function(status, payload, error) {
-      if (expected !== root.radioSerial) return
-      var source = payload && Array.isArray(payload.tracks) ? payload.tracks : []
-      var extras = []
-      for (var i = 0; i < source.length; i++) {
-        var track = Api.normalizeTrack(source[i], 96)
-        if (track) extras.push(track)
-      }
-      var radio = Api.uniqueRadioTracks(item, extras)
-      if (!error && radio.length > 1) {
-        root.playItem(item, radio, "", "Track radio started")
-        return
-      }
-      root.requestRadioArtistTracks(item, expected)
-    })
+    succeed("Finding songs by this artist…")
+    requestRadioArtistTracks(item, expected)
   }
 
   function requestRadioArtistTracks(item, expected) {
     if (expected !== radioSerial) return
     var artist = item.artists && item.artists.length ? item.artists[0] : null
     if (!artist || !artist.name) {
-      fail("Spotify could not find a radio mix for this song")
+      fail("Spotify could not find more songs by this artist")
       return
     }
     spotifyApi.request("GET", "/search", {
@@ -4054,8 +3938,8 @@ Item {
         : Api.normalizeSearchPage(payload, "track", 96)
       var radio = Api.uniqueRadioTracks(item,
         Api.tracksForArtist(page.items, artist))
-      if (radio.length > 1) root.playItem(item, radio, "", "Track radio started")
-      else root.fail("Spotify could not find a radio mix for this song")
+      if (radio.length > 1) root.playItem(item, radio, "", "Artist mix started")
+      else root.fail("Spotify could not find more songs by this artist")
     })
   }
 
@@ -4448,8 +4332,10 @@ Item {
     topArtists = []
     homeLoaded = false
     homeRequestsPending = 0
-    newReleasesRestricted = false
-    newReleases = []
+    followedReleases.cancel()
+    artistLikes.clear()
+    artistLikedSongs = []
+    artistLikedSongsLoading = false
     discoverSerial++
     discoverPlaylists = []
     discoverCandidates = []
@@ -4507,6 +4393,8 @@ Item {
     detailFromCache = false
     playlistFromCache = false
     pageCache.clear()
+    followedReleases.clear()
+    releaseCacheFile.setText(followedReleases.serialize())
     playHistory = ({})
     touchedDates = ({})
     playlistEdits = ({})
@@ -4756,6 +4644,39 @@ Item {
     interval: 800
     repeat: false
     onTriggered: root.flushLibraryCache()
+  }
+
+  ArtistLikedSongs {
+    id: artistLikes
+    api: spotifyApi
+    onItemsChanged: {
+      root.artistLikedSongs = items.filter(function(item) { return root.savedUris[item.uri] !== false })
+      root.checkSavedItems(items)
+    }
+    onLoadingChanged: root.artistLikedSongsLoading = loading
+    onErrorChanged: if (error) root.detailMessage = error
+  }
+
+  FollowedReleases {
+    id: followedReleases
+    api: spotifyApi
+    onChanged: if (root.releaseCacheReady) releaseCacheSaveTimer.restart()
+  }
+  Timer {
+    id: releaseCacheSaveTimer
+    interval: 800
+    onTriggered: releaseCacheFile.setText(followedReleases.serialize())
+  }
+  FileView {
+    id: releaseCacheFile
+    path: root.stateDir + "/releases.json"
+    atomicWrites: true
+    printErrors: false
+    onLoaded: {
+      if (!root.releaseCacheReady) followedReleases.restore(text())
+      root.releaseCacheReady = true
+    }
+    onLoadFailed: root.releaseCacheReady = true
   }
 
   // Pages you have already opened, so reopening one draws it at once and the

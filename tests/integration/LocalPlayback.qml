@@ -36,8 +36,12 @@ ShellRoot {
     id: sent
     interval: 300
     onTriggered: {
-      console.log("LOCAL_PLAYBACK_SENT")
-      Qt.quit()
+      spotifyService.backend.sendCommand("disconnect_fixture", null, function(ok, result, error) {
+        if (ok || !error || Object.keys(spotifyService.backend.pending).length)
+          console.log("LOCAL_PLAYBACK_FAIL disconnected command was left pending")
+        else console.log("LOCAL_PLAYBACK_SENT")
+        Qt.quit()
+      })
     }
   }
 }

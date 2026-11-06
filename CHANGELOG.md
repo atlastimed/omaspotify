@@ -1,3 +1,13 @@
+## 2.2.0 — Developer-app compatibility review
+
+- Replace the unavailable New releases tab with a cached, on-demand followed-artist feed.
+- Resolve artist liked songs through supported single-track requests and reuse library metadata.
+- Use filtered catalog search for artist songs, respect album limits, and remove unavailable discovery requests.
+- Label the supported radio fallback as an artist mix and expose release actions to keyboard navigation.
+- Honor Spotify Retry-After for every request, including interactive requests.
+- Ignore stale Soloist status checks, retry failed credential checks, and clear pending commands after backend disconnects.
+- Reset the displayed position when Soloist changes tracks.
+
 ## 2.1.0 — Omarchy 4.5 companion fork
 
 - Separate `io.github.atlastimed.omaspotify` plugin identity and release source.

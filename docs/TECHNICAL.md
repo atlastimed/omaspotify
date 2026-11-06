@@ -189,9 +189,10 @@ disabled unless the app has a supported local-control path such as Sonos.
 
 Spotify changed development-mode endpoints and fields in 2026. This client uses
 `/playlists/{id}/items`, `/me/library`, and search limits of 10. Some non-owned
-playlist contents are no longer returned. Artist pages use artist-scoped catalog
-search for the two ranked release/song columns because Spotify removed the
-artist-top-tracks endpoint. Followed-playlist conversion fetches every available
+playlist contents are no longer returned. Artist pages use `/artists/{id}/albums` (limit 10) and artist-scoped song
+search filtered by artist ID. Liked-song metadata uses cached library results
+or cancellable, sequential `/tracks/{id}` requests, never the removed batch
+endpoint. All Web API requests respect the shared Retry-After deadline. Followed-playlist conversion fetches every available
 page before creating a private copy, writes items in batches of 100, and removes
 the original from the library only after all writes succeed.
 
@@ -254,3 +255,21 @@ keybinding check.
 - [spotify-player](https://github.com/aome510/spotify-player)
 - [ncspot](https://github.com/hrkfdn/ncspot)
 - [Spotify Web API](https://developer.spotify.com/documentation/web-api)
+
+## Followed releases
+
+`FollowedReleases.qml` loads only while the releases tab is open. Cursor-paged
+followed artists are cached for six hours; each artist's first ten albums/singles,
+including empty results, for 24 hours. Each user-triggered batch makes at most 25
+album requests, sequentially, through the existing bounded transport. Failures
+retain prior results and expose Retry without advancing past the failed artist.
+The feed supports 1,000 followed artists and retains the newest 250 unique albums.
+`releases.json` stores this bounded cache in the private state directory and is
+cleared on sign-out. Navigation/account changes abort outstanding requests and
+invalidate callbacks. Reopening resumes progress and skips fresh cache entries.
+
+The review also covers Soloist status generations, position reset on track change,
+backend pending-command cancellation on disconnect, and the Tunemarchy protocol.
+See the catalog loader tests and native lifecycle/disconnect fixtures. Spotify
+editorial/algorithmic playlists and unavailable recommendation endpoints remain
+platform restrictions; no private Spotify APIs are used.

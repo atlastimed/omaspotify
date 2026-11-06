@@ -1,7 +1,7 @@
 import QtQuick
 import Quickshell.Io
 
-// Runtime operations never pass a key through argv, settings, logs or the bridge.
+// The UI sends keys to the helper over stdin, never via settings or the bridge.
 Item {
   id: root
   property string pluginDir: ""
@@ -22,6 +22,7 @@ Item {
   property string version: ""
   property int daysRemaining: 0
   property bool startAfterSave: false
+  property int statusGeneration: 0
   readonly property bool credentialsAvailable: keyAvailable && (paired || sessionConnected)
   readonly property bool playbackReady: binaryAvailable && unitAvailable
   readonly property bool running: serviceActive
@@ -37,6 +38,7 @@ Item {
 
   function execute(action, input) {
     if (!pluginDir || operation.running) return false
+    statusGeneration++
     lastError = ""
     operation.action = action
     operation.input = input || ""
@@ -45,9 +47,23 @@ Item {
     return true
   }
   function refreshStatus() {
-    if (!pluginDir || status.running) return
+    if (!pluginDir || status.running || busy) return
+    status.generation = statusGeneration
     status.command = ["python3", pluginDir + "/scripts/soloist-runtime.py", "status", credentialsChecked ? "--no-key" : "--key"]
     status.running = true
+  }
+  function applyStatus(generation, data) {
+    if (generation !== statusGeneration || !data || typeof data !== "object") return false
+    credentialsChecked = true
+    requirementsChecked = true
+    binaryAvailable = data.installed === true
+    unitAvailable = data.unit === true
+    if (typeof data.key === "boolean") keyAvailable = data.key
+    paired = data.paired === true
+    serviceActive = data.running === true
+    version = String(data.version || "")
+    daysRemaining = Number(data.daysRemaining) || 0
+    return true
   }
   function checkRequirements() { refreshStatus() }
   function checkCredentials() { refreshStatus() }
@@ -55,6 +71,7 @@ Item {
   function setupPlayback() {
     if (busy || !pluginDir) return
     setupBusy = true
+    statusGeneration++
     lastError = ""
     setup.command = ["bash", pluginDir + "/scripts/setup-soloist.sh"]
     setup.running = true
@@ -63,6 +80,8 @@ Item {
     if (busy || running || !playbackReady || !keyAvailable) return
     if (explicit === true) terminalFailure = false
     if (terminalFailure) return
+    statusGeneration++
+    configure.generation = statusGeneration
     configure.command = ["bash", pluginDir + "/scripts/configure-playback.sh"]
     configure.running = true
   }
@@ -94,32 +113,33 @@ Item {
   Timer { interval: root.authenticationBusy ? 2000 : 60000; running: root.pluginDir !== ""; repeat: true; onTriggered: root.refreshStatus() }
   Process {
     id: status
+    property int generation: 0
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(code) {
-      root.credentialsChecked = true
-      root.requirementsChecked = true
+      if (generation !== root.statusGeneration) {
+        Qt.callLater(root.refreshStatus)
+        return
+      }
       if (code !== 0) return
       var data
       try { data = JSON.parse(stdout.text) } catch (_) { return }
-      root.binaryAvailable = data.installed === true
-      root.unitAvailable = data.unit === true
-      if (typeof data.key === "boolean") root.keyAvailable = data.key
-      root.paired = data.paired === true
-      root.serviceActive = data.running === true
-      root.version = String(data.version || "")
-      root.daysRemaining = Number(data.daysRemaining) || 0
+      root.applyStatus(generation, data)
     }
   }
   Process {
     id: configure
+    property int generation: 0
     stdinEnabled: true
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onStarted: { write(root.deviceName + "\n"); stdinEnabled = false }
     onExited: function(code) {
       stdinEnabled = true
-      if (code === 0) Qt.callLater(function() { root.execute("start") })
+      if (generation !== root.statusGeneration) return
+      if (code === 0) Qt.callLater(function() {
+        if (configure.generation === root.statusGeneration) root.execute("start")
+      })
       else root.lastError = "Could not update the local player name"
     }
   }
@@ -129,7 +149,7 @@ Item {
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(code) {
       root.setupBusy = false
-      root.refreshStatus()
+      Qt.callLater(root.refreshStatus)
       if (code === 0) { root.binaryAvailable = true; root.unitAvailable = true; root.setupSucceeded() }
       else { root.lastError = "Soloist setup failed. Check the network and Rust toolchain, then retry."; root.setupFailed(root.lastError) }
     }
@@ -147,11 +167,12 @@ Item {
       input = ""
       stdinEnabled = true
       root.credentialsClearBusy = false
-      root.refreshStatus()
+      Qt.callLater(root.refreshStatus)
       if (code !== 0) {
         root.startAfterSave = false
         root.lastError = "Soloist could not complete this operation. Check your key and try again."
         if (completedAction === "start") root.terminalFailure = true
+        root.authenticationBusy = false
         if (completedAction === "clear") root.credentialsClearFailed(root.lastError)
         return
       }

@@ -194,12 +194,11 @@ TestCase {
     api.rateLimitedUntil = 15000
     var errors = []
     api.search("waiting", "track", function(groups, error) { errors.push(error) })
-    compare(requests.length, 1,
-      "the first interactive job may probe a cooldown instead of waiting it out")
-    complete(requests[0], 429, "{\"error\":{\"message\":\"Too many requests\"}}")
+    compare(requests.length, 0, "an interactive request respects Retry-After")
+    clock = 9000
+    api.expireTimedOutRequests(clock)
     compare(errors.length, 1)
-    verify(errors[0].indexOf("Spotify is busy") >= 0,
-      "the refused probe reports the wait honestly")
+    verify(errors[0].indexOf("Spotify is busy") >= 0)
     compare(api.requestQueue.length, 0)
     compare(api.timedJobs.length, 0)
     compare(api.requestsInFlight, 0)
@@ -238,9 +237,9 @@ TestCase {
     api.search("old", "track", function() { oldCalls++ })
     clock = 2000
     api.search("new", "track", function(groups, error) { newErrors.push(error) })
-    verify(requests[0].aborted, "a newer search cancels the probe")
-    compare(requests.length, 2)
-    complete(requests[1], 429, "{\"error\":{\"message\":\"Too many requests\"}}")
+    compare(requests.length, 0, "neither queued search bypasses Retry-After")
+    clock = 10000
+    api.expireTimedOutRequests(clock)
     compare(oldCalls, 0)
     compare(newErrors.length, 1)
     verify(newErrors[0].indexOf("Spotify is busy") >= 0)
@@ -276,19 +275,24 @@ TestCase {
 
   // The library crawl being refused used to pause every request, so opening a
   // page while it ran cost the whole twenty-second cooldown.
-  function test_backgroundRefusalDoesNotStallAnOpenedPage() {
+  function test_backgroundRefusalAlsoPausesAnOpenedPage() {
     var api = createTemporaryObject(apiComponent, testCase)
     verify(api)
     api.request("GET", "/me/albums", null, null, function() {},
       { priority: "background", retryRateLimit: false })
     complete(requests[0], 429)
     verify(api.rateLimitedUntil > clock, "background work is told to wait")
-    compare(api.interactiveLimitedUntil, 0, "the person was not refused")
 
     var opened = 0
     api.request("GET", "/playlists/discover-weekly", null, null,
       function() { opened++ }, { priority: "interactive" })
-    compare(requests.length, 2, "the opened page goes out straight away")
+    compare(requests.length, 1, "the opened page respects the shared cooldown")
+    clock = api.rateLimitedUntil - 1
+    api.pumpRequests()
+    compare(requests.length, 1)
+    clock++
+    api.pumpRequests()
+    compare(requests.length, 2)
     complete(requests[1], 200)
     compare(opened, 1)
   }
@@ -300,12 +304,12 @@ TestCase {
     api.request("GET", "/playlists/one", null, null, function() {},
       { priority: "interactive", retryRateLimit: false })
     complete(requests[0], 429)
-    verify(api.interactiveLimitedUntil > clock)
+    verify(api.rateLimitedUntil > clock)
 
     api.request("GET", "/playlists/two", null, null, function() {},
       { priority: "interactive" })
     compare(requests.length, 1, "the next page waits its turn")
-    clock = api.interactiveLimitedUntil
+    clock = api.rateLimitedUntil
     api.pumpRequests()
     compare(requests.length, 2)
   }
@@ -686,7 +690,7 @@ TestCase {
     api.request("GET", "/search?q=private-query", null, null,
       function(status, payload, reason) { error = reason })
     complete(requests[0], 429, '{"error":{"reason":"QUOTA_EXCEEDED"}}')
-    verify(error.indexOf("developer quota") >= 0)
+    verify(error.indexOf("exhausted its API quota") >= 0)
     compare(api.rateLimitedUntil, 0)
     compare(api.requestQueue.length, 0)
     compare(api.diagnostics[0].route, "/search")

@@ -115,7 +115,15 @@ Item {
     resetPending("Playback on this computer stopped")
   }
 
-  onConnectedChanged: if (connected) reconnectAttempt = 0
+  onConnectedChanged: {
+    if (connected) reconnectAttempt = 0
+    else {
+      lifecycle = ""
+      sessionConnected = false
+      lastState = null
+      resetPending("Playback on this computer disconnected")
+    }
+  }
 
   Component {
     id: socketComponent

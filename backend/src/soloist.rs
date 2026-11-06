@@ -283,6 +283,12 @@ fn apply_event(s: &mut BackendState, event: &Value, position: &mut Position) -> 
     }
     if ["playback_state", "track_changed"].contains(&kind) {
         s.track = track(&event["item"]);
+        if kind == "track_changed" {
+            // The following position_sync is authoritative. Until it arrives,
+            // do not display the previous song's position on the new track.
+            *position = Position::default();
+            s.position_ms = 0;
+        }
     }
     if ["playback_state", "playback_changed"].contains(&kind) {
         position.ms = position.value(s);
@@ -421,6 +427,31 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn track_change_does_not_inherit_previous_position() {
+        let mut s = BackendState::default();
+        let mut p = Position::default();
+        apply_event(
+            &mut s,
+            &json!({"type":"playback_state", "status":"playing",
+            "position":{"position_ms":90000,"speed":1}}),
+            &mut p,
+        );
+        apply_event(
+            &mut s,
+            &json!({"type":"track_changed", "item":null}),
+            &mut p,
+        );
+        assert_eq!(s.position_ms, 0);
+        assert_eq!(p.value(&s), 0);
+        apply_event(
+            &mut s,
+            &json!({"type":"position_sync",
+            "position":{"position_ms":1200,"speed":1}}),
+            &mut p,
+        );
+        assert!(p.value(&s) >= 1200);
+    }
     #[test]
     fn context_offsets_explicitly_use_web_api() {
         let error = commands_for(

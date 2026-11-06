@@ -13,6 +13,13 @@ ShellRoot {
       root.starts++
       if (root.starts === 1) Qt.callLater(function() { manager.saveKey("replacement-fixture-key") })
       else {
+        if (manager.applyStatus(manager.statusGeneration - 1,
+            { installed: false, unit: false, key: false, paired: false, running: false })
+            || !manager.serviceActive || !manager.keyAvailable) {
+          console.log("SOLOIST_LIFECYCLE_FAIL: stale status overwrote a completed start")
+          Qt.quit()
+          return
+        }
         if (root.stops === 1 && manager.keyAvailable && manager.lastError === "")
           console.log("SOLOIST_LIFECYCLE_PASS")
         else console.log("SOLOIST_LIFECYCLE_FAIL: replacement did not stop and restart")
