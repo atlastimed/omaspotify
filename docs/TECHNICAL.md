@@ -278,8 +278,9 @@ Soloist volume changes are saved atomically as a private percentage file and
 passed through its supported `--initial-volume` option on restart, including mute.
 The state directory is created or repaired with mode 0700 on startup.
 
-`QUOTA_EXCEEDED` blocks subsequent Web API dispatches for the session until
-Refresh or an explicit Retry. The reset time is unknown, so no reset deadline is
+`QUOTA_EXCEEDED` blocks subsequent calls to that method/endpoint (across IDs
+and query strings) until Refresh or an explicit Retry. Spotify groups endpoints
+into undisclosed quota buckets, so other features retain their available quota. The reset time is unknown, so no reset deadline is
 invented. Retry allows one probe before reopening the queue. Local Soloist/MPRIS
 controls and previously cached pages remain usable; page refresh no longer
 invalidates the entire sidebar.

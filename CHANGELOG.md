@@ -5,7 +5,7 @@
 - Use filtered catalog search for artist songs, respect album limits, and remove unavailable discovery requests.
 - Label the supported radio fallback as an artist mix and expose release actions to keyboard navigation.
 - Honor Spotify Retry-After for every request, including interactive requests.
-- Stop Web API polling after QUOTA_EXCEEDED until an explicit retry, and refresh only the current page.
+- Stop repeated calls to quota-exhausted endpoints until an explicit retry, and refresh only the current page.
 - Ignore stale Soloist status checks, retry failed credential checks, and clear pending commands after backend disconnects.
 - Reset the displayed position when Soloist changes tracks and preserve volume across receiver restarts.
 - Keep Pause available while Soloist buffers after seeking, rather than treating buffering as stopped.

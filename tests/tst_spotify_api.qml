@@ -690,23 +690,28 @@ TestCase {
     api.request("GET", "/search?q=private-query", null, null,
       function(status, payload, reason) { error = reason })
     complete(requests[0], 429, '{"error":{"reason":"QUOTA_EXCEEDED"}}')
-    verify(error.indexOf("exhausted its API quota") >= 0)
+    verify(error.indexOf("quota for this feature is exhausted") >= 0)
     compare(api.rateLimitedUntil, 0)
     compare(api.requestQueue.length, 0)
     compare(api.diagnostics[0].route, "/search")
     verify(JSON.stringify(api.diagnostics).indexOf("private-query") < 0)
     verify(api.quotaExhausted)
     var refusals = 0
-    for (var i = 0; i < 5; i++) api.request("GET", "/me/player", null, null,
+    for (var i = 0; i < 5; i++) api.request("GET", "/search?q=another", null, null,
       function(status) { if (status === 429) refusals++ })
     compare(requests.length, 1, "background polls do not repeatedly spend an exhausted quota")
     compare(refusals, 5)
-    api.retryQuota()
     api.request("GET", "/me/player", null, null, function() {})
-    api.request("GET", "/me/albums", null, null, function() {})
-    compare(requests.length, 2, "explicit retry allows only one probe")
-    complete(requests[1], 429, '{"error":{"reason":"QUOTA_EXCEEDED"}}')
-    compare(requests.length, 2, "a refused probe also blocks already queued requests")
+    compare(requests.length, 2, "a different feature may have its own quota bucket")
+    complete(requests[1], 200)
+    compare(api.quotaRoute("GET", "/artists/one/albums?limit=10"),
+      api.quotaRoute("GET", "https://api.spotify.com/v1/artists/two/albums?offset=10"))
+    api.retryQuota()
+    api.request("GET", "/search?q=retry", null, null, function() {})
+    api.request("GET", "/search?q=queued", null, null, function() {})
+    compare(requests.length, 3, "explicit retry allows only one probe")
+    complete(requests[2], 429, '{"error":{"reason":"QUOTA_EXCEEDED"}}')
+    compare(requests.length, 3, "a refused probe also blocks queued requests to that feature")
     compare(api.requestQueue.length, 0)
   }
 }

@@ -37,8 +37,9 @@ Item {
   // only the slow ones.
   property int slowRequestMs: 0
   property double rateLimitedUntil: 0
-  property bool quotaExhausted: false
-  readonly property string quotaMessage: "This Spotify developer account has exhausted its API quota. Use Refresh to retry after the quota resets."
+  property var quotaRoutes: ({})
+  readonly property bool quotaExhausted: Object.keys(quotaRoutes).length > 0
+  readonly property string quotaMessage: "Spotify's quota for this feature is exhausted. Use Refresh to retry after the quota resets."
   property bool restrictInFlight: false
   property bool pumpingRequests: false
   property bool cancellingAll: false
@@ -168,6 +169,15 @@ Item {
       && payload.error.reason === "QUOTA_EXCEEDED"
   }
 
+  function quotaRoute(method, path) {
+    // Spotify groups endpoints into undisclosed quota buckets. Block routes
+    // known to be refused, across IDs and query strings, without disabling
+    // unrelated playback/library endpoints that may still have quota.
+    return String(method || "GET") + " " + String(path || "").split("?")[0]
+      .replace(/^https:\/\/api.spotify.com\/v1/, "")
+      .replace(/\/(users|artists|albums|tracks|playlists|shows|episodes|audiobooks)\/[^/]+/g, "/$1/:id")
+  }
+
   function requestError(status, payload, xhr, fallback) {
     if (status === 429 && quotaExceeded(payload))
       return quotaMessage
@@ -247,7 +257,7 @@ Item {
 
   function startJob(job) {
     var handle = job.handle
-    if (quotaExhausted) {
+    if (quotaRoutes[quotaRoute(job.method, job.path)]) {
       finishJob(job, 429, { error: { reason: "QUOTA_EXCEEDED" } }, quotaMessage, null)
       return
     }
@@ -318,7 +328,11 @@ Item {
           } else {
             restrictInFlight = false
           }
-          if (xhr.status === 429 && quotaExceeded(payload)) quotaExhausted = true
+          if (xhr.status === 429 && quotaExceeded(payload)) {
+            var blocked = Api.shallowCopy(quotaRoutes)
+            blocked[quotaRoute(job.method, job.path)] = true
+            quotaRoutes = blocked
+          }
           // Refused by the personal client: try the shipped one, which still
           // reaches the catalog endpoints Spotify closed to new apps.
           // Without a session of its own, the retry would hide the refusal behind "Not logged in".
@@ -399,7 +413,7 @@ Item {
   // explicit retry, then allow one probe before reopening the shared queue.
   function retryQuota() {
     if (!quotaExhausted) return
-    quotaExhausted = false
+    quotaRoutes = ({})
     restrictInFlight = true
   }
 
