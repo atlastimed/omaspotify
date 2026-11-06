@@ -695,5 +695,18 @@ TestCase {
     compare(api.requestQueue.length, 0)
     compare(api.diagnostics[0].route, "/search")
     verify(JSON.stringify(api.diagnostics).indexOf("private-query") < 0)
+    verify(api.quotaExhausted)
+    var refusals = 0
+    for (var i = 0; i < 5; i++) api.request("GET", "/me/player", null, null,
+      function(status) { if (status === 429) refusals++ })
+    compare(requests.length, 1, "background polls do not repeatedly spend an exhausted quota")
+    compare(refusals, 5)
+    api.retryQuota()
+    api.request("GET", "/me/player", null, null, function() {})
+    api.request("GET", "/me/albums", null, null, function() {})
+    compare(requests.length, 2, "explicit retry allows only one probe")
+    complete(requests[1], 429, '{"error":{"reason":"QUOTA_EXCEEDED"}}')
+    compare(requests.length, 2, "a refused probe also blocks already queued requests")
+    compare(api.requestQueue.length, 0)
   }
 }

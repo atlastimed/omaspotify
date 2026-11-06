@@ -37,6 +37,8 @@ Item {
   // only the slow ones.
   property int slowRequestMs: 0
   property double rateLimitedUntil: 0
+  property bool quotaExhausted: false
+  readonly property string quotaMessage: "This Spotify developer account has exhausted its API quota. Use Refresh to retry after the quota resets."
   property bool restrictInFlight: false
   property bool pumpingRequests: false
   property bool cancellingAll: false
@@ -168,7 +170,7 @@ Item {
 
   function requestError(status, payload, xhr, fallback) {
     if (status === 429 && quotaExceeded(payload))
-      return "This Spotify developer account has exhausted its API quota. Try again after the quota resets."
+      return quotaMessage
     if (status === 429)
       return Api.rateLimitMessage(Api.responseRetryAfter(xhr))
     return Api.responseError(status, payload, fallback)
@@ -245,6 +247,10 @@ Item {
 
   function startJob(job) {
     var handle = job.handle
+    if (quotaExhausted) {
+      finishJob(job, 429, { error: { reason: "QUOTA_EXCEEDED" } }, quotaMessage, null)
+      return
+    }
     job.startedAt = now()
     job.activeDeadlineAt = job.startedAt + activeTimeoutMs
     var url = Api.safeApiUrl(job.path)
@@ -312,6 +318,7 @@ Item {
           } else {
             restrictInFlight = false
           }
+          if (xhr.status === 429 && quotaExceeded(payload)) quotaExhausted = true
           // Refused by the personal client: try the shipped one, which still
           // reaches the catalog endpoints Spotify closed to new apps.
           // Without a session of its own, the retry would hide the refusal behind "Not logged in".
@@ -386,6 +393,14 @@ Item {
     for (var i = 0; i < jobs.length; i++) abortRequest(jobs[i].handle)
     cancelSearch()
     cancellingAll = false
+  }
+
+  // A quota refusal has no documented reset duration. Stop polling until an
+  // explicit retry, then allow one probe before reopening the shared queue.
+  function retryQuota() {
+    if (!quotaExhausted) return
+    quotaExhausted = false
+    restrictInFlight = true
   }
 
   function cancelSearch() {

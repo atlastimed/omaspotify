@@ -1300,7 +1300,10 @@ Item {
     else if (action === "devices") chooseTab("devices")
     else if (action === "sleep") sleepPopup.open()
     else if (action === "volume") toggleMute()
-    else if (action === "releases-more" && service) service.releaseFeed.load()
+    else if (action === "releases-more" && service) {
+      if (service.releaseFeed.error) service.retryReleaseFeed()
+      else service.releaseFeed.load()
+    }
     else if (action.indexOf("home-") === 0) homeType = action.substring(5)
     else if (action.indexOf("library-") === 0) {
       libraryType = action.substring(8)
@@ -3304,7 +3307,10 @@ Item {
                 KeyHint { region: "header"; action: "refresh" }
                 onClicked: {
                   if (!root.service) return
-                  if (root.showingUniversalSearch) root.runUnifiedSearch(true)
+                  root.service.retryApiRequests()
+                  if (root.currentTab === "home" && root.homeType === "releases")
+                    root.service.releaseFeed.load()
+                  else if (root.showingUniversalSearch) root.runUnifiedSearch(true)
                   else if (root.currentTab === "detail" && root.service.detailItem)
                     root.service.openDetail(root.service.detailItem,
                       root.service.detailItem.type === "artist"
@@ -3312,8 +3318,8 @@ Item {
                   else if (root.currentTab === "library")
                     root.service.loadLibrary(root.libraryType, false, true)
                   else root.service.refreshView(root.currentTab)
-                  // Refresh always means the sidebar too, cache or no cache.
-                  root.service.refreshLibraryNow()
+                  // Refresh the current surface. Invalidating the entire
+                  // sidebar here used to spend dozens of unrelated requests.
                 }
               }
 

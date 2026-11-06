@@ -81,7 +81,10 @@ Item {
         focusable: false
         hasCursor: page.panel.cursorShown("page", "releases-more")
         onHovered: function(on) { if (on) page.panel.setPanelCursor("page", "releases-more") }
-        onClicked: if (page.feed) page.feed.load()
+        onClicked: if (page.feed) {
+          if (page.feed.error) page.panel.service.retryReleaseFeed()
+          else page.feed.load()
+        }
         KeyHint { region: "page"; action: "releases-more" }
       }
     }

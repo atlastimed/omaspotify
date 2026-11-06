@@ -1603,8 +1603,6 @@ Item {
   // Fetch only the dataset represented by the visible page. An empty but
   // successfully loaded list is tracked separately so revisiting it causes no
   // network request; the explicit refresh control can still force one.
-  // A page shows nothing at all until these land, so they go ahead of the
-  // queue and get an early try while Spotify is refusing.
   // A page showing nothing goes ahead of the queue. A page already drawn from
   // the cache is only being checked, so it takes its turn like anything else.
   function pageRequest(method, path, query, callback, revalidating) {
@@ -1633,8 +1631,19 @@ Item {
   }
 
   function refreshView(view) {
+    retryApiRequests()
     loadPlaybackState()
     openView(view, true)
+  }
+
+  function retryApiRequests() {
+    spotifyApi.retryQuota()
+    succeed("")
+  }
+
+  function retryReleaseFeed() {
+    spotifyApi.retryQuota()
+    followedReleases.load()
   }
 
   function loadSidebarPlaylists() {
@@ -3554,7 +3563,10 @@ Item {
   function searchItems(type) { return searchController.searchItems(type) }
   function searchNext(type) { return searchController.searchNext(type) }
   function loadMoreSearch(type) { return searchController.loadMoreSearch(type) }
-  function retrySearch(type) { return searchController.retrySearch(type) }
+  function retrySearch(type) {
+    spotifyApi.retryQuota()
+    return searchController.retrySearch(type)
+  }
   function clearSearch() { return searchController.clearSearch() }
   function cancelSearch(clearResults) { return searchController.cancelSearch(clearResults) }
 
@@ -4469,6 +4481,7 @@ Item {
     }
     function onLoggedOut() {
       spotifyApi.cancelAll()
+      spotifyApi.retryQuota()
       root.clearData()
     }
     function onSessionUnavailable(reason) {
