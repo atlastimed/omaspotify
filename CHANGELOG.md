@@ -8,6 +8,7 @@
 - Stop Web API polling after QUOTA_EXCEEDED until an explicit retry, and refresh only the current page.
 - Ignore stale Soloist status checks, retry failed credential checks, and clear pending commands after backend disconnects.
 - Reset the displayed position when Soloist changes tracks and preserve volume across receiver restarts.
+- Keep Pause available while Soloist buffers after seeking, rather than treating buffering as stopped.
 - Keep listening history and release caches in a private state directory.
 
 ## 2.1.0 — Omarchy 4.5 companion fork

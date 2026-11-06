@@ -294,13 +294,14 @@ fn apply_event(s: &mut BackendState, event: &Value, position: &mut Position) -> 
         position.ms = position.value(s);
         position.received = Some(Instant::now());
         s.playback = match event["status"].as_str() {
-            Some("playing") => PlaybackStatus::Playing,
+            // Buffering retains playback intent. Reporting it as Stopped made
+            // a pause clicked immediately after seeking toggle back to Play.
+            Some("playing" | "buffering") => PlaybackStatus::Playing,
             Some("paused") => PlaybackStatus::Paused,
-            Some("buffering") => PlaybackStatus::Loading,
             _ => PlaybackStatus::Stopped,
         };
         if kind == "playback_changed" {
-            position.speed = if s.playback == PlaybackStatus::Playing {
+            position.speed = if event["status"] == "playing" {
                 1.0
             } else {
                 0.0
@@ -487,6 +488,21 @@ mod tests {
             &mut p,
         );
         assert!(p.value(&s) >= 1200);
+    }
+    #[test]
+    fn pause_during_seek_buffering_does_not_resume_playback() {
+        let mut s = BackendState::default();
+        let mut p = Position::default();
+        apply_event(
+            &mut s,
+            &json!({"type":"playback_changed", "status":"buffering"}),
+            &mut p,
+        );
+        assert_eq!(s.playback, PlaybackStatus::Playing);
+        assert_eq!(p.speed, 0.0);
+        let commands =
+            commands_for(Command::Toggle, s.playback == PlaybackStatus::Playing).unwrap();
+        assert_eq!(commands[0]["command"], "pause");
     }
     #[test]
     fn context_offsets_explicitly_use_web_api() {
