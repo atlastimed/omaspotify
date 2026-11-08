@@ -52,8 +52,11 @@ Spotify cannot hand back a plain song list (librespot names it
 the last list it was asked to play and loads it again at the same song. It
 does so only when that song is in the list, and an album or playlist load
 forgets the list.
-Five reconnects are allowed in ten minutes; exceeding that limit exits so
-systemd can perform the existing clean restart.
+A failed attempt to reconnect keeps retrying with backoff, so a network outage
+of any length recovers on its own. A refused login stops immediately, because
+retrying cannot fix it. A session that connects and then ends straight away
+counts against a budget of five in ten minutes; exceeding it exits with status
+75, which systemd does not restart, and the player explains the failure.
 
 ## Future work
 

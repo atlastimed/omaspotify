@@ -40,8 +40,8 @@ return_to_spotify() {
   command -v hyprctl >/dev/null 2>&1 || return 0
   command -v jq >/dev/null 2>&1 || return 0
 
-  local attempt spotify_address
-  for attempt in {1..20}; do
+  local spotify_address
+  for _ in {1..20}; do
     spotify_address=$(
       hyprctl clients -j 2>/dev/null | jq -r '
         [.[]

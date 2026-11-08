@@ -29,15 +29,29 @@ Web API, preserving the chosen context and song. Volume uses Soloist's linear sc
 The official binary lives in `~/.local/lib/omaspotify/soloist`. A bounded download
 from Spotify's CDN extracts only the executable, checks its reported build age,
 and atomically replaces it. The daily user timer checks the 90-day lifetime and
-renews after 75 days; it does not interrupt the currently running inode. The
-SHA-256 record describes the downloaded binary, not a vendor signature. Spotify
-does not publish a signature in this workflow; HTTPS is the download trust boundary.
+renews after 75 days; it does not interrupt the currently running inode. Starting
+playback only downloads when no usable build exists, so renewal never delays
+music; a build in its renewal window instead asks the update service to run in the
+background. The SHA-256 record describes the downloaded binary, not a vendor
+signature. Spotify does not publish a signature in this workflow; HTTPS is the
+download trust boundary. Running the plugin refreshes the installed helper and
+units offline, so a plugin update reaches them without a repair.
 
 The masked UI passes the key over stdin to `secret-tool`. Only the runtime helper
-retrieves it. Soloist's CLI requires an argument, so the key remains visible to
-same-user process inspection while Soloist runs. Its unauthenticated WebSocket
-binds to `127.0.0.1` with an ephemeral port. This is a local-user interface, not a
-security boundary against untrusted local programs or browser pages.
+retrieves it. Soloist's CLI requires an argument and offers no alternative, so the
+key is visible in the process's command line while Soloist runs. `/proc` is not
+mounted with `hidepid` on a default system, so that means to every local user, not
+only yours, and it also shows in `systemctl status`. Treat a shared machine
+accordingly. Core dumps are disabled for these units so a crash cannot write the
+key to disk. Soloist's unauthenticated WebSocket binds to `127.0.0.1` with an
+ephemeral port. This is a local-user interface, not a security boundary against
+untrusted local programs or browser pages.
+
+An expired build (Soloist exit status 10) or a missing key is reported as a
+terminal failure through `startup-error.json` rather than burning the restart
+limit. Soloist is sent SIGTERM and given 1.5 seconds so it can remove its endpoint
+files, and the adapter also removes any stale ones before starting. While paused
+or idle the adapter makes no wakeups at all.
 
 The optional `librespot` engine retains the commit-pinned upstream implementation,
 its 250 ms PulseAudio buffer, 200 ms play/pause fades and square-root volume mapping.
@@ -110,7 +124,8 @@ from reloading the plugin — and killing the build — mid-setup. A stale
 ## Authentication
 
 Web API access uses Spotify's Authorization Code with PKCE flow and the public
-application identity from the user’s own developer app. The fixed callback
+application identity from the user’s own developer app. Activating Spotify Connect
+receivers is the exception: see Local Spotify Connect. The fixed callback
 is `http://127.0.0.1:8989/login`. Soloist pairs once through an official Spotify
 client and stores its personal key in the desktop keyring. Only the optional
 librespot backend performs independent browser authorization on loopback port `8000`. Receivers that advertise the
@@ -157,6 +172,19 @@ and the reusable credential as fallbacks; authorization-code receivers such
 as Sonos receive a receiver-scoped code exchanged from that grant.
 It then waits for Spotify to report the genuine device before transferring
 playback when needed. It never asks for or stores the user's password.
+
+Receiver activation is not part of the public Web API. Minting a device-scoped
+token uses Spotify's `spclient` `device-auth` endpoint, and the code exchange uses
+the desktop client's identity, because receivers only accept those. It works today
+and may stop without notice. Everything else in the plugin uses documented APIs.
+
+ZeroConf has no way to authenticate a receiver, so anything on the LAN can claim to
+be a speaker and any helper request goes where its advertisement says. Discovery
+therefore probes only private addresses, refuses the cloud metadata address and any
+path with a query string, and is bounded in time. A receiver you pick is trusted
+with what it asks for, which can include the reusable credential if it advertises
+the `default` token type. That credential exists only if you have signed in with
+the librespot engine.
 
 An album or playlist in its unfiltered Original order starts Spotify's native
 context, preserving the complete server-side collection. Sorting or filtering
@@ -223,9 +251,22 @@ Neither path enables or starts the playback unit at login.
 ./scripts/test.sh
 ```
 
-The suite runs Omarchy manifest validation, Qt 6 QML lint, offline Qt tests with
-mocked authentication responses, shell-script tests, configuration checks, and a
-forbidden-heavyweight-dependency scan.
+The suite runs the Rust checks, Omarchy manifest validation, Qt 6 QML lint, offline
+Qt tests with mocked authentication responses, Python and shell-script tests,
+configuration checks, static analysis, an advisory scan, a
+forbidden-heavyweight-dependency scan, and real Quickshell integration fixtures that
+never touch the live desktop. CI runs exactly this script. `--no-integration` skips
+the Quickshell fixtures while iterating.
+
+To see the interface without touching your desktop or account:
+
+```bash
+./scripts/ui-preview.sh --theme catppuccin-latte --size 1000x660
+```
+
+It drives the real panel through every page with made-up data, inside a private
+headless compositor with no network, and writes screenshots under
+`~/.cache/omaspotify/ui-preview/`.
 
 Resource sampling:
 
@@ -272,7 +313,7 @@ The review also covers Soloist status generations, position reset on track chang
 backend pending-command cancellation on disconnect, and the Tunemarchy protocol.
 See the catalog loader tests and native lifecycle/disconnect fixtures. Spotify
 editorial/algorithmic playlists and unavailable recommendation endpoints remain
-platform restrictions; no private Spotify APIs are used.
+platform restrictions, and this feed uses documented Web API endpoints only.
 
 Soloist volume changes are saved atomically as a private percentage file and
 passed through its supported `--initial-volume` option on restart, including mute.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 action=${1:-}
 if (( $# != 1 )); then
   echo "Usage: scripts/playback-runtime.sh check|credentials|start|start-explicit|stop|status|failure|unit" >&2

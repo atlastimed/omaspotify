@@ -26,6 +26,11 @@ both names are ignored by git.
 - Red then green. Write the failing test first, watch it fail, then make it
   pass.
 
+## Checks
+
+- `./scripts/test.sh` is the whole suite, and CI runs exactly that script.
+- `./scripts/ui-preview.sh` screenshots every page without touching the desktop.
+
 ## Dependencies
 
 - When one does not behave as expected, research and test it before writing a

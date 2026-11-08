@@ -16,7 +16,6 @@ import urllib.parse
 from pathlib import Path
 from unittest import mock
 
-
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = SOURCE_ROOT / "scripts" / "spotify-connect-device.py"
 SPEC = importlib.util.spec_from_file_location("spotify_connect_device", HELPER_PATH)
@@ -32,7 +31,7 @@ class FakeResponse:
         self.payload = json.dumps(payload).encode("utf-8")
         self.status = status
 
-    def __enter__(self) -> "FakeResponse":
+    def __enter__(self) -> FakeResponse:
         return self
 
     def __exit__(self, *_args: object) -> None:

@@ -35,7 +35,6 @@ import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any
 
-
 MAX_RESPONSE_BYTES = 65_536
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,160}$")
 RECEIVER_PATH_RE = re.compile(r"^/[A-Za-z0-9/_.~-]*$")

@@ -8,7 +8,11 @@ usage() {
   exit 2
 }
 
-theme=tokyo-night size=1280x800 out= only= font_size=
+theme=tokyo-night
+size=1280x800
+out=''
+only=''
+font_size=''
 while (($#)); do
   case $1 in
     --theme) theme=$2; shift 2 ;;

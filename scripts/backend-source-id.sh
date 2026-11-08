@@ -2,7 +2,7 @@
 set -euo pipefail
 export LC_ALL=C
 
-source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 source_files=(
   backend/Cargo.toml
   backend/Cargo.lock

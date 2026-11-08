@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
 
@@ -17,8 +17,12 @@ refute() {
 # provenance. The reviewed source snapshot must not contain an opaque ELF.
 [[ ! -e $source_root/backend/dist/$(uname -m)/omaspotify-backend ]]
 [[ -f $source_root/.github/workflows/release-backend.yml ]]
-backend_source_id=$($source_root/scripts/backend-source-id.sh)
+backend_source_id=$("$source_root/scripts/backend-source-id.sh")
 [[ $backend_source_id =~ ^[0-9a-f]{64}$ ]]
+
+# The tag is derived from the manifest, and the backend reports its Cargo version.
+[[ $(jq -r '.version' "$source_root/manifest.json") == \
+  "$(sed -n 's/^version = "\(.*\)"$/\1/p' "$source_root/backend/Cargo.toml" | head -n 1)" ]]
 
 # A release built from the manifest's version tag remains valid when main has
 # moved ahead with UI-only commits. The attestation must stay bound to the
@@ -241,6 +245,7 @@ set -e
 # An out-of-range pregain or a non-boolean flag must be refused.
 for bad_norm in 'true 40' 'maybe 0'; do
   set +e
+  # shellcheck disable=SC2086 # Splitting this into separate lines is the point.
   printf '%s\n' 'Desk speakers' 320 ${bad_norm} |
     XDG_CONFIG_HOME="$test_root/config" "$source_root/scripts/configure-playback.sh"
   bad_norm_status=$?
@@ -667,10 +672,9 @@ grep -q -- '--source-ref' "$source_root/scripts/build-backend.sh"
 grep -q -- '--source-digest' "$source_root/scripts/build-backend.sh"
 grep -q -- '--deny-self-hosted-runners' "$source_root/scripts/build-backend.sh"
 refute grep -q 'ALLOW_UNVERIFIED' "$source_root/scripts/build-backend.sh"
-if grep -E '^[[:space:]]*uses:' \
-    "$source_root/.github/workflows/release-backend.yml" \
+if grep -E '^[[:space:]]*(- )?uses:' "$source_root"/.github/workflows/*.yml \
     | grep -Ev '@[0-9a-f]{40}([[:space:]]+#.*)?$'; then
-  echo "release-backend.yml contains a mutable action reference" >&2
+  echo "A workflow contains a mutable action reference" >&2
   exit 1
 fi
 jq -e '(.version | test("^[0-9]+\\.[0-9]+\\.[0-9]+$"))

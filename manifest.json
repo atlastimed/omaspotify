@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.atlastimed.omaspotify",
   "name": "OmaSpotify",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "author": "atlastimed (fork of jeremylanger/omaspotify)",
   "license": "MIT",
   "description": "Native Spotify player for Omarchy 4.5, with a shared playback connection for Tunemarchy.",

@@ -1,6 +1,6 @@
 [package]
 name = "omaspotify-backend"
-version = "2.0.1"
+version = "2.3.0"
 edition = "2024"
 rust-version = "1.97"
 license = "MIT"

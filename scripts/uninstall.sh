@@ -6,7 +6,7 @@ if (( $# > 0 )); then
   exit 2
 fi
 
-source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+source_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 plugins_dir="$HOME/.config/omarchy/plugins"
 plugin_dir="$plugins_dir/io.github.atlastimed.omaspotify"
 
