@@ -60,10 +60,7 @@ BorderSurface {
     + (durationColumnVisible ? durationColumn.width + contentRow.spacing : 0)
     + contentRow.spacing
   // Narrow rows give the title room until asked, and keep one button for the rest.
-  readonly property bool compactActions: Api.mediaRowShouldCompact(
-    titleMetrics.advanceWidth, Math.max(0, contentRow.width - fixedWidth - allActionsWidth),
-    actionCount + (saveActionVisible ? 1 : 0))
-    && width < Style.space(440)
+  readonly property bool compactActions: width < Style.space(440)
   readonly property real actionZoneWidth: compactActions
     ? (actionsExpanded ? allActionsWidth : (actionsShown ? actionSize : saveWidth))
     : allActionsWidth
@@ -110,14 +107,6 @@ BorderSurface {
   HoverHandler {
     id: hoverHandler
     onPointChanged: if (hovered) root.pointerMoved(point.scenePosition)
-  }
-
-  TextMetrics {
-    id: titleMetrics
-    text: root.itemData ? String(root.itemData.name || "Untitled") : "Untitled"
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.body
-    font.bold: root.selected
   }
 
   MouseArea {
@@ -222,6 +211,7 @@ BorderSurface {
       Text {
         anchors.centerIn: parent
         visible: rowArtwork.status !== Image.Ready
+        textFormat: Text.PlainText
         text: !root.itemData ? "󰝚"
           : (root.itemData.type === "playlist" ? "󰲸"
           : (root.itemData.type === "artist" ? "󰠃"

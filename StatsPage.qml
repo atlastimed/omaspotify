@@ -15,7 +15,7 @@ Item {
 
   readonly property var service: panel ? panel.service : null
   readonly property int weeks: Math.max(8, Math.min(53,
-    Math.floor((width - Style.space(30)) / (Style.space(10) + Style.space(2)))))
+    Math.floor((width - Style.space(110)) / (Style.space(10) + Style.space(2)))))
   readonly property var grid: service
     ? Api.heatmapWeeks(service.listeningDays, Date.now(), weeks) : []
 
@@ -50,6 +50,7 @@ Item {
 
           Text {
             anchors.baseline: statisticLabel.baseline
+            textFormat: Text.PlainText
             text: String(statistic.modelData.value)
             color: page.panel.foreground
             font.family: page.panel.fontFamily
@@ -61,6 +62,7 @@ Item {
             id: statisticLabel
             anchors.bottom: parent.bottom
             anchors.bottomMargin: Style.space(4)
+            textFormat: Text.PlainText
             text: statistic.modelData.label
             color: page.panel.muted
             font.family: page.panel.fontFamily

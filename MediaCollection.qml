@@ -60,6 +60,7 @@ Item {
   property real pointerY: 0
   readonly property int listCurrentIndex: mediaList.currentIndex
   readonly property int listCount: mediaList.count
+  property alias listContentY: mediaList.contentY
   property bool allowReorder: false
   property bool reorderBusy: false
   property int dragSourceIndex: -1
@@ -412,6 +413,7 @@ Item {
       Text {
         id: countLabel
         anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
         text: root.visibleItems.length
           + (root.filterText ? (root.visibleItems.length === 1 ? " match" : " matches")
             : (root.visibleItems.length === 1 ? " item" : " items"))
@@ -652,6 +654,7 @@ Item {
       visible: root.filterText.trim() !== "" && root.hasMore
       spacing: Style.space(6)
       Text {
+        textFormat: Text.PlainText
         text: "Filtering " + root.sourceItems.length + " loaded items. More remain."
         color: root.muted
         font.family: Style.font.family
@@ -712,6 +715,7 @@ Item {
 
         Text {
           width: parent.width
+          textFormat: Text.PlainText
           text: root.dragItem ? String(root.dragItem.name || "Untitled") : ""
           color: Commons.Color.foreground
           font.family: Style.font.family
@@ -722,6 +726,7 @@ Item {
 
         Text {
           width: parent.width
+          textFormat: Text.PlainText
           text: root.dragItem ? String(root.dragItem.subtitle || "") : ""
           color: root.muted
           font.family: Style.font.family

@@ -2,8 +2,6 @@ pragma ComponentBehavior: Bound
 
 import QtQuick
 import QtQuick.Effects
-import Quickshell
-import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -144,8 +142,6 @@ BarWidget {
     heldModifierFlags = shortcutModifiers.flagsAfterEvent(event.modifiers,
       pressed, heldModifierFlags, event.key)
   }
-
-
 
 
 
@@ -318,7 +314,6 @@ BarWidget {
   function miniCursorOn(action) {
     return miniCursorActive && !miniCursorFromPointer && miniCursor === action
   }
-
 
   function moveMiniCursor(delta) {
     var actions = miniKeyboardActions
@@ -625,6 +620,7 @@ BarWidget {
           Text {
             id: barLabel
             anchors.verticalCenter: parent.verticalCenter
+            textFormat: Text.PlainText
             text: root.barText
             color: button.foreground
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -641,10 +637,10 @@ BarWidget {
               id: barScrollAnimation
               running: scrollClip.scrolling
               loops: Animation.Infinite
-              duration: Math.round(Math.max(6000, implicitWidth * 25)
+              duration: Math.round(Math.max(6000, barLabel.implicitWidth * 25)
                 / Math.max(0.25, root.spotify ? root.spotify.scrollSpeed : 1))
               from: scrollClip.width
-              to: -implicitWidth
+              to: -barLabel.implicitWidth
               easing.type: Easing.Linear
               onStopped: barLabel.x = 0
             }

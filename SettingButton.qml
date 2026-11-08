@@ -1,5 +1,6 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import qs.Commons
 import qs.Ui
 
 // A button in Settings that the panel's keyboard cursor can reach.

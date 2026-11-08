@@ -100,6 +100,7 @@ BorderSurface {
       Text {
         anchors.centerIn: parent
         visible: art.status !== Image.Ready
+        textFormat: Text.PlainText
         text: row.fallbackGlyph
         color: row.muted
         font.family: row.fontFamily
@@ -129,6 +130,7 @@ BorderSurface {
         Text {
           anchors.centerIn: parent
           visible: row.compact
+          textFormat: Text.PlainText
           text: row.fallbackGlyph
           color: row.muted
           font.family: row.fontFamily

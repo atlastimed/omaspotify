@@ -99,6 +99,7 @@ Item {
         Text {
           anchors.centerIn: parent
           visible: detailArtwork.status !== Image.Ready
+          textFormat: Text.PlainText
           text: page.isArtist ? "󰠃" : ""
           color: page.panel.muted
           font.family: page.panel.fontFamily

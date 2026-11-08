@@ -19,7 +19,7 @@ function art(index) {
   return "file://" + artDir + "/" + (index % 12) + ".png"
 }
 function image(index) {
-  return [{ url: art(index), width: 640, height: 640 }]
+  return artDir ? [{ url: art(index), width: 640, height: 640 }] : []
 }
 function artistRef(index) {
   var at = index % ARTISTS.length

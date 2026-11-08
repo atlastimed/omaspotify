@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import Quickshell
@@ -947,6 +949,11 @@ Item {
   }
 
   // Runs on every cursor move, so it never walks into the rows of a list.
+  // The extra arguments are only there to redo this when one of them changes.
+  function sidebarListRowHint(index) {
+    return sidebarPlaylistNavHint(index)
+  }
+
   function findNamedItems(item, name, found) {
     var results = found || []
     if (!item || item.visible === false) return results

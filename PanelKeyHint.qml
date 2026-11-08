@@ -1,5 +1,6 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import qs.Commons
 import qs.Commons as Commons
 
 // The panel's shortcut hint. Pages live in their own files, so this takes the

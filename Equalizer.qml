@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Shapes
 import Quickshell
@@ -332,6 +334,7 @@ Item {
         font.family: root.fontFamily
         font.pixelSize: matrixStage.fontPx
         color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.10)
+        textFormat: Text.PlainText
         text: {
           var s = ""
           for (var r = 0; r < matrixStage.rows; r++) s += (r ? "\n" : "") + "·"
@@ -426,6 +429,7 @@ Item {
     Text {
       id: badgeText
       anchors.centerIn: parent
+      textFormat: Text.PlainText
       text: root.mode.charAt(0).toUpperCase() + root.mode.slice(1) + " · V"
       color: root.barColor
       font.family: root.fontFamily
@@ -438,6 +442,7 @@ Item {
     anchors.centerIn: parent
     visible: !root.unavailable && root.streamIdle
     width: Math.min(parent.width, Style.space(420))
+    textFormat: Text.PlainText
     text: root.playing
       ? "Playing on another device · the equalizer follows local playback"
       : "Play something on this computer to light up the equalizer"

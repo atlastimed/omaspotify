@@ -65,6 +65,26 @@ if rg -i 'ReferenceError|TypeError|binding loop|Cannot assign|Unable to assign|F
 fi
 echo 'Quickshell app smoke test passed.'
 
+# Every real page, with the keyboard cursor walked over each. Any warning fails it.
+mkdir -p "$test_root/pages/plugin" "$test_root/pages-state"
+cp "$source_root/"*.qml "$source_root/"*.js "$test_root/pages/plugin/"
+cp -r /usr/share/omarchy/shell/Commons /usr/share/omarchy/shell/Ui "$test_root/pages/"
+cp "$source_root/tests/integration/PagesSmoke.qml" "$test_root/pages/shell.qml"
+cp "$source_root/tests/ui/FixtureApi.js" "$test_root/pages/"
+env QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 XDG_STATE_HOME="$test_root/pages-state" \
+  timeout 45s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root/pages" > "$test_root/pages-output" 2>&1 || {
+  cat "$test_root/pages-output"
+  exit 1
+}
+rg -q PAGES_SMOKE_PASS "$test_root/pages-output" || {
+  cat "$test_root/pages-output"
+  exit 1
+}
+if rg -i 'PAGES_SMOKE_FAIL|ReferenceError|TypeError|binding loop|Cannot assign|Cannot anchor|Cannot read|Unable to assign|is not a function|non-existent' "$test_root/pages-output"; then
+  exit 1
+fi
+echo 'Quickshell pages smoke test passed.'
+
 mkdir -p "$test_root/sonos/plugin/scripts" "$test_root/sonos-state"
 cp "$source_root/"*.qml "$source_root/"*.js "$test_root/sonos/plugin/"
 cp "$source_root/tests/integration/SonosControl.qml" "$test_root/sonos/shell.qml"

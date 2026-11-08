@@ -63,6 +63,7 @@ Column {
       Text {
         required property var modelData
         x: modelData.week * heatmap.pitch
+        textFormat: Text.PlainText
         text: modelData.text
         color: heatmap.muted
         font.family: heatmap.fontFamily

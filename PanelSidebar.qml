@@ -16,6 +16,8 @@ Item {
     ? playlistGrid : playlistList
   readonly property bool titleRowShown: brandRow.visible
 
+  readonly property real compactRowHeight: Style.space(30)
+
   component NavGlyph: OpticalGlyph {
     anchors.fill: parent
     visible: part.panel.compactWidth
@@ -60,6 +62,7 @@ Item {
       width: Math.max(20, parent.width - Style.space(18) - brandSettingsButton.width
         - parent.spacing * 2)
       anchors.verticalCenter: parent.verticalCenter
+      textFormat: Text.PlainText
       text: part.panel.appName
       color: part.panel.foreground
       font.family: part.panel.fontFamily
@@ -105,6 +108,7 @@ Item {
         required property var modelData
         readonly property bool radioEntry: modelData.id === "radio"
         width: primaryNavigation.width
+        height: part.panel.compactWidth ? part.compactRowHeight : implicitHeight
         text: part.panel.compactWidth ? "" : modelData.label
         iconText: part.panel.compactWidth ? "" : modelData.icon
         foreground: part.panel.foreground
@@ -167,6 +171,7 @@ Item {
       id: likedSongsButton
       width: part.panel.compactWidth ? parent.width
         : Math.max(20, parent.width - createPlaylistShortcut.width - parent.spacing)
+      height: part.panel.compactWidth ? part.compactRowHeight : implicitHeight
       text: part.panel.compactWidth ? "" : "Your library"
       iconText: part.panel.compactWidth ? "" : "󰋑"
       foreground: part.panel.foreground
@@ -192,6 +197,7 @@ Item {
     Button {
       id: createPlaylistShortcut
       width: part.panel.compactWidth ? parent.width : implicitWidth
+      height: part.panel.compactWidth ? part.compactRowHeight : implicitHeight
       iconText: "󰐕"
       foreground: part.panel.foreground
       horizontalPadding: Style.space(7)
@@ -325,8 +331,8 @@ Item {
         active: part.panel.shortcutHintsActive
         sourceComponent: PanelKeyHint {
           panel: part.panel
-          navHint: gridCell.GridView.isCurrentItem
-            ? part.panel.sidebarPlaylistNavHint(gridCell.index) : ""
+          navHint: part.panel.sidebarListRowHint(gridCell.index, playlistGrid.currentIndex,
+            playlistGrid.contentY, part.panel.cursorNav)
         }
       }
     }
@@ -395,12 +401,8 @@ Item {
         active: part.panel.shortcutHintsActive
         sourceComponent: PanelKeyHint {
           panel: part.panel
-          navHint: {
-            playlistList.currentIndex
-            playlistList.contentY
-            part.panel.cursorNav
-            return part.panel.sidebarPlaylistNavHint(listRow.index)
-          }
+          navHint: part.panel.sidebarListRowHint(listRow.index, playlistList.currentIndex,
+            playlistList.contentY, part.panel.cursorNav)
         }
       }
     }
@@ -411,7 +413,7 @@ Item {
   Button {
     id: setupNavButton
     visible: !brandSettingsButton.visible || !brandRow.visible
-    height: visible ? implicitHeight : 0
+    height: visible ? (part.panel.compactWidth ? part.compactRowHeight : implicitHeight) : 0
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.bottom: parent.bottom

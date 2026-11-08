@@ -1,10 +1,10 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Item {
   id: page
@@ -85,6 +85,7 @@ Item {
 
               Text {
                 anchors.centerIn: parent
+                textFormat: Text.PlainText
                 text: page.panel.fullyConnected ? "󰄬" : ""
                 color: page.panel.fullyConnected ? page.panel.accent : page.panel.foreground
                 font.family: page.panel.fontFamily
@@ -99,6 +100,7 @@ Item {
               spacing: Style.space(2)
 
               Text {
+                textFormat: Text.PlainText
                 text: page.panel.connectionHeadline()
                 color: page.panel.foreground
                 font.family: page.panel.fontFamily
@@ -106,6 +108,7 @@ Item {
                 font.bold: true
               }
               Text {
+                textFormat: Text.PlainText
                 text: page.panel.service ? page.panel.service.loginProgress : "Spotify is unavailable"
                 color: page.panel.fullyConnected
                   ? page.panel.accent : page.panel.muted
@@ -117,6 +120,7 @@ Item {
 
           Text {
             width: parent.width
+            textFormat: Text.PlainText
             text: page.panel.service && page.panel.service.usesSoloist
               ? "Connect your Spotify account to browse your library. Set up Soloist below for playback on this computer."
               : "First connect your Spotify account to browse. Then approve playback on this computer."
@@ -177,6 +181,7 @@ Item {
             Row {
               spacing: Style.space(7)
               Text {
+                textFormat: Text.PlainText
                 text: page.panel.service && page.panel.service.auth.loggedIn ? "󰄬" : "󰋼"
                 color: page.panel.service && page.panel.service.auth.loggedIn
                   ? page.panel.accent : page.panel.muted
@@ -184,6 +189,7 @@ Item {
                 font.pixelSize: Style.font.body
               }
               Text {
+                textFormat: Text.PlainText
                 text: page.panel.service && page.panel.service.auth.loggedIn
                   ? "Your Spotify account is connected"
                   : (page.panel.service && page.panel.service.auth.loginBusy
@@ -198,6 +204,7 @@ Item {
             Row {
               spacing: Style.space(7)
               Text {
+                textFormat: Text.PlainText
                 text: page.panel.service && page.panel.service.daemon.credentialsAvailable ? "󰄬" : "󰓃"
                 color: page.panel.service && page.panel.service.daemon.credentialsAvailable
                   ? page.panel.accent : page.panel.muted
@@ -205,6 +212,7 @@ Item {
                 font.pixelSize: Style.font.body
               }
               Text {
+                textFormat: Text.PlainText
                 text: page.panel.service && page.panel.service.daemon.credentialsAvailable
                   ? "Playback on this computer is connected"
                   : (page.panel.service && page.panel.service.daemon.authenticationBusy
@@ -251,6 +259,7 @@ Item {
 
           Text {
             width: parent.width
+            textFormat: Text.PlainText
             text: !page.panel.service || page.panel.service.daemon.playbackReady
               || page.panel.service.daemon.setupBusy ? ""
               : (page.panel.service.daemon.binaryAvailable
@@ -265,6 +274,7 @@ Item {
 
           Text {
             width: parent.width
+            textFormat: Text.PlainText
             text: page.panel.connectionErrorText()
             color: Commons.Color.urgent
             font.family: page.panel.fontFamily

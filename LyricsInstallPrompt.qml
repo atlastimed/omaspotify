@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import qs.Commons
 import qs.Commons as Commons
@@ -35,6 +37,7 @@ Item {
     Text {
       objectName: "lyrics-install-title"
       width: parent.width
+      textFormat: Text.PlainText
       text: root.availability === "disabled" ? "Enable Omasing Lyrics?"
         : (root.availability === "ready" && root.errorText
           ? "Omasing didn't open" : "Install Omasing Lyrics?")
@@ -48,6 +51,7 @@ Item {
     Text {
       objectName: "lyrics-install-description"
       width: parent.width
+      textFormat: Text.PlainText
       text: root.availability === "disabled"
         ? "Omasing is already installed. Enable it and add its widget to the center of your bar?"
         : (root.availability === "ready"

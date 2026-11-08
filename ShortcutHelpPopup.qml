@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
@@ -127,6 +129,7 @@ Popup {
               width: parent.width
               visible: String(shortcutRow.modelData.section || "") !== ""
               topPadding: visible ? Style.space(3) : 0
+              textFormat: Text.PlainText
               text: String(shortcutRow.modelData.section || "")
               color: popup.panel.accent
               font.family: popup.panel.fontFamily
@@ -141,6 +144,7 @@ Popup {
               Text {
                 width: Math.max(80, parent.width - shortcutKey.width - parent.spacing)
                 anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
                 text: String(shortcutRow.modelData.action || "")
                 color: popup.panel.foreground
                 font.family: popup.panel.fontFamily
@@ -159,6 +163,7 @@ Popup {
                 Text {
                   id: shortcutKeyText
                   anchors.centerIn: parent
+                  textFormat: Text.PlainText
                   text: String(shortcutRow.modelData.keys || "")
                   color: popup.panel.foreground
                   font.family: popup.panel.fontFamily

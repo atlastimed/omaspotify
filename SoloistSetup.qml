@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import qs.Commons
 import qs.Ui
@@ -18,6 +20,7 @@ Column {
 
   Text {
     width: parent.width
+    textFormat: Text.PlainText
     text: root.paired
       ? "Paired and ready. Soloist starts on demand and follows your system audio output."
       : "Install Spotify's lightweight player, create your personal Soloist API key in the developer dashboard, then save it here. Finally, open the official Spotify app on this network and select OmaSpotify from its device picker once."
@@ -80,6 +83,7 @@ Column {
 
   Text {
     width: parent.width
+    textFormat: Text.PlainText
     text: root.manager && root.manager.playbackReady
       ? (root.manager.keyAvailable ? "Key saved in your desktop keyring. " : "No key saved yet. ") + "Builds renew automatically near expiry; updates apply when playback next starts. Current build: " + root.manager.daysRemaining + " days remaining."
       : "Downloads directly from Spotify. Builds expire after 90 days; a user service checks for renewal daily."

@@ -129,6 +129,7 @@ Item {
 
     Text {
       width: parent.width
+      textFormat: Text.PlainText
       text: mini.widget.spotify ? mini.widget.spotify.loginProgress : "Spotify is unavailable"
       color: mini.widget.foreground
       font.family: mini.widget.bar ? mini.widget.bar.fontFamily : Style.font.family
@@ -151,6 +152,7 @@ Item {
       visible: mini.widget.spotify && (mini.widget.spotify.lastError !== ""
         || mini.widget.spotify.auth.lastError !== ""
         || mini.widget.spotify.daemon.lastError !== "")
+      textFormat: Text.PlainText
       text: mini.widget.spotify ? (mini.widget.spotify.lastError
         || mini.widget.spotify.auth.lastError
         || mini.widget.spotify.daemon.lastError) : ""
@@ -342,6 +344,7 @@ Item {
             - (barCurrentTrackLikeButton.visible
               ? barCurrentTrackLikeButton.width + parent.spacing : 0))
           anchors.verticalCenter: parent.verticalCenter
+          textFormat: Text.PlainText
           text: Api.idleMediaText(mini.widget.spotify ? mini.widget.spotify.title : "",
             mini.widget.spotify ? mini.widget.spotify.lastPlayedItem : null, "name",
             "Nothing playing")
@@ -522,6 +525,7 @@ Item {
 
       Text {
         id: positionTime
+        textFormat: Text.PlainText
         text: Api.millisecondsToClock((mini.widget.spotify ? mini.widget.spotify.positionSeconds : 0) * 1000)
         color: mini.widget.muted
         font.family: mini.widget.bar ? mini.widget.bar.fontFamily : Style.font.family
@@ -532,6 +536,7 @@ Item {
 
       Text {
         id: endTime
+        textFormat: Text.PlainText
         text: Api.millisecondsToClock((mini.widget.spotify ? mini.widget.spotify.lengthSeconds : 0) * 1000)
         color: mini.widget.muted
         font.family: mini.widget.bar ? mini.widget.bar.fontFamily : Style.font.family
@@ -641,6 +646,7 @@ Item {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
         text: mini.widget.spotify && mini.widget.spotify.volume <= 0.001 ? "󰝟" : "󰕾"
         color: mini.widget.spotify && mini.widget.spotify.volume <= 0.001
           ? mini.widget.muted : mini.widget.foreground
@@ -779,13 +785,15 @@ Item {
       model: mini.widget.miniShortcutRows
 
       delegate: Row {
+        id: shortcutRow
         required property var modelData
         width: miniShortcutHelp.width
         spacing: Style.space(8)
 
         Text {
           width: Style.space(128)
-          text: modelData.keys
+          textFormat: Text.PlainText
+          text: shortcutRow.modelData.keys
           color: mini.widget.foreground
           font.family: mini.widget.bar ? mini.widget.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption
@@ -795,7 +803,8 @@ Item {
 
         Text {
           width: parent.width - Style.space(128) - parent.spacing
-          text: modelData.action
+          textFormat: Text.PlainText
+          text: shortcutRow.modelData.action
           color: mini.widget.muted
           font.family: mini.widget.bar ? mini.widget.bar.fontFamily : Style.font.family
           font.pixelSize: Style.font.caption

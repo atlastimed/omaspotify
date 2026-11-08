@@ -1,9 +1,9 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Popup {
   id: popup
@@ -108,6 +108,7 @@ Popup {
       FastScrollHandler { parent: playlistPickerList; flickable: playlistPickerList }
 
       delegate: Button {
+        id: pickerRow
         required property var modelData
         width: Math.max(80, ListView.view.width
           - (playlistPickerList.contentHeight > playlistPickerList.height

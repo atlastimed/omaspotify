@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import qs.Commons
 import qs.Ui
@@ -28,6 +30,7 @@ Column {
   Text {
     visible: part.label !== ""
     width: parent.width
+    textFormat: Text.PlainText
     text: part.label
     color: part.panel.muted
     font.family: part.panel.fontFamily

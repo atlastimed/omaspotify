@@ -1,9 +1,9 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Popup {
   id: popup
@@ -61,6 +61,7 @@ Popup {
     Repeater {
       model: [15, 30, 60, 120]
       Button {
+        id: minutesButton
         required property int modelData
         width: sleepContent.width
         text: modelData + " minutes"
@@ -68,7 +69,7 @@ Popup {
         foreground: popup.panel.foreground
         leftAlign: true
         hasCursor: popup.panel.cursorShown("popup", "sleep-" + modelData)
-        onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-" + modelData) }
+        onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-" + minutesButton.modelData) }
         KeyHint { region: "popup"; action: "sleep-" + modelData }
         onClicked: {
           if (popup.panel.service) popup.panel.service.setSleepMinutes(modelData)

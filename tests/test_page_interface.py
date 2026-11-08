@@ -162,6 +162,30 @@ class ReadableText(unittest.TestCase):
         self.assertFalse(offenders, "; ".join(offenders))
 
 
+class PlainText(unittest.TestCase):
+    def test_text_from_outside_cannot_turn_into_rich_text(self):
+        """Left on its default, a Text renders any markup it is handed, and an
+        image tag in a speaker's name or an error message fetches over the network."""
+        offenders = []
+        for path in sorted(ROOT.glob("*.qml")):
+            text = path.read_text()
+            for match in re.finditer(r"(?m)^\s*Text \{", text):
+                depth, at = 0, match.end() - 1
+                while at < len(text):
+                    depth += {"{": 1, "}": -1}.get(text[at], 0)
+                    if depth == 0:
+                        break
+                    at += 1
+                block = text[match.start():at]
+                value = re.search(r"(?m)^\s*text: (.*)$", block)
+                if not value or "textFormat:" in block:
+                    continue
+                if not re.fullmatch(r'"[^"]*"', value.group(1).strip()):
+                    line = text[:match.start()].count("\n") + 1
+                    offenders.append(f"{path.name} line {line}")
+        self.assertFalse(offenders, "; ".join(offenders))
+
+
 class CursorActions(unittest.TestCase):
     def test_every_action_a_control_highlights_can_be_reached(self):
         """A control can only light up for an action the panel can land on."""

@@ -66,6 +66,7 @@ Item {
 
       Text {
         anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
         text: part.shownFailed ? "󰀦" : "󰄬"
         color: part.shownFailed ? Commons.Color.urgent : part.panel.accent
         font.family: part.panel.fontFamily

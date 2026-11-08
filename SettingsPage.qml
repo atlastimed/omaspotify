@@ -80,6 +80,7 @@ Item {
 
   component SettingNote: Text {
     width: parent ? parent.width : implicitWidth
+    textFormat: Text.PlainText
     color: page.panel.muted
     font.family: page.panel.fontFamily
     font.pixelSize: Style.font.bodySmall
@@ -129,6 +130,7 @@ Item {
 
             Text {
               anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
               text: page.panel.fullyConnected ? "󰄬" : "󰋼"
               color: page.panel.fullyConnected ? page.panel.accent : page.panel.foreground
               font.family: page.panel.fontFamily
@@ -202,7 +204,6 @@ Item {
 
         SettingNote {
           text: page.panel.connectionErrorText()
-          textFormat: Text.PlainText
           color: Commons.Color.urgent
           visible: text !== ""
         }
@@ -463,6 +464,7 @@ Item {
             }
             Text {
               id: scrollSpeedValue
+              textFormat: Text.PlainText
               text: page.panel.scrollSpeedLabel()
               color: page.panel.foreground
               font.family: page.panel.fontFamily
@@ -531,6 +533,7 @@ Item {
             }
             Text {
               id: maxBarWidthValue
+              textFormat: Text.PlainText
               text: page.panel.maxBarTextWidthLabel()
               color: page.panel.foreground
               font.family: page.panel.fontFamily

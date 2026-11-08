@@ -197,6 +197,7 @@ Item {
               Text {
                 id: deviceIcon
                 anchors.verticalCenter: parent.verticalCenter
+                textFormat: Text.PlainText
                 text: page.deviceGlyph(deviceRow.modelData)
                 color: deviceRow.modelData.active ? page.panel.accent : page.panel.muted
                 font.family: page.panel.fontFamily

@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 
 // Every key chord the full player answers to. All the work happens in the panel.
