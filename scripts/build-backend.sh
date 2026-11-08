@@ -82,6 +82,11 @@ download_verified_release() {
   [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+([+-][0-9A-Za-z.-]+)?$ ]] \
     || return "$release_unavailable"
   expected_ref="refs/tags/v$version"
+  # Omarchy's plugin updater fetches HEAD without tags. Everything below still
+  # binds whatever this fetches to the checkout and the attestation.
+  git -C "$source_root" rev-parse --quiet --verify "$expected_ref" >/dev/null 2>&1 \
+    || git -C "$source_root" fetch --quiet --no-tags origin \
+      "+$expected_ref:$expected_ref" >/dev/null 2>&1 || true
   verified_commit=$(git -C "$source_root" rev-parse "$expected_ref^{commit}" \
     2>/dev/null) || return "$release_unavailable"
   [[ $verified_commit =~ ^[0-9a-f]{40}$ ]] || return "$release_unavailable"

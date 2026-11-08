@@ -68,7 +68,7 @@ case $action in
       echo "playback-runtime.sh: no installed playback runtime is available" >&2
       exit 1
     }
-    failure_path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-spotify/startup-error.json"
+    failure_path="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omaspotify/startup-error.json"
     if [[ $action == start-explicit ]]; then
       rm -f -- "$failure_path"
       systemctl --user reset-failed "$unit" || true
@@ -93,7 +93,7 @@ case $action in
     if [[ $(systemctl --user show "$unit" -p Result --value) == start-limit-hit ]]; then
       echo restart_limit
     else
-      jq -r '.code // ""' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omarchy-spotify/startup-error.json" 2>/dev/null || true
+      jq -r '.code // ""' "${XDG_RUNTIME_DIR:-/run/user/$(id -u)}/omaspotify/startup-error.json" 2>/dev/null || true
     fi
     ;;
   unit)

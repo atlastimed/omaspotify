@@ -4,7 +4,7 @@ set -euo pipefail
 source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 force_config=0
 skip_backend_build=${OMASPOTIFY_SKIP_BACKEND_BUILD:-0}
-device_name="OmaSpotify"
+device_name=""
 
 usage() {
   cat <<'EOF'
@@ -102,8 +102,9 @@ if (( ! backend_ready )); then
   exit 30
 fi
 
-install -d -m 700 -- "$config_dir"
-install -d -m 700 -- "$unit_dir"
+# Private when created here, but never tightened: the systemd directory is shared.
+[[ -d $config_dir ]] || install -d -m 700 -- "$config_dir"
+[[ -d $unit_dir ]] || install -d -m 700 -- "$unit_dir"
 
 if [[ -f $config_file && $force_config -eq 0 ]]; then
   echo "Keeping existing configuration: $config_file"
@@ -116,7 +117,11 @@ else
   install -m 600 -- "$source_root/config/playback.conf" "$config_file"
 fi
 
-printf '%s\n' "$device_name" | "$source_root/scripts/configure-playback.sh"
+# Keep a name already chosen in Settings unless one was asked for here.
+if [[ -z $device_name ]] && [[ -f $config_file ]]; then
+  device_name=$(sed -n 's/^device_name[[:space:]]*=[[:space:]]*"\(.*\)"[[:space:]]*$/\1/p' "$config_file" | head -n 1)
+fi
+printf '%s\n' "${device_name:-OmaSpotify}" | "$source_root/scripts/configure-playback.sh"
 if (( backend_ready )); then
   rendered_unit=$("$source_root/scripts/render-unit.sh")
   if [[ ! -f $backend_unit_file ]] \

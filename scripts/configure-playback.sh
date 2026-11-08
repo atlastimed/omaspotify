@@ -56,7 +56,6 @@ awk -v name="$device_name" -v rate="$bitrate" -v rate_set="$bitrate_specified" \
   }
   /^device[[:space:]]*=/ {
     next
-    next
   }
   /^autoplay[[:space:]]*=/ {
     print "autoplay = true"

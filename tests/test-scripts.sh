@@ -5,6 +5,14 @@ source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
 
+# `! cmd` never aborts under set -e, so a plain negation can never fail a test.
+refute() {
+  if "$@"; then
+    echo "test-scripts.sh: expected this to fail: $*" >&2
+    exit 1
+  fi
+}
+
 # Release executables are published separately with exact-commit build
 # provenance. The reviewed source snapshot must not contain an opaque ELF.
 [[ ! -e $source_root/backend/dist/$(uname -m)/omaspotify-backend ]]
@@ -123,6 +131,68 @@ CARGO_TARGET_DIR="$release_target" \
 grep -q -- '--locked --release' "$release_cargo_log"
 grep -q '^source-build:' "$release_runtime/backend-origin"
 
+# Every way verification can fail must leave the downloaded file uninstalled.
+expect_source_build() {
+  local label=$1
+  shift
+  rm -f -- "$release_runtime/omaspotify-backend" "$release_runtime/backend-origin"
+  : >"$release_cargo_log"
+  env PATH="$release_mock_bin:$PATH" \
+    TEST_RELEASE_ASSET="$release_asset" \
+    TEST_RELEASE_SUMS="$release_sums" \
+    TEST_EXPECTED_DIGEST="$release_commit" \
+    TEST_GH_LOG="$release_gh_log" \
+    TEST_CARGO_LOG="$release_cargo_log" \
+    OMASPOTIFY_RUNTIME_DIR="$release_runtime" \
+    CARGO_TARGET_DIR="$release_target" \
+    "$@" "$release_source/scripts/build-backend.sh" >/dev/null 2>&1
+  if cmp -s -- "$release_asset" "$release_runtime/omaspotify-backend"; then
+    echo "test-scripts.sh: $label installed the unverified download" >&2
+    exit 1
+  fi
+  grep -q -- '--locked --release' "$release_cargo_log" || {
+    echo "test-scripts.sh: $label did not fall back to a source build" >&2
+    exit 1
+  }
+}
+
+git -C "$release_source" reset -q --hard "$release_commit"
+wrong_sums="$release_fixture/WRONG_SUMS"
+printf '%064d  %s\n' 0 "$release_asset_name" >"$wrong_sums"
+expect_source_build "a checksum mismatch" TEST_RELEASE_SUMS="$wrong_sums"
+expect_source_build "a failed attestation" TEST_EXPECTED_DIGEST=0000000000000000000000000000000000000000
+printf '%s\n' '// uncommitted' >>"$release_source/backend/src/main.rs"
+expect_source_build "a modified checkout"
+git -C "$release_source" checkout -q -- backend/src/main.rs
+git -C "$release_source" switch -q --orphan unrelated
+git -C "$release_source" commit -q --allow-empty -m "Unrelated history"
+git -C "$release_source" restore --source "$release_commit" --worktree -- . 2>/dev/null || true
+git -C "$release_source" add -A
+git -C "$release_source" commit -qm "Same files, unrelated to the tag"
+expect_source_build "a tag that is not an ancestor"
+
+# The updater that installs plugins fetches no tags, so setup has to ask for one.
+tag_origin="$test_root/tag-origin"
+git clone -q --bare "$release_source" "$tag_origin"
+tag_clone="$test_root/tag-clone"
+git clone -q --no-tags "$tag_origin" "$tag_clone"
+git -C "$tag_clone" tag -d "v$manifest_version" >/dev/null 2>&1 || true
+git -C "$tag_clone" fetch --quiet --no-tags origin "+refs/heads/*:refs/remotes/origin/*"
+git -C "$tag_clone" switch -q --detach "$release_commit" 2>/dev/null \
+  || git -C "$tag_clone" fetch --quiet --no-tags origin "$release_commit"
+git -C "$tag_clone" switch -q --detach "$release_commit"
+: >"$release_gh_log"
+PATH="$release_mock_bin:$PATH" \
+TEST_RELEASE_ASSET="$release_asset" \
+TEST_RELEASE_SUMS="$release_sums" \
+TEST_EXPECTED_DIGEST="$release_commit" \
+TEST_GH_LOG="$release_gh_log" \
+TEST_CARGO_LOG="$release_cargo_log" \
+OMASPOTIFY_RUNTIME_DIR="$test_root/tag-runtime" \
+CARGO_TARGET_DIR="$release_target" \
+  "$tag_clone/scripts/build-backend.sh" >/dev/null 2>&1
+[[ $(<"$test_root/tag-runtime/backend-origin") == "attested-release:$release_commit" ]]
+
 pkce_output=$("$source_root/scripts/pkce.sh")
 IFS=$'\t' read -r verifier challenge state <<<"$pkce_output"
 
@@ -146,7 +216,7 @@ grep -qx 'device_name = "Desk speakers"' "$test_root/config/omaspotify/playback.
 grep -qx 'bitrate = 320' "$test_root/config/omaspotify/playback.conf"
 grep -qx 'no_audio_cache = false' "$test_root/config/omaspotify/playback.conf"
 grep -qx 'max_cache_size = 1000000000' "$test_root/config/omaspotify/playback.conf"
-! grep -q '^device[[:space:]]*=' "$test_root/config/omaspotify/playback.conf"
+refute grep -q '^device[[:space:]]*=' "$test_root/config/omaspotify/playback.conf"
 grep -qx 'autoplay = true' "$test_root/config/omaspotify/playback.conf"
 
 # Normalisation is written alongside the device name and bitrate.
@@ -182,12 +252,12 @@ printf '%s\n' "Renamed speakers" |
   XDG_CONFIG_HOME="$test_root/config" "$source_root/scripts/configure-playback.sh"
 grep -qx 'device_name = "Renamed speakers"' "$test_root/config/omaspotify/playback.conf"
 grep -qx 'bitrate = 320' "$test_root/config/omaspotify/playback.conf"
-! grep -q '^device[[:space:]]*=' "$test_root/config/omaspotify/playback.conf"
+refute grep -q '^device[[:space:]]*=' "$test_root/config/omaspotify/playback.conf"
 
 printf '%s\n%s\n\n' "Desk speakers" 96 |
   XDG_CONFIG_HOME="$test_root/config" "$source_root/scripts/configure-playback.sh"
 grep -qx 'bitrate = 96' "$test_root/config/omaspotify/playback.conf"
-! grep -q '^device[[:space:]]*=' "$test_root/config/omaspotify/playback.conf"
+refute grep -q '^device[[:space:]]*=' "$test_root/config/omaspotify/playback.conf"
 
 set +e
 printf '%s\n' 'invalid"name' |
@@ -286,6 +356,36 @@ OMASPOTIFY_BUILD_FROM_SOURCE=1 \
 [[ -f $runtime_spotify_config && -f $runtime_unit ]]
 grep -qx 'device_name = "OmaSpotify"' "$runtime_spotify_config"
 
+# Setup must not reset a name chosen in Settings or tighten a shared directory.
+printf '%s\n' 'Living room' |
+  XDG_CONFIG_HOME="$runtime_config" "$source_root/scripts/configure-playback.sh"
+chmod 755 "$runtime_config/systemd/user"
+PATH="$mock_bin:$PATH" \
+XDG_CONFIG_HOME="$runtime_config" \
+XDG_CACHE_HOME="$runtime_cache" \
+XDG_STATE_HOME="$runtime_state" \
+OMASPOTIFY_RUNTIME_DIR="$runtime_backend" \
+CARGO_TARGET_DIR="$mock_target" \
+OMASPOTIFY_BUILD_FROM_SOURCE=1 \
+  "$source_root/scripts/setup.sh" >/dev/null
+grep -qx 'device_name = "Living room"' "$runtime_spotify_config"
+[[ $(stat -c '%a' "$runtime_config/systemd/user") == 755 ]]
+
+# Startup failures are read from where the backend actually writes them.
+failure_runtime="$test_root/failure-runtime"
+mkdir -p "$failure_runtime/omaspotify"
+printf '%s\n' '{"code":"missing_credentials"}' >"$failure_runtime/omaspotify/startup-error.json"
+failure_env=(env PATH="$mock_bin:$PATH" XDG_RUNTIME_DIR="$failure_runtime"
+  XDG_CONFIG_HOME="$runtime_config" OMASPOTIFY_RUNTIME_DIR="$runtime_backend")
+[[ $("${failure_env[@]}" "$source_root/scripts/playback-runtime.sh" failure) == missing_credentials ]]
+set +e
+"${failure_env[@]}" "$source_root/scripts/playback-runtime.sh" start
+startup_status=$?
+set -e
+[[ $startup_status -eq 75 ]]
+"${failure_env[@]}" "$source_root/scripts/playback-runtime.sh" start-explicit
+[[ ! -e $failure_runtime/omaspotify/startup-error.json ]]
+
 # A clean source install records both the reviewed backend-source fingerprint
 # and installed executable hash. The release path writes the same records only
 # after its exact-commit attestation succeeds.
@@ -341,7 +441,7 @@ source_build_hash=$(sha256sum -- "$mock_target/release/omaspotify-backend")
 [[ ${installed_hash%% *} == "${source_build_hash%% *}" ]]
 # The unit has to point at the runtime and config directories setup actually
 # used, not at the defaults baked into the template.
-grep -qxF -- "ExecStart=$runtime_backend/omaspotify-backend --config-path=$runtime_config/omaspotify/playback.conf" \
+grep -qxF -- "ExecStart=\"$runtime_backend/omaspotify-backend\" --config-path=\"$runtime_config/omaspotify/playback.conf\"" \
   "$runtime_backend_unit"
 PATH="$mock_bin:$PATH" \
 XDG_CONFIG_HOME="$runtime_config" \
@@ -358,7 +458,7 @@ OMASPOTIFY_RUNTIME_DIR="$runtime_backend" \
 TEST_SERVICE_ACTIVE=1 \
 TEST_SYSTEMCTL_LOG="$systemctl_log" \
   "$source_root/scripts/setup.sh" >/dev/null
-! grep -q -- '--user restart omaspotify.service' "$systemctl_log"
+refute grep -q -- '--user restart omaspotify.service' "$systemctl_log"
 
 mkdir -p "$runtime_config/omaspotify" \
   "$runtime_config/omaspotify.bak.20260827000000" \
@@ -390,6 +490,40 @@ grep -qx -- '--user disable --now omaspotify-soloist.service' "$systemctl_log"
 grep -qx -- '--user disable --now omaspotify-soloist-update.timer' "$systemctl_log"
 grep -q 'clear service omaspotify kind refresh-token' "$secret_log"
 grep -q 'clear service omaspotify kind soloist-api-key' "$secret_log"
+
+# A runtime directory pointed at a shared folder keeps what setup did not put there.
+shared_runtime="$test_root/shared/omaspotify"
+mkdir -p "$shared_runtime/.soloist-partial"
+printf '%s\n' stale >"$shared_runtime/omaspotify-backend"
+printf '%s\n' keep >"$shared_runtime/my-notes.txt"
+PATH="$mock_bin:$PATH" \
+XDG_CONFIG_HOME="$runtime_config" \
+XDG_CACHE_HOME="$runtime_cache" \
+XDG_STATE_HOME="$runtime_state" \
+XDG_RUNTIME_DIR="$runtime_session" \
+OMASPOTIFY_RUNTIME_DIR="$shared_runtime" \
+TEST_SECRET_LOG="$secret_log" \
+  "$source_root/scripts/remove-runtime.sh" --purge >/dev/null 2>&1
+[[ -f $shared_runtime/my-notes.txt ]]
+[[ ! -e $shared_runtime/omaspotify-backend && ! -e $shared_runtime/.soloist-partial ]]
+
+# An unreachable keyring must be reported, not described as cleared.
+failing_bin="$test_root/failing-keyring-bin"
+mkdir -p "$failing_bin"
+cp -- "$mock_bin/systemctl" "$failing_bin/"
+printf '%s\n' '#!/bin/sh' 'echo "secret-tool: Error calling StartServiceByName" >&2' 'exit 1' \
+  >"$failing_bin/secret-tool"
+chmod 755 "$failing_bin/secret-tool"
+keyring_output=$(PATH="$failing_bin:$PATH" \
+  XDG_CONFIG_HOME="$runtime_config" \
+  XDG_CACHE_HOME="$runtime_cache" \
+  XDG_STATE_HOME="$runtime_state" \
+  XDG_RUNTIME_DIR="$runtime_session" \
+  OMASPOTIFY_RUNTIME_DIR="$shared_runtime" \
+    "$source_root/scripts/remove-runtime.sh" --purge 2>&1)
+grep -q 'Could not reach the desktop keyring' <<<"$keyring_output"
+refute grep -q 'Cleared matching' <<<"$keyring_output"
+rm -rf -- "$shared_runtime"
 
 set +e
 PATH="$mock_bin:$PATH" \
@@ -501,7 +635,7 @@ TEST_HYPR_LOG="$handoff_hypr_log" \
 TEST_SHELL_LOG="$handoff_shell_log" \
 PATH="$mock_bin:$PATH" \
   "$source_root/scripts/return-from-auth.sh"
-! grep -q 'send_shortcut' "$handoff_hypr_log"
+refute grep -q 'send_shortcut' "$handoff_hypr_log"
 
 grep -qx 'umask 077' "$source_root/scripts/playback-auth.sh"
 [[ -x $source_root/scripts/setup-playback.sh ]]
@@ -510,14 +644,14 @@ grep -qx 'umask 077' "$source_root/scripts/playback-auth.sh"
 grep -q 'remove-runtime.sh.*--purge' "$source_root/scripts/uninstall.sh"
 grep -q 'omarchy plugin remove io.github.atlastimed.omaspotify --yes' "$source_root/scripts/uninstall.sh"
 grep -q '^## Remove it completely$' "$source_root/README.md"
-! grep -q 'sudo\|pkexec' "$source_root/scripts/setup-playback.sh"
+refute grep -q 'sudo\|pkexec' "$source_root/scripts/setup-playback.sh"
 grep -q 'omaspotify-backend' "$source_root/scripts/playback-auth.sh"
 grep -q -- '--config-path "$config_root/omaspotify/playback.conf"' \
   "$source_root/scripts/playback-auth.sh"
 grep -q -- '--oauth-port 8000' "$source_root/scripts/playback-auth.sh"
 grep -q 'property string clientId: ""' \
   "$source_root/AuthManager.qml"
-! grep -q 'catalogAuthManager' "$source_root/Service.qml"
+refute grep -q 'catalogAuthManager' "$source_root/Service.qml"
 grep -q 'readonly property string redirectUri: "http://127.0.0.1:"' \
   "$source_root/AuthManager.qml"
 grep -q 'resolvedClientId' "$source_root/AuthManager.qml"
@@ -525,14 +659,14 @@ grep -q 'customClientId' "$source_root/AuthManager.qml"
 grep -qF '[0-9a-f]{32}' "$source_root/AuthManager.qml"
 grep -q '"clientId"' "$source_root/manifest.json"
 grep -q 'customClientId: settings.clientId' "$source_root/Service.qml"
-! grep -q '"oauthPort"' "$source_root/manifest.json"
+refute grep -q '"oauthPort"' "$source_root/manifest.json"
 grep -q 'window.close()' "$source_root/OAuth.js"
 grep -q 'gh attestation verify' "$source_root/scripts/build-backend.sh"
 grep -q -- '--cert-identity' "$source_root/scripts/build-backend.sh"
 grep -q -- '--source-ref' "$source_root/scripts/build-backend.sh"
 grep -q -- '--source-digest' "$source_root/scripts/build-backend.sh"
 grep -q -- '--deny-self-hosted-runners' "$source_root/scripts/build-backend.sh"
-! grep -q 'ALLOW_UNVERIFIED' "$source_root/scripts/build-backend.sh"
+refute grep -q 'ALLOW_UNVERIFIED' "$source_root/scripts/build-backend.sh"
 if grep -E '^[[:space:]]*uses:' \
     "$source_root/.github/workflows/release-backend.yml" \
     | grep -Ev '@[0-9a-f]{40}([[:space:]]+#.*)?$'; then
@@ -562,11 +696,15 @@ grep -qx 'normalisation = true' "$source_root/config/playback.conf"
 grep -qx 'normalisation_pregain_db = 0' "$source_root/config/playback.conf"
 grep -qx 'no_audio_cache = false' "$source_root/config/playback.conf"
 grep -qx 'max_cache_size = 1000000000' "$source_root/config/playback.conf"
-! grep -q 'Conflicts=' "$source_root/systemd/omaspotify.service"
+refute grep -q 'Conflicts=' "$source_root/systemd/omaspotify.service"
 # With nothing set, the unit still lands on the documented default paths.
 env -u XDG_CONFIG_HOME -u OMASPOTIFY_RUNTIME_DIR HOME="$test_root/home" \
   "$source_root/scripts/render-unit.sh" |
-  grep -qxF -- "ExecStart=$test_root/home/.local/lib/omaspotify/omaspotify-backend --config-path=$test_root/home/.config/omaspotify/playback.conf"
+  grep -qxF -- "ExecStart=\"$test_root/home/.local/lib/omaspotify/omaspotify-backend\" --config-path=\"$test_root/home/.config/omaspotify/playback.conf\""
+# Paths with spaces, ampersands or percent signs still make a valid unit line.
+env -u XDG_CONFIG_HOME -u OMASPOTIFY_RUNTIME_DIR HOME="$test_root/odd & home 100%" \
+  "$source_root/scripts/render-unit.sh" |
+  grep -qxF -- "ExecStart=\"$test_root/odd & home 100%%/.local/lib/omaspotify/omaspotify-backend\" --config-path=\"$test_root/odd & home 100%%/.config/omaspotify/playback.conf\""
 grep -qx 'Environment=PULSE_LATENCY_MSEC=250' \
   "$source_root/systemd/omaspotify.service"
 grep -qx 'Environment=TOKIO_WORKER_THREADS=2' \
