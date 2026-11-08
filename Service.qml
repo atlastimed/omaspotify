@@ -807,7 +807,7 @@ Item {
 
   // Fetch whatever artwork is not on disk yet, in one batch, at low priority.
   function keepArtwork(items) {
-    if (!artworkScanned) return
+    if (!artworkEnabled || !artworkScanned) return
     artworkLastItems = Array.isArray(items) ? items : []
     // Anything already on disk can be pointed at straight away, whether or not
     // a fetch happens to be running.

@@ -1,9 +1,8 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
-import QtQuick.Controls
 import qs.Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Item {
   id: page
@@ -19,41 +18,23 @@ Item {
   }
   Component.onDestruction: if (feed) feed.cancel()
 
-  component KeyHint: PanelKeyHint {
-    panel: page.panel
-  }
-
   Column {
     anchors.fill: parent
-    spacing: Style.space(7)
+    spacing: page.panel.pageGap
 
-    Row {
+    PageTabs {
       id: homeTypes
       width: parent.width
-      spacing: Style.space(4)
-
-      Repeater {
-        model: [
-          { type: "recent", label: "Recently played", icon: "󰋚" },
-          { type: "tracks", label: "Top songs", icon: "󰎈" },
-          { type: "artists", label: "Top artists", icon: "󰠃" },
-          { type: "releases", label: "Followed releases", icon: "󰀥" }
-        ]
-        Button {
-          required property var modelData
-          text: modelData.label
-          iconText: modelData.icon
-          foreground: page.panel.foreground
-          selected: page.panel.homeType === modelData.type
-          focusable: false
-          hasCursor: page.panel.cursorShown("page", "home-" + modelData.type)
-          onClicked: page.panel.homeType = modelData.type
-          onHovered: function(on) {
-            if (on) page.panel.setPanelCursor("page", "home-" + modelData.type)
-          }
-          KeyHint { region: "page"; action: "home-" + modelData.type }
-        }
-      }
+      panel: page.panel
+      actionPrefix: "home-"
+      value: page.panel.homeType
+      options: [
+        { value: "recent", label: "Recently played", icon: "󰋚" },
+        { value: "tracks", label: "Top songs", icon: "󰎈" },
+        { value: "artists", label: "Top artists", icon: "󰠃" },
+        { value: "releases", label: "Followed releases", icon: "󰀥" }
+      ]
+      onChosen: function(value) { page.panel.homeType = value }
     }
 
     Row {
@@ -68,9 +49,9 @@ Item {
         text: page.feed ? page.feed.summary : ""
         textFormat: Text.PlainText
         elide: Text.ElideRight
-        color: page.panel.foreground
+        color: page.panel.muted
         font.family: page.panel.fontFamily
-        font.pixelSize: Style.font.caption
+        font.pixelSize: Style.font.bodySmall
       }
       Button {
         id: releaseMore
@@ -85,7 +66,7 @@ Item {
           if (page.feed.error) page.panel.service.retryReleaseFeed()
           else page.feed.load()
         }
-        KeyHint { region: "page"; action: "releases-more" }
+        PanelKeyHint { panel: page.panel; region: "page"; action: "releases-more" }
       }
     }
 
@@ -96,7 +77,6 @@ Item {
       service: page.panel.service
       sourceItems: page.panel.service ? page.panel.service.homeItems(page.panel.homeType) : []
       filterText: page.panel.homeFilter
-      showFilter: false
       showQueue: true
       showSave: true
       browseContexts: true
@@ -105,6 +85,7 @@ Item {
       hasMore: false
       restoredContentY: page.panel.scrollFor("home:" + page.panel.homeType)
       stateKey: "home:" + page.panel.homeType
+      emptyGlyph: page.releasesActive ? "󰀥" : "󰋚"
       emptyMessage: page.releasesActive
         ? (page.feed && page.feed.error ? page.feed.error
           : page.feed && page.feed.loading ? "Finding releases from artists you follow…"
@@ -113,7 +94,7 @@ Item {
         : page.panel.service && page.panel.service.homeLoading
         ? "Loading your listening history…"
         : (page.panel.homeFilter.trim() ? "No matches in " + page.panel.activeSearchScope.label + "."
-          : "No listening history is available yet.")
+          : "No listening history yet. Play something and it appears here.")
       onActivated: function(item, items, uri) {
         page.panel.activateMedia(item, items, uri)
       }

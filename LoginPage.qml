@@ -11,10 +11,6 @@ Item {
 
   property var panel: null
 
-  component KeyHint: PanelKeyHint {
-    panel: page.panel
-  }
-
   ScrollView {
     id: loginScroll
     anchors.fill: parent

@@ -24,7 +24,7 @@ Popup {
     createPlaylistNameField.selectAll()
     createPlaylistNameField.forceActiveFocus()
   })
-  onClosed: popup.panel.createPlaylistName = ""
+  onClosed: Qt.callLater(function() { popup.panel.restoreFocus() })
 
   background: BorderSurface {
     color: popup.panel.popupBackground

@@ -3,12 +3,14 @@ import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 
+import "Api.js" as Api
+
 Item {
   id: root
 
   property var service: null
   property color foreground: Commons.Color.foreground
-  property color muted: Commons.Color.muted
+  property color muted: Api.secondaryTextColor(Commons.Color.foreground, Commons.Color.background)
   property color urgent: Commons.Color.urgent
   property string surfaceKey: ""
   property bool cancelHasCursor: false
@@ -72,6 +74,7 @@ Item {
       width: parent.width
       visible: text !== ""
       text: root.errorText
+      textFormat: Text.PlainText
       color: root.urgent
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall

@@ -1,56 +1,36 @@
-import QtQuick
-import QtQuick.Controls
-import qs.Commons
-import qs.Ui
+pragma ComponentBehavior: Bound
 
-import "Api.js" as Api
+import QtQuick
+import qs.Commons
 
 Item {
   id: page
 
   property var panel: null
 
-  component KeyHint: PanelKeyHint {
-    panel: page.panel
-  }
-
   Component.onCompleted: if (page.panel.service) page.panel.service.loadLibrary(page.panel.libraryType, false)
 
   Column {
     anchors.fill: parent
-    spacing: Style.space(7)
+    spacing: page.panel.pageGap
 
-    Row {
+    PageTabs {
       id: libraryTypes
       width: parent.width
-      spacing: Style.space(4)
-
-      Repeater {
-        model: [
-          { type: "tracks", label: "Songs", icon: "󰎈" },
-          { type: "albums", label: "Albums", icon: "󰀥" },
-          { type: "artists", label: "Artists", icon: "󰠃" },
-          { type: "shows", label: "Podcasts", icon: "󰦔" },
-          { type: "episodes", label: "Episodes", icon: "󰐾" },
-          { type: "audiobooks", label: "Books", icon: "󰂺" }
-        ]
-        Button {
-          required property var modelData
-          text: modelData.label
-          iconText: modelData.icon
-          foreground: page.panel.foreground
-          selected: page.panel.libraryType === modelData.type
-          focusable: false
-          hasCursor: page.panel.cursorShown("page", "library-" + modelData.type)
-          onClicked: {
-            page.panel.libraryType = modelData.type
-            if (page.panel.service) page.panel.service.loadLibrary(modelData.type, false)
-          }
-          onHovered: function(on) {
-            if (on) page.panel.setPanelCursor("page", "library-" + modelData.type)
-          }
-          KeyHint { region: "page"; action: "library-" + modelData.type }
-        }
+      panel: page.panel
+      actionPrefix: "library-"
+      value: page.panel.libraryType
+      options: [
+        { value: "tracks", label: "Songs", icon: "󰎈" },
+        { value: "albums", label: "Albums", icon: "󰀥" },
+        { value: "artists", label: "Artists", icon: "󰠃" },
+        { value: "shows", label: "Podcasts", icon: "󰦔" },
+        { value: "episodes", label: "Episodes", icon: "󰐾" },
+        { value: "audiobooks", label: "Books", icon: "󰂺" }
+      ]
+      onChosen: function(value) {
+        page.panel.libraryType = value
+        if (page.panel.service) page.panel.service.loadLibrary(value, false)
       }
     }
 
@@ -62,7 +42,6 @@ Item {
       sourceItems: page.panel.service ? page.panel.service.libraryItems(page.panel.libraryType) : []
       filterText: page.panel.libraryFilter
       sortKey: page.panel.librarySort
-      showFilter: false
       showSort: true
       showQueue: true
       showSave: true
@@ -71,11 +50,12 @@ Item {
       hasMore: page.panel.service && page.panel.service.libraryNext(page.panel.libraryType) !== ""
       restoredContentY: page.panel.scrollFor("library:" + page.panel.libraryType)
       stateKey: "library:" + page.panel.libraryType
+      emptyGlyph: "󰋑"
       emptyMessage: page.panel.service && page.panel.service.libraryLoading(page.panel.libraryType)
         ? "Loading your library…"
         : (page.panel.libraryFilter.trim()
           ? "No matches in " + page.panel.activeSearchScope.label + "."
-          : "No saved items in this section.")
+          : "Nothing saved here yet. Save something with its heart and it appears here.")
       onActivated: function(item, items, uri) {
         page.panel.activateMedia(item, items, uri)
       }

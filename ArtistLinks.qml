@@ -1,7 +1,11 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 
 import "Api.js" as Api
 
+// Names that link to their pages. A list shows thousands of these, so the styled
+// text that knows where each link sits is only built once the pointer arrives.
 Item {
   id: root
 
@@ -14,6 +18,7 @@ Item {
   property alias maximumLineCount: label.maximumLineCount
   property alias elide: label.elide
   property color accent: color
+  property bool linkMapWanted: false
   readonly property bool linkHovered: linkMouseArea.containsMouse
     && root.linkAt(linkMouseArea.mouseX, linkMouseArea.mouseY) !== ""
 
@@ -68,12 +73,14 @@ Item {
     if (index >= 0 && index < values.length) artistRequested(values[index])
   }
 
-  function linkAt(x, y) { return linkMap.linkAt(x, y) }
+  function linkAt(x, y) {
+    linkMapWanted = true
+    return linkMap.item ? linkMap.item.linkAt(x, y) : ""
+  }
 
   implicitWidth: label.implicitWidth
   implicitHeight: label.implicitHeight
   height: implicitHeight
-  clip: true
 
   Text {
     id: label
@@ -85,15 +92,19 @@ Item {
     font.underline: root.linkHovered
   }
 
-  Text {
+  Loader {
     id: linkMap
     anchors.fill: parent
-    text: root.markup()
-    textFormat: Text.StyledText
-    font: label.font
-    maximumLineCount: label.maximumLineCount
-    elide: label.elide
-    opacity: 0
+    active: root.linkMapWanted
+
+    sourceComponent: Text {
+      text: root.markup()
+      textFormat: Text.StyledText
+      font: label.font
+      maximumLineCount: label.maximumLineCount
+      elide: label.elide
+      opacity: 0
+    }
   }
 
   MouseArea {
@@ -103,8 +114,7 @@ Item {
     acceptedButtons: Qt.LeftButton
     hoverEnabled: true
     propagateComposedEvents: true
-    cursorShape: containsMouse && root.linkAt(mouseX, mouseY) !== ""
-      ? Qt.PointingHandCursor : Qt.ArrowCursor
+    cursorShape: root.linkHovered ? Qt.PointingHandCursor : Qt.ArrowCursor
     onClicked: function(mouse) {
       var link = root.linkAt(mouse.x, mouse.y)
       if (link) root.activateLink(link)

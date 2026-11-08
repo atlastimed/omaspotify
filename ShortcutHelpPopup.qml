@@ -23,7 +23,10 @@ Popup {
   focus: true
   closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
-  onOpened: popup.panel.disarmEscapeClose()
+  onOpened: {
+    popup.panel.disarmEscapeClose()
+    shortcutHelpContent.forceActiveFocus()
+  }
   onClosed: Qt.callLater(function() { popup.panel.restoreFocus() })
 
   background: BorderSurface {
@@ -35,6 +38,16 @@ Popup {
   contentItem: Column {
     id: shortcutHelpContent
     spacing: Style.space(7)
+    focus: true
+    Keys.onUpPressed: shortcutHelpScroll.ScrollBar.vertical.decrease()
+    Keys.onDownPressed: shortcutHelpScroll.ScrollBar.vertical.increase()
+    Keys.onPressed: function(event) {
+      if (event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown) {
+        var bar = shortcutHelpScroll.ScrollBar.vertical
+        for (var i = 0; i < 8; i++) event.key === Qt.Key_PageUp ? bar.decrease() : bar.increase()
+        event.accepted = true
+      }
+    }
 
     Row {
       id: shortcutHelpHeader

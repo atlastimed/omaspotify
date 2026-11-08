@@ -9,7 +9,7 @@ Row {
   property color foreground: "white"
   property color muted: Qt.darker(foreground, 1.4)
   property color accent: foreground
-  property color albumColor: accent
+  property color albumColor: muted
   property string fontFamily: ""
   property real fontPixelSize: 12
 
@@ -35,7 +35,7 @@ Row {
     id: artistLinks
     objectName: "media-byline-artists"
     width: root.albumContext
-      ? Math.min(implicitWidth, Math.max(20, Math.round(root.width * 0.48)))
+      ? Math.min(implicitWidth, Math.max(20, Math.round(root.width * 0.55)))
       : root.width
     artists: root.artists
     fallbackText: root.itemData ? String(root.itemData.subtitle || "") : ""
