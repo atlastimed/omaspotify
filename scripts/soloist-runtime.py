@@ -42,6 +42,19 @@ RENEW_AFTER = 75 * 86400
 # part way and starts again from nothing on every restart.
 START_DOWNLOAD_SECONDS = 75
 INSTALL_DOWNLOAD_SECONDS = 600
+# The backend turns these into errors the UI can explain, and systemd does not retry them.
+EXIT_MISSING_KEY = 77
+EXIT_EXPIRED = 75
+
+
+class StartFailure(ValueError):
+    """A reason playback cannot start that restarting would not fix."""
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
 DOWNLOAD_FAILURES = (
     tarfile.TarError,
     EOFError,
@@ -344,7 +357,9 @@ def ensure_runnable_build():
     try:
         update(deadline=START_DOWNLOAD_SECONDS)
     except (OSError, ValueError, subprocess.SubprocessError):
-        raise ValueError("Soloist has expired and could not be updated") from None
+        raise StartFailure(
+            "Soloist has expired and could not be updated", EXIT_EXPIRED
+        ) from None
 
 
 def clear_key():
@@ -358,11 +373,18 @@ def start_receiver():
     ensure_runnable_build()
     token = key()
     if not token:
-        raise ValueError("Add your Spotify Soloist API key in OmaSpotify Settings")
+        raise StartFailure(
+            "Add your Spotify Soloist API key in OmaSpotify Settings", EXIT_MISSING_KEY
+        )
     for directory in (STATE, CACHE):
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         directory.chmod(0o700)
     name = sys.argv[2] if len(sys.argv) > 2 else "OmaSpotify"
+    # Our own errors go to the journal, but Soloist's output stays out of it because
+    # its command line holds the key.
+    silence = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(silence, sys.stderr.fileno())
+    os.close(silence)
     os.execv(
         str(RUNTIME / "soloist"),
         [
@@ -426,6 +448,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except StartFailure as error:
+        print(error, file=sys.stderr)
+        sys.exit(error.code)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         # Never print subprocess commands, outputs or exception details containing keys.
         print(

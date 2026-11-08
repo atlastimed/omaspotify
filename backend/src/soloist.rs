@@ -3,7 +3,7 @@
 use std::{
     collections::VecDeque,
     path::{Path, PathBuf},
-    process::Stdio,
+    process::{ExitStatus, Stdio},
     time::{Duration, Instant},
 };
 
@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::{Value, json};
 use tokio::{
-    process::Command as Process,
+    process::{Child, Command as Process},
     sync::{mpsc, oneshot, watch},
 };
 use tokio_tungstenite::{
@@ -22,15 +22,25 @@ use tokio_tungstenite::{
 use crate::{
     config::BackendConfig,
     engine::{EngineRequest, EngineRuntime},
+    failure::Failure,
     protocol::{
         BackendState, Command, Lifecycle, PlaybackStatus, ProtocolError, RepeatMode, Track,
     },
     state::StateStore,
 };
 
+/// A position change smaller than this is the clock settling, not a seek.
+const SEEK_JUMP_MS: u32 = 1500;
+/// How long a play or pause we sent decides what the next toggle means.
+const TOGGLE_INTENT_WINDOW: Duration = Duration::from_secs(2);
+/// A command's acknowledgement deadline.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
+const STOP_GRACE: Duration = Duration::from_millis(1500);
+
 fn state_dir() -> PathBuf {
     std::env::var_os("XDG_STATE_HOME")
         .map(PathBuf::from)
+        .filter(|path| path.is_absolute())
         .unwrap_or_else(|| {
             PathBuf::from(std::env::var_os("HOME").unwrap_or_default()).join(".local/state")
         })
@@ -43,47 +53,56 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
         .parent()
         .context("backend has no runtime directory")?
         .join("soloist-runtime.py");
-    let mut child = Process::new("/usr/bin/python3")
+    let directory = state_dir();
+    // Left behind by a crash, these could point at whatever now owns that port.
+    for endpoint in ["ws.addr", "ws.port"] {
+        let _ = std::fs::remove_file(directory.join(endpoint));
+    }
+    let mut process = Process::new("/usr/bin/python3");
+    process
         .arg(helper)
         .arg("run")
         .arg(config.device_name)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .kill_on_drop(true)
-        .spawn()?;
-    let directory = state_dir();
+        // The helper reports its own failures here, and silences Soloist before handing over.
+        .stderr(Stdio::inherit())
+        .kill_on_drop(true);
+    // SAFETY: prctl only sets a flag on the new process and is async-signal-safe.
+    unsafe {
+        process.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+    let mut child = process.spawn()?;
     let deadline = Instant::now() + Duration::from_secs(90);
     let ws_config = WebSocketConfig::default()
         .max_message_size(Some(2 * 1024 * 1024))
         .max_frame_size(Some(2 * 1024 * 1024));
     let socket = loop {
-        if child.try_wait()?.is_some() {
-            bail!("Soloist stopped before its local API became ready")
+        if let Some(status) = child.try_wait()? {
+            if let Some(failure) = failure_for_exit(status) {
+                return Err(failure.into());
+            }
+            bail!("Soloist stopped before its local API became ready ({status})")
         }
         if let (Ok(address), Ok(port)) = (
             std::fs::read_to_string(directory.join("ws.addr")),
             std::fs::read_to_string(directory.join("ws.port")),
-        ) {
-            if address.trim() == "127.0.0.1" {
-                if let Ok(port) = port.trim().parse::<u16>() {
-                    if port > 0 {
-                        // The previous receiver may have left its endpoint files behind.
-                        // Retry both discovery and connection until the new receiver is ready.
-                        if let Ok(Ok((socket, _))) = tokio::time::timeout(
-                            Duration::from_secs(2),
-                            connect_async_with_config(
-                                format!("ws://127.0.0.1:{port}"),
-                                Some(ws_config),
-                                false,
-                            ),
-                        )
-                        .await
-                        {
-                            break socket;
-                        }
-                    }
-                }
+        ) && address.trim() == "127.0.0.1"
+            && let Ok(port) = port.trim().parse::<u16>()
+            && port > 0
+        {
+            // The previous receiver may have left its endpoint files behind.
+            // Retry both discovery and connection until the new receiver is ready.
+            if let Ok(Ok((socket, _))) = tokio::time::timeout(
+                Duration::from_secs(2),
+                connect_async_with_config(format!("ws://127.0.0.1:{port}"), Some(ws_config), false),
+            )
+            .await
+            {
+                break socket;
             }
         }
         if Instant::now() >= deadline {
@@ -101,15 +120,53 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
     let (done_tx, done) = oneshot::channel();
     tokio::spawn(async move {
         let result = drive(socket, receiver, shutdown_rx, state, directory).await;
-        let _ = child.kill().await;
-        let _ = child.wait().await;
-        let _ = done_tx.send(result);
+        // If the API went away, Soloist's exit code may say why.
+        let failed_with = match &result {
+            Err(_) => tokio::time::timeout(Duration::from_millis(500), child.wait())
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .and_then(failure_for_exit),
+            Ok(()) => None,
+        };
+        stop_child(&mut child).await;
+        let _ = done_tx.send(match failed_with {
+            Some(failure) => Err(failure.into()),
+            None => result,
+        });
     });
     Ok(EngineRuntime {
         commands,
         shutdown,
         done,
     })
+}
+
+/// The helper exits 77 for a missing key and 75 for a build it cannot renew;
+/// Soloist itself exits 10 when its build has expired. Restarting helps none of them.
+fn failure_for_exit(status: ExitStatus) -> Option<Failure> {
+    match status.code() {
+        Some(77) => Some(Failure::MissingCredentials),
+        Some(75 | 10) => Some(Failure::SoloistExpired),
+        _ => None,
+    }
+}
+
+/// Lets Soloist remove its endpoint files and shut its session down cleanly.
+async fn stop_child(child: &mut Child) {
+    if matches!(child.try_wait(), Ok(Some(_))) {
+        return;
+    }
+    if let Some(pid) = child.id().and_then(|pid| i32::try_from(pid).ok()) {
+        // SAFETY: kill has no memory effects, and tokio has not reaped this pid.
+        unsafe { libc::kill(pid, libc::SIGTERM) };
+    }
+    if tokio::time::timeout(STOP_GRACE, child.wait())
+        .await
+        .is_err()
+    {
+        let _ = child.kill().await;
+    }
 }
 
 fn command(name: &str) -> Value {
@@ -220,8 +277,7 @@ fn track(entity: &Value) -> Option<Track> {
         album: string(&d["parent"]["entity"]["decorations"]["identity"]["name"]),
         art_url: d["visual_identity"]["cover"]
             .as_array()
-            .and_then(|a| a.last())
-            .map(|c| string(&c["url"]))
+            .map(|covers| cover_url(covers))
             .unwrap_or_default(),
         duration_ms: d["playback"]["duration_ms"]
             .as_u64()
@@ -229,6 +285,17 @@ fn track(entity: &Value) -> Option<Track> {
             .min(u64::from(u32::MAX)) as u32,
         item_type: string(&entity["entity_type"]),
     })
+}
+
+/// The largest cover, by name because the order is not documented.
+fn cover_url(covers: &[Value]) -> String {
+    ["xlarge", "large", "default", "small"]
+        .iter()
+        .find_map(|size| covers.iter().find(|cover| cover["size"] == *size))
+        .or_else(|| covers.last())
+        .map(|cover| string(&cover["url"]))
+        .filter(|url| url.starts_with("https://"))
+        .unwrap_or_default()
 }
 
 #[derive(Default)]
@@ -264,9 +331,18 @@ impl Position {
         } else {
             0
         };
-        self.ms
-            .saturating_add(delta)
-            .min(s.track.as_ref().map_or(u32::MAX, |t| t.duration_ms))
+        // A duration of 0 means it is not known yet, not that the song is over.
+        let duration = s
+            .track
+            .as_ref()
+            .map(|t| t.duration_ms)
+            .filter(|ms| *ms > 0)
+            .unwrap_or(u32::MAX);
+        self.ms.saturating_add(delta).min(duration)
+    }
+
+    fn advancing(&self, s: &BackendState) -> bool {
+        s.playback == PlaybackStatus::Playing && self.speed > 0.0
     }
 }
 
@@ -309,22 +385,30 @@ fn apply_event(s: &mut BackendState, event: &Value, position: &mut Position) -> 
             s.position_ms = position.ms;
         }
     }
-    if ["playback_state", "position_sync"].contains(&kind) {
+    if ["playback_state", "position_sync"].contains(&kind) && event["position"].is_object() {
+        let expected = position.received.is_some().then(|| position.value(s));
         position.sync(&event["position"]);
         s.position_ms = position.value(s);
-        s.seek_sequence = s.seek_sequence.wrapping_add(1);
+        // Soloist re-anchors position constantly; only a real jump is a seek.
+        if expected.is_none_or(|ms| ms.abs_diff(s.position_ms) > SEEK_JUMP_MS) {
+            s.seek_sequence = s.seek_sequence.wrapping_add(1);
+        }
     }
-    if ["playback_state", "volume_changed"].contains(&kind) {
-        s.volume = (event["volume"].as_f64().unwrap_or(0.0).clamp(0.0, 100.0) * 65535.0 / 100.0)
-            .round() as u16;
+    if ["playback_state", "volume_changed"].contains(&kind)
+        && let Some(volume) = event["volume"].as_f64()
+    {
+        s.volume = (volume.clamp(0.0, 100.0) * 65535.0 / 100.0).round() as u16;
     }
     if ["playback_state", "options_changed"].contains(&kind) {
-        s.shuffle = event["options"]["shuffle"] == true;
-        s.repeat = match event["options"]["repeat"].as_str() {
-            Some("context") => RepeatMode::Context,
-            Some("track") => RepeatMode::Track,
-            _ => RepeatMode::Off,
-        };
+        if let Some(shuffle) = event["options"]["shuffle"].as_bool() {
+            s.shuffle = shuffle;
+        }
+        match event["options"]["repeat"].as_str() {
+            Some("context") => s.repeat = RepeatMode::Context,
+            Some("track") => s.repeat = RepeatMode::Track,
+            Some("off") => s.repeat = RepeatMode::Off,
+            _ => {}
+        }
     }
     if ["device_changed", "auth_state", "playback_state"].contains(&kind)
         && event["is_active"] == false
@@ -382,19 +466,39 @@ where
 {
     let mut position = Position::default();
     let mut pending: Option<Pending> = None;
-    let mut tick = tokio::time::interval(Duration::from_millis(250));
+    let mut toggle_intent: Option<(bool, Instant)> = None;
+    let mut logged_in: Option<bool> = None;
+    let mut device_active = false;
     loop {
+        // Nothing to do while paused or idle, so the backend sleeps until spoken to.
+        let wake = next_wakeup(
+            pending.as_ref().map(|p| p.deadline),
+            state.with(|s| position.advancing(s).then(|| position.value(s))),
+        );
         tokio::select! {
             _ = shutdown.changed() => { let _ = socket.close(None).await; return Ok(()) },
             request = commands.recv(), if pending.is_none() => {
                 let Some(request) = request else { return Ok(()) };
                 let result = if state.with(|s| s.session_connected) {
-                    commands_for(request.command, state.with(|s| s.playback == PlaybackStatus::Playing))
+                    // Soloist acknowledges before state changes, so a fast second
+                    // toggle has to go by what we last asked for.
+                    let playing = toggle_intent
+                        .filter(|(_, at)| at.elapsed() < TOGGLE_INTENT_WINDOW)
+                        .map_or_else(
+                            || state.with(|s| s.playback == PlaybackStatus::Playing),
+                            |(playing, _)| playing,
+                        );
+                    commands_for(request.command, playing)
                 } else { Err(ProtocolError::new("not_paired", "Select OmaSpotify in the official Spotify app to pair Soloist")) };
                 match result {
                     Ok(messages) => {
+                        toggle_intent = match messages[0]["command"].as_str() {
+                            Some("play") => Some((true, Instant::now())),
+                            Some("pause") => Some((false, Instant::now())),
+                            _ => toggle_intent,
+                        };
                         socket.send(Message::Text(messages[0].to_string().into())).await?;
-                        pending = Some(Pending { messages, reply: request.reply, deadline: Instant::now()+Duration::from_secs(5) });
+                        pending = Some(Pending { messages, reply: request.reply, deadline: Instant::now() + COMMAND_TIMEOUT });
                     }
                     Err(error) => { if let Some(reply) = request.reply { let _ = reply.send(Err(error)); } }
                 }
@@ -406,43 +510,78 @@ where
                         let Ok(event) = serde_json::from_str::<Value>(&raw) else { continue };
                         if event["type"] == "command_result" {
                             if let Some(mut command) = pending.take() {
-                                if event["command"] != command.messages[0]["command"] { bail!("Unexpected Soloist command response") }
+                                // Not ours, perhaps another client's. The deadline still applies.
+                                if event["command"] != command.messages[0]["command"] {
+                                    log::warn!("Ignoring an unexpected Soloist command response");
+                                    pending = Some(command);
+                                    continue;
+                                }
                                 command.messages.pop_front();
                                 if let Some(next) = command.messages.front() {
                                     socket.send(Message::Text(next.to_string().into())).await?;
-                                    command.deadline = Instant::now()+Duration::from_secs(5);
+                                    command.deadline = Instant::now() + COMMAND_TIMEOUT;
                                     pending = Some(command);
                                 } else if let Some(reply) = command.reply { let _ = reply.send(Ok(json!({}))); }
                             }
                         } else if event["type"] == "error" {
-                            if let Some(command) = pending.take() {
-                                if let Some(reply) = command.reply { let _ = reply.send(Err(ProtocolError::new("soloist_error", "Soloist declined the playback command"))); }
-                            }
+                            toggle_intent = None;
+                            if let Some(command) = pending.take()
+                                && let Some(reply) = command.reply { let _ = reply.send(Err(ProtocolError::new("soloist_error", "Soloist declined the playback command"))); }
                         } else {
+                            let kind = event["type"].as_str().unwrap_or("");
+                            if ["playback_changed", "playback_state"].contains(&kind) {
+                                toggle_intent = None;
+                            }
                             state.update(|s| apply_event(s, &event, &mut position));
-                            if event["type"] == "volume_changed"
+                            if kind == "volume_changed"
+                                && event["volume"].is_number()
                                 && persist_volume(&directory, state.with(|s| s.volume)).await.is_err() {
                                 log::warn!("Could not save Soloist volume");
                             }
-                            if event["type"] == "auth_state" {
-                                if event["logged_in"] == true { let _ = std::fs::write(directory.join("paired"), "1\n"); }
-                                else { let _ = std::fs::remove_file(directory.join("paired")); }
+                            // A snapshot only comes unprompted on connect, so anything
+                            // that happens later has to ask for one.
+                            let mut stale = false;
+                            if kind == "auth_state" {
+                                let now_logged_in = event["logged_in"] == true;
+                                stale = logged_in == Some(false) && now_logged_in;
+                                logged_in = Some(now_logged_in);
+                                // Pairing outlives a session; only clearing it in Settings ends it.
+                                if now_logged_in { let _ = std::fs::write(directory.join("paired"), "1\n"); }
+                            }
+                            if let Some(active) = event["is_active"].as_bool() {
+                                stale |= kind == "device_changed" && active && !device_active;
+                                device_active = active;
+                            }
+                            if stale {
+                                socket.send(Message::Text(command("get_state").to_string().into())).await?;
                             }
                         }
                     }
-                    Message::Ping(bytes) => socket.send(Message::Pong(bytes)).await?,
                     Message::Close(_) => bail!("Soloist's local API closed"),
                     _ => {}
                 }
             }
-            _ = tick.tick() => {
+            () = tokio::time::sleep_until(wake.unwrap_or_else(Instant::now).into()), if wake.is_some() => {
                 if pending.as_ref().is_some_and(|p| Instant::now() >= p.deadline) {
-                    if let Some(p) = pending.take() { if let Some(reply) = p.reply { let _ = reply.send(Err(ProtocolError::new("timeout", "Soloist did not acknowledge the playback command"))); } }
+                    if let Some(p) = pending.take() && let Some(reply) = p.reply { let _ = reply.send(Err(ProtocolError::new("timeout", "Soloist did not acknowledge the playback command"))); }
                     bail!("Soloist command timed out")
                 }
                 state.update(|s| { let value = position.value(s); if value / 1000 == s.position_ms / 1000 { return false } s.position_ms = value; true });
             }
         }
+    }
+}
+
+/// When the loop next has work: a command deadline, or the moment the displayed
+/// position reaches its next whole second.
+fn next_wakeup(deadline: Option<Instant>, position_ms: Option<u32>) -> Option<Instant> {
+    let tick = position_ms.map(|ms| {
+        let to_next_second = 1000 - u64::from(ms % 1000);
+        Instant::now() + Duration::from_millis(to_next_second + 5)
+    });
+    match (deadline, tick) {
+        (Some(deadline), Some(tick)) => Some(deadline.min(tick)),
+        (deadline, tick) => deadline.or(tick),
     }
 }
 
@@ -557,6 +696,276 @@ mod tests {
         assert!(s.track.is_none());
         assert_eq!(s.playback, PlaybackStatus::Stopped);
         assert_eq!(p.value(&s), 0);
+    }
+
+    #[test]
+    fn unknown_duration_does_not_pin_position_to_zero() {
+        let mut s = BackendState::default();
+        let mut p = Position::default();
+        apply_event(
+            &mut s,
+            &json!({"type":"playback_state","status":"playing",
+                "item":{"uri":"spotify:track:abc","entity_type":"track","decorations":{}},
+                "position":{"position_ms":45000,"speed":1}}),
+            &mut p,
+        );
+        assert_eq!(s.track.as_ref().unwrap().duration_ms, 0);
+        assert!(s.position_ms >= 45000);
+        assert!(p.value(&s) >= 45000);
+    }
+
+    #[test]
+    fn position_anchors_are_not_seeks_but_jumps_are() {
+        let mut s = BackendState::default();
+        let mut p = Position::default();
+        let sync = |ms| json!({"type":"position_sync","position":{"position_ms":ms,"speed":1}});
+        apply_event(&mut s, &sync(10_000), &mut p);
+        let first = s.seek_sequence;
+        apply_event(&mut s, &sync(10_100), &mut p);
+        assert_eq!(s.seek_sequence, first, "a small re-anchor is not a seek");
+        apply_event(&mut s, &sync(90_000), &mut p);
+        assert_eq!(s.seek_sequence, first.wrapping_add(1));
+    }
+
+    #[test]
+    fn events_without_a_field_leave_it_alone() {
+        let mut s = BackendState {
+            volume: 40_000,
+            shuffle: true,
+            repeat: RepeatMode::Context,
+            ..BackendState::default()
+        };
+        let mut p = Position::default();
+        apply_event(
+            &mut s,
+            &json!({"type":"volume_changed","volume":"loud"}),
+            &mut p,
+        );
+        apply_event(
+            &mut s,
+            &json!({"type":"options_changed","options":{}}),
+            &mut p,
+        );
+        apply_event(
+            &mut s,
+            &json!({"type":"playback_state","status":"paused"}),
+            &mut p,
+        );
+        assert_eq!(s.volume, 40_000);
+        assert!(s.shuffle);
+        assert_eq!(s.repeat, RepeatMode::Context);
+    }
+
+    #[test]
+    fn the_largest_cover_is_chosen_whatever_the_order() {
+        let covers = [
+            json!({"url":"https://a/large","size":"large"}),
+            json!({"url":"https://a/xlarge","size":"xlarge"}),
+            json!({"url":"https://a/small","size":"small"}),
+        ];
+        assert_eq!(cover_url(&covers), "https://a/xlarge");
+        assert_eq!(
+            cover_url(&[json!({"url":"https://a/other"})]),
+            "https://a/other"
+        );
+        assert_eq!(cover_url(&[json!({"url":"file:///etc/passwd"})]), "");
+        assert_eq!(cover_url(&[]), "");
+    }
+
+    #[test]
+    fn expired_builds_and_missing_keys_are_not_retried() {
+        use std::os::unix::process::ExitStatusExt;
+        let exit = |code: i32| ExitStatus::from_raw(code << 8);
+        assert!(matches!(
+            failure_for_exit(exit(77)),
+            Some(Failure::MissingCredentials)
+        ));
+        assert!(matches!(
+            failure_for_exit(exit(75)),
+            Some(Failure::SoloistExpired)
+        ));
+        assert!(matches!(
+            failure_for_exit(exit(10)),
+            Some(Failure::SoloistExpired)
+        ));
+        assert!(failure_for_exit(exit(1)).is_none());
+        assert!(failure_for_exit(ExitStatus::from_raw(libc::SIGKILL)).is_none());
+    }
+
+    #[test]
+    fn the_loop_sleeps_unless_there_is_work() {
+        assert!(next_wakeup(None, None).is_none());
+        let deadline = Instant::now() + Duration::from_millis(50);
+        assert_eq!(next_wakeup(Some(deadline), None), Some(deadline));
+        let tick = next_wakeup(None, Some(1_900)).unwrap();
+        assert!(tick <= Instant::now() + Duration::from_millis(110));
+        assert_eq!(next_wakeup(Some(deadline), Some(0)), Some(deadline));
+    }
+
+    struct Fixture {
+        server: tokio_tungstenite::WebSocketStream<tokio::io::DuplexStream>,
+        commands: mpsc::Sender<EngineRequest>,
+        state: StateStore,
+        directory: PathBuf,
+        stop: watch::Sender<bool>,
+        task: tokio::task::JoinHandle<Result<()>>,
+    }
+
+    impl Fixture {
+        async fn new(name: &str) -> Self {
+            use tokio_tungstenite::tungstenite::protocol::Role;
+            let directory = std::env::temp_dir()
+                .join(format!("omaspotify-soloist-{name}-{}", std::process::id()));
+            std::fs::create_dir_all(&directory).unwrap();
+            let (left, right) = tokio::io::duplex(65536);
+            let client =
+                tokio_tungstenite::WebSocketStream::from_raw_socket(left, Role::Client, None).await;
+            let server =
+                tokio_tungstenite::WebSocketStream::from_raw_socket(right, Role::Server, None)
+                    .await;
+            let (commands, rx) = mpsc::channel(4);
+            let (stop, stopped) = watch::channel(false);
+            let state = StateStore::new(BackendState::default());
+            let task = tokio::spawn(drive(client, rx, stopped, state.clone(), directory.clone()));
+            Self {
+                server,
+                commands,
+                state,
+                directory,
+                stop,
+                task,
+            }
+        }
+
+        async fn push(&mut self, event: Value) {
+            self.server
+                .send(Message::Text(event.to_string().into()))
+                .await
+                .unwrap();
+        }
+
+        async fn next_command(&mut self) -> Value {
+            let message = tokio::time::timeout(Duration::from_secs(1), self.server.next())
+                .await
+                .unwrap()
+                .unwrap()
+                .unwrap();
+            serde_json::from_str(message.to_text().unwrap()).unwrap()
+        }
+
+        async fn wait_for(&self, ready: impl Fn(&BackendState) -> bool) {
+            let mut states = self.state.subscribe();
+            tokio::time::timeout(Duration::from_secs(1), async {
+                while !ready(&states.borrow_and_update()) {
+                    states.changed().await.unwrap();
+                }
+            })
+            .await
+            .unwrap();
+        }
+
+        async fn finish(self) {
+            self.stop.send(true).unwrap();
+            self.task.await.unwrap().unwrap();
+            std::fs::remove_dir_all(self.directory).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn a_login_after_connecting_asks_for_state_and_a_logout_keeps_the_pairing() {
+        let mut f = Fixture::new("late-login").await;
+        f.push(json!({"type":"auth_state","logged_in":false,"is_active":false}))
+            .await;
+        f.push(json!({"type":"auth_state","logged_in":true,"is_active":true}))
+            .await;
+        assert_eq!(f.next_command().await["command"], "get_state");
+        assert!(f.directory.join("paired").exists());
+        f.push(json!({"type":"auth_state","logged_in":false,"is_active":false}))
+            .await;
+        f.wait_for(|s| !s.session_connected).await;
+        assert!(f.directory.join("paired").exists());
+        f.finish().await;
+    }
+
+    #[tokio::test]
+    async fn the_snapshot_sent_on_connect_is_not_requested_again() {
+        let mut f = Fixture::new("first-login").await;
+        f.push(json!({"type":"auth_state","logged_in":true,"is_active":true}))
+            .await;
+        f.wait_for(|s| s.session_connected).await;
+        let (reply, result) = oneshot::channel();
+        f.commands
+            .send(EngineRequest {
+                command: Command::Next,
+                reply: Some(reply),
+            })
+            .await
+            .unwrap();
+        assert_eq!(f.next_command().await["command"], "skip_next");
+        f.push(json!({"type":"command_result","command":"skip_next"}))
+            .await;
+        assert!(result.await.unwrap().is_ok());
+        f.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_device_becoming_active_asks_for_state() {
+        let mut f = Fixture::new("device").await;
+        f.push(json!({"type":"auth_state","logged_in":true,"is_active":false}))
+            .await;
+        f.wait_for(|s| s.session_connected).await;
+        f.push(json!({"type":"device_changed","is_active":true}))
+            .await;
+        assert_eq!(f.next_command().await["command"], "get_state");
+        f.finish().await;
+    }
+
+    #[tokio::test]
+    async fn two_fast_toggles_undo_each_other() {
+        let mut f = Fixture::new("toggle").await;
+        f.push(json!({"type":"auth_state","logged_in":true,"is_active":true}))
+            .await;
+        f.push(json!({"type":"playback_changed","status":"playing"}))
+            .await;
+        f.wait_for(|s| s.session_connected && s.playback == PlaybackStatus::Playing)
+            .await;
+        for expected in ["pause", "play"] {
+            f.commands
+                .send(EngineRequest {
+                    command: Command::Toggle,
+                    reply: None,
+                })
+                .await
+                .unwrap();
+            let sent = f.next_command().await;
+            assert_eq!(sent["command"], expected);
+            f.push(json!({"type":"command_result","command":expected}))
+                .await;
+        }
+        f.finish().await;
+    }
+
+    #[tokio::test]
+    async fn another_clients_acknowledgement_does_not_kill_playback() {
+        let mut f = Fixture::new("ack").await;
+        f.push(json!({"type":"auth_state","logged_in":true,"is_active":true}))
+            .await;
+        f.wait_for(|s| s.session_connected).await;
+        let (reply, result) = oneshot::channel();
+        f.commands
+            .send(EngineRequest {
+                command: Command::Pause,
+                reply: Some(reply),
+            })
+            .await
+            .unwrap();
+        assert_eq!(f.next_command().await["command"], "pause");
+        f.push(json!({"type":"command_result","command":"skip_next"}))
+            .await;
+        f.push(json!({"type":"command_result","command":"pause"}))
+            .await;
+        assert!(result.await.unwrap().is_ok());
+        f.finish().await;
     }
 
     #[tokio::test]

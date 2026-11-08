@@ -13,9 +13,15 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use protocol::{BackendState, Lifecycle};
-use tokio::sync::watch;
+use tokio::{
+    signal::unix::{SignalKind, signal},
+    sync::watch,
+};
 
 use crate::{config::BackendConfig, state::StateStore};
+
+const ENGINE_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(4);
+const MPRIS_STOP_GRACE: std::time::Duration = std::time::Duration::from_millis(100);
 
 #[derive(Debug, Parser)]
 #[command(version, about)]
@@ -64,7 +70,7 @@ async fn main() -> std::process::ExitCode {
                 let _ = failure::record(&socket, kind);
             }
             if daemon {
-                eprintln!("Playback failed: {kind}");
+                eprintln!("Playback failed: {kind}: {error:#}");
             } else {
                 eprintln!("{error:#}");
             }
@@ -143,10 +149,14 @@ async fn run(config: BackendConfig, socket_path: PathBuf, use_soloist: bool) -> 
     ));
 
     let mut requested_shutdown = shutdown_rx.clone();
+    // systemd stops services with SIGTERM, so without this nothing below would run.
+    let mut terminate =
+        signal(SignalKind::terminate()).context("failed to wait for termination signal")?;
     tokio::select! {
         signal = tokio::signal::ctrl_c() => {
             signal.context("failed to wait for termination signal")?;
         }
+        _ = terminate.recv() => {}
         _ = requested_shutdown.changed() => {}
         result = runtime.wait_done() => {
             result.context("playback engine stopped")?;
@@ -168,6 +178,10 @@ async fn run(config: BackendConfig, socket_path: PathBuf, use_soloist: bool) -> 
         current.playback = crate::protocol::PlaybackStatus::Stopped;
         true
     });
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), mpris_task).await;
+    // Both must finish inside the unit's TimeoutStopSec of 5 seconds.
+    let _ = tokio::time::timeout(ENGINE_STOP_TIMEOUT, runtime.wait_done()).await;
+    // Long enough to tell MPRIS clients about the stop, then there is nothing left to serve.
+    let _ = tokio::time::timeout(MPRIS_STOP_GRACE, &mut mpris_task).await;
+    mpris_task.abort();
     Ok(())
 }

@@ -11,6 +11,7 @@ pub enum Failure {
     InvalidConfiguration,
     MissingCredentials,
     ReconnectExhausted,
+    SoloistExpired,
     Transient,
 }
 impl Failure {
@@ -19,6 +20,7 @@ impl Failure {
             Self::InvalidConfiguration => "invalid_configuration",
             Self::MissingCredentials => "missing_credentials",
             Self::ReconnectExhausted => "reconnect_exhausted",
+            Self::SoloistExpired => "soloist_expired",
             Self::Transient => "connection_failed",
         }
     }
@@ -26,7 +28,7 @@ impl Failure {
         match self {
             Self::InvalidConfiguration => 78,
             Self::MissingCredentials => 77,
-            Self::ReconnectExhausted => 75,
+            Self::ReconnectExhausted | Self::SoloistExpired => 75,
             Self::Transient => 1,
         }
     }

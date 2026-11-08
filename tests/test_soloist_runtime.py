@@ -267,6 +267,24 @@ class SoloistRuntimeTests(unittest.TestCase):
         for directive in ("LimitCORE=0", "ProtectSystem=strict", "TimeoutStartSec=15min"):
             self.assertIn(directive, updater)
 
+    def test_a_missing_key_and_an_unrenewable_build_exit_with_their_own_codes(self):
+        runtime.RUNTIME.mkdir()
+        (runtime.RUNTIME / "soloist").write_bytes(b"old")
+        fresh = json.dumps({"built_at": int(time.time()) - 86400})
+        (runtime.RUNTIME / "soloist-build.json").write_text(fresh)
+        with patch.object(runtime, "key", return_value=""):
+            with self.assertRaises(runtime.StartFailure) as missing:
+                runtime.start_receiver()
+        self.assertEqual(missing.exception.code, runtime.EXIT_MISSING_KEY)
+
+        (runtime.RUNTIME / "soloist-build.json").write_text(
+            json.dumps({"built_at": int(time.time()) - 91 * 86400})
+        )
+        with patch.object(runtime, "update", side_effect=ValueError("offline")):
+            with self.assertRaises(runtime.StartFailure) as expired:
+                runtime.start_receiver()
+        self.assertEqual(expired.exception.code, runtime.EXIT_EXPIRED)
+
     def test_key_only_uses_stdin_and_not_status_output(self):
         secret = "fake-private-soloist-key"
         with (

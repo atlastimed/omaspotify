@@ -87,20 +87,10 @@ impl PlayerInterface for MprisAdapter {
     }
 
     async fn seek(&self, offset: Time) -> fdo::Result<()> {
-        let position = self.state.with(|state| {
-            i64::from(state.position_ms)
-                .saturating_add(offset.as_millis())
-                .clamp(
-                    0,
-                    state
-                        .track
-                        .as_ref()
-                        .map_or(i64::from(u32::MAX), |track| i64::from(track.duration_ms)),
-                )
-        });
-        self.send(Command::Seek {
-            position_ms: position as u32,
-        })
+        let position_ms = self
+            .state
+            .with(|state| seek_target(state.position_ms, offset.as_millis(), track_length(state)));
+        self.send(Command::Seek { position_ms })
     }
 
     async fn set_position(&self, track_id: TrackId, position: Time) -> fdo::Result<()> {
@@ -109,7 +99,7 @@ impl PlayerInterface for MprisAdapter {
             state.track.as_ref().is_some_and(|track| {
                 track_id == track_id_for(&track.uri)
                     && position_ms >= 0
-                    && position_ms <= i64::from(track.duration_ms)
+                    && position_ms <= i64::from(track_length(state))
             })
         });
         if !valid {
@@ -207,6 +197,22 @@ impl PlayerInterface for MprisAdapter {
     async fn can_control(&self) -> fdo::Result<bool> {
         Ok(true)
     }
+}
+
+/// A duration of 0 means it is not known yet, not that the song is over.
+fn track_length(state: &crate::protocol::BackendState) -> u32 {
+    state
+        .track
+        .as_ref()
+        .map(|track| track.duration_ms)
+        .filter(|ms| *ms > 0)
+        .unwrap_or(u32::MAX)
+}
+
+fn seek_target(position_ms: u32, offset_ms: i64, length_ms: u32) -> u32 {
+    i64::from(position_ms)
+        .saturating_add(offset_ms)
+        .clamp(0, i64::from(length_ms)) as u32
 }
 
 pub async fn serve(

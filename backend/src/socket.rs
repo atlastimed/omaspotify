@@ -1,4 +1,10 @@
-use std::{fs, io, os::unix::fs::PermissionsExt, path::PathBuf, sync::Arc};
+use std::{
+    fs, io,
+    os::unix::fs::{MetadataExt, PermissionsExt},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
 
 use anyhow::{Context, Result};
 use tokio::{
@@ -14,6 +20,12 @@ const MAX_FRAME_BYTES: usize = 1024 * 1024;
 
 /// The player opens one connection. The rest of the allowance is slack.
 const MAX_CLIENTS: usize = 8;
+
+/// A client that stops reading is dropped rather than left holding a slot.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Running out of file descriptors would otherwise retry as fast as it can fail.
+const ACCEPT_RETRY_DELAY: Duration = Duration::from_millis(100);
 
 /// Reads newline-delimited requests without letting one grow without end.
 ///
@@ -92,12 +104,34 @@ use crate::{
 
 pub struct SocketGuard {
     path: PathBuf,
+    identity: Option<(u64, u64)>,
+}
+
+fn file_identity(path: &Path) -> Option<(u64, u64)> {
+    fs::symlink_metadata(path)
+        .ok()
+        .map(|metadata| (metadata.dev(), metadata.ino()))
 }
 
 impl Drop for SocketGuard {
     fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
+        // Never remove a socket that has since been replaced by another backend.
+        if self.identity.is_some() && file_identity(&self.path) == self.identity {
+            let _ = fs::remove_file(&self.path);
+        }
     }
+}
+
+/// A leftover socket is replaced, but one with a backend behind it is not ours to take.
+fn clear_stale_socket(path: &Path) -> Result<()> {
+    if !path.exists() {
+        return Ok(());
+    }
+    if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        anyhow::bail!("another backend is already serving {}", path.display());
+    }
+    fs::remove_file(path)
+        .with_context(|| format!("failed to remove stale socket {}", path.display()))
 }
 
 pub async fn serve(
@@ -111,16 +145,14 @@ pub async fn serve(
         .context("backend socket path has no parent directory")?;
     fs::create_dir_all(parent)
         .with_context(|| format!("failed to create socket directory {}", parent.display()))?;
-    if path.exists() {
-        fs::remove_file(&path)
-            .with_context(|| format!("failed to remove stale socket {}", path.display()))?;
-    }
+    clear_stale_socket(&path)?;
 
     let listener = UnixListener::bind(&path)
         .with_context(|| format!("failed to bind backend socket {}", path.display()))?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
         .with_context(|| format!("failed to secure backend socket {}", path.display()))?;
-    let guard = SocketGuard { path };
+    let identity = file_identity(&path);
+    let guard = SocketGuard { path, identity };
 
     let clients = Arc::new(Semaphore::new(MAX_CLIENTS));
     tokio::spawn(async move {
@@ -149,6 +181,7 @@ pub async fn serve(
                     }
                     Err(error) => {
                         log::warn!("backend socket accept failed: {error}");
+                        tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
                     }
                 },
                 changed = shutdown.changed() => {
@@ -292,9 +325,9 @@ async fn write_encoded(
     writer: &mut tokio::net::unix::OwnedWriteHalf,
     encoded: &[u8],
 ) -> Result<()> {
-    writer
-        .write_all(encoded)
+    tokio::time::timeout(WRITE_TIMEOUT, writer.write_all(encoded))
         .await
+        .context("backend client stopped reading")?
         .context("failed to write backend message")?;
     Ok(())
 }
@@ -302,6 +335,42 @@ async fn write_encoded(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_socket_path(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("omaspotify-socket-{name}-{}", std::process::id()));
+        fs::create_dir_all(&directory).unwrap();
+        directory.join("backend.sock")
+    }
+
+    #[test]
+    fn a_live_backend_keeps_its_socket_and_a_dead_ones_is_cleared() {
+        let path = test_socket_path("live");
+        let listener = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        assert!(clear_stale_socket(&path).is_err());
+        assert!(path.exists());
+        drop(listener);
+        clear_stale_socket(&path).unwrap();
+        assert!(!path.exists());
+        fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn leaving_does_not_remove_a_socket_someone_else_now_owns() {
+        let path = test_socket_path("guard");
+        let first = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        let guard = SocketGuard {
+            path: path.clone(),
+            identity: file_identity(&path),
+        };
+        fs::remove_file(&path).unwrap();
+        let second = std::os::unix::net::UnixListener::bind(&path).unwrap();
+        drop(guard);
+        assert!(path.exists(), "the newer backend lost its socket");
+        drop((first, second));
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(path.parent().unwrap()).unwrap();
+    }
 
     #[tokio::test]
     async fn reads_whole_lines_and_stops_at_the_end() {

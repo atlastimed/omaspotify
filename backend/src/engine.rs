@@ -40,6 +40,10 @@ const RECONNECT_LIMIT: usize = 5;
 const RECONNECT_WINDOW: Duration = Duration::from_secs(10 * 60);
 const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const SPIRC_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_SPIRC_TIMEOUT: Duration = Duration::from_secs(3);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const RECONNECT_BASE_DELAY: Duration = Duration::from_secs(1);
+const RECONNECT_DELAY_MAX: Duration = Duration::from_secs(60);
 const PAUSE_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 const AUDIO_KEY_UNAVAILABLE_CODE: &str = "audio_key_unavailable";
 const AUDIO_KEY_UNAVAILABLE_MESSAGE: &str = "Spotify did not provide the audio key required to play this track on this computer. Try another Spotify Connect device.";
@@ -112,14 +116,19 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
         volume_steps: 64,
         ..ConnectConfig::default()
     };
-    let (spirc, spirc_task) = Spirc::new(
-        connect_config.clone(),
-        session.clone(),
-        credentials.clone(),
-        Arc::clone(&player),
-        Arc::clone(&mixer),
+    let (spirc, spirc_task) = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        Spirc::new(
+            connect_config.clone(),
+            session.clone(),
+            credentials.clone(),
+            Arc::clone(&player),
+            Arc::clone(&mixer),
+        ),
     )
     .await
+    .context("timed out connecting the librespot session")?
+    .map_err(login_failure_or_error)
     .context("failed to connect the librespot session")?;
     let spirc = Arc::new(spirc);
 
@@ -209,7 +218,11 @@ async fn supervise_sessions(
             }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
+                    // Lets librespot pause and tell Spotify this device has gone.
                     let _ = spirc.shutdown();
+                    if tokio::time::timeout(SHUTDOWN_SPIRC_TIMEOUT, &mut spirc_task).await.is_err() {
+                        spirc_task.abort();
+                    }
                     return Ok(());
                 }
                 continue;
@@ -230,29 +243,51 @@ async fn supervise_sessions(
         }
         log::warn!("librespot session ended; reconnecting");
 
-        if !session.is_invalid() {
-            session.shutdown();
+        // A session that keeps ending at once should not burn the budget in seconds.
+        let settle =
+            RECONNECT_BASE_DELAY.saturating_mul(1 << reconnects.len().saturating_sub(1).min(5));
+        tokio::select! {
+            () = tokio::time::sleep(settle) => {}
+            _ = shutdown.changed() => return Ok(()),
         }
-        session = replacement_session(&session, &session_config, Some(runtime_cache.clone()));
-        player.set_session(session.clone());
-        let reconnect = Spirc::new(
-            reconnect_config(&connect_config, mixer.as_ref()),
-            session.clone(),
-            credentials.clone(),
-            Arc::clone(&player),
-            Arc::clone(&mixer),
-        );
-        tokio::pin!(reconnect);
-        let (next_spirc, next_task) = tokio::select! {
-            result = &mut reconnect => {
-                result.context("failed to reconnect the librespot session")?
+
+        // A network outage is not a reason to give up: keep trying until it returns.
+        let mut delay = RECONNECT_BASE_DELAY;
+        let (next_spirc, next_task) = loop {
+            if !session.is_invalid() {
+                session.shutdown();
             }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return Ok(());
-                }
-                continue;
+            session = replacement_session(&session, &session_config, Some(runtime_cache.clone()));
+            player.set_session(session.clone());
+            let attempt = tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                Spirc::new(
+                    reconnect_config(&connect_config, mixer.as_ref()),
+                    session.clone(),
+                    credentials.clone(),
+                    Arc::clone(&player),
+                    Arc::clone(&mixer),
+                ),
+            );
+            tokio::select! {
+                result = attempt => match result {
+                    Ok(Ok(connected)) => break connected,
+                    Ok(Err(error)) => {
+                        let error = login_failure_or_error(error);
+                        if error.downcast_ref::<crate::failure::Failure>().is_some() {
+                            return Err(error);
+                        }
+                        log::warn!("could not reconnect the librespot session: {error:#}");
+                    }
+                    Err(_) => log::warn!("timed out reconnecting the librespot session"),
+                },
+                _ = shutdown.changed() => return Ok(()),
             }
+            tokio::select! {
+                () = tokio::time::sleep(delay) => {}
+                _ = shutdown.changed() => return Ok(()),
+            }
+            delay = delay.saturating_mul(2).min(RECONNECT_DELAY_MAX);
         };
 
         spirc = Arc::new(next_spirc);
@@ -270,6 +305,15 @@ async fn supervise_sessions(
             true
         });
         log::info!("reconnected the librespot session");
+    }
+}
+
+// Retrying cannot fix a refused login, so that one needs the user to sign in again.
+fn login_failure_or_error(error: librespot_core::Error) -> anyhow::Error {
+    if error.kind == librespot_core::error::ErrorKind::PermissionDenied {
+        crate::failure::Failure::MissingCredentials.into()
+    } else {
+        error.into()
     }
 }
 
