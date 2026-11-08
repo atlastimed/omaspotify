@@ -58,7 +58,7 @@ mapfile -t shell_scripts < <(git ls-files '*.sh')
 run_if_available shellcheck "${shell_scripts[@]}"
 run_if_available actionlint
 run_if_available zizmor --offline --quiet .github/workflows
-run_if_available gitleaks dir --no-banner --redact .
+run_if_available gitleaks git --no-banner --redact .
 run_if_available osv-scanner scan --config backend/osv-scanner.toml -L backend/Cargo.lock
 
 # rg exits 1 for no match and 2 for an error, and an error must not pass as clean.
