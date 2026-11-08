@@ -30,6 +30,17 @@ Column {
     wrapMode: Text.WordWrap
   }
 
+  Text {
+    width: parent.width
+    visible: !!root.manager && root.manager.playbackReady && !root.manager.backendCurrent
+    textFormat: Text.PlainText
+    text: "This plugin update includes a newer playback backend. Installing it restarts local playback."
+    color: root.panel.foreground
+    font.family: root.panel.fontFamily
+    font.pixelSize: Style.font.bodySmall
+    wrapMode: Text.WordWrap
+  }
+
   Flow {
     width: parent.width
     spacing: Style.space(6)
@@ -37,8 +48,10 @@ Column {
     SettingButton {
       panel: root.panel
       cursorId: "set-soloist-install"
-      text: root.manager && root.manager.setupBusy ? "Installing…" : "Install or repair Soloist"
-      visible: root.manager && !root.manager.playbackReady
+      text: root.manager && root.manager.setupBusy ? "Installing…"
+        : (root.manager && root.manager.playbackReady ? "Update playback backend"
+          : "Install or repair Soloist")
+      visible: root.manager && (!root.manager.playbackReady || !root.manager.backendCurrent)
       enabled: root.manager && !root.manager.setupBusy
       onClicked: root.manager.setupPlayback()
     }

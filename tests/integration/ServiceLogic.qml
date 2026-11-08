@@ -9,6 +9,7 @@ import "plugin/Api.js" as Api
 ShellRoot {
   id: top
 
+  Plugin.JsonStateFile { id: heldFile; active: false }
   Plugin.Service { id: svc }
 
   readonly property string scratch: Quickshell.env("XDG_STATE_HOME") + "/state-file-test"
@@ -434,6 +435,25 @@ ShellRoot {
         svc.artwork.keeping = false
         done()
       })
+    } },
+
+    { name: "artwork evicted from disk is not still pointed at", run: function(done) {
+      var url = "https://i.scdn.co/image/evicted"
+      var known = ({})
+      known[url] = true
+      svc.artwork.cached = known
+      svc.artwork.noteOnDisk("")
+      top.check(svc.artworkFor(url) === url, "points at a file that was evicted")
+      done()
+    } },
+
+    { name: "a failed save is not later taken for a saved one", run: function(done) {
+      heldFile.heldHash = "whatever was tried"
+      heldFile.failures = heldFile.maxRetries
+      heldFile.failSave()
+      top.check(heldFile.heldHash === "", "still believes the failed text is on disk")
+      heldFile.failures = 0
+      done()
     } },
 
     { name: "a poll in flight does not swallow the refetch", run: function(done) {

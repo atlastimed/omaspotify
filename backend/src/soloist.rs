@@ -341,8 +341,17 @@ impl Position {
         self.ms.saturating_add(delta).min(duration)
     }
 
-    fn advancing(&self, s: &BackendState) -> bool {
-        s.playback == PlaybackStatus::Playing && self.speed > 0.0
+    /// The position while it can still reach another whole second, if it is moving.
+    fn advancing_ms(&self, s: &BackendState) -> Option<u32> {
+        if s.playback != PlaybackStatus::Playing || self.speed <= 0.0 {
+            return None;
+        }
+        let value = self.value(s);
+        let at_end = s
+            .track
+            .as_ref()
+            .is_some_and(|t| t.duration_ms > 0 && value >= t.duration_ms);
+        (!at_end).then_some(value)
     }
 }
 
@@ -469,11 +478,22 @@ where
     let mut toggle_intent: Option<(bool, Instant)> = None;
     let mut logged_in: Option<bool> = None;
     let mut device_active = false;
+    // Queries are answered in order, and asked only with no command waiting, so the
+    // next error belongs to the query rather than to a command sent after it.
+    let mut snapshot_wanted = false;
+    let mut query_outstanding = false;
     loop {
+        if snapshot_wanted && pending.is_none() {
+            socket
+                .send(Message::Text(command("get_state").to_string().into()))
+                .await?;
+            snapshot_wanted = false;
+            query_outstanding = true;
+        }
         // Nothing to do while paused or idle, so the backend sleeps until spoken to.
         let wake = next_wakeup(
             pending.as_ref().map(|p| p.deadline),
-            state.with(|s| position.advancing(s).then(|| position.value(s))),
+            state.with(|s| position.advancing_ms(s)),
         );
         tokio::select! {
             _ = shutdown.changed() => { let _ = socket.close(None).await; return Ok(()) },
@@ -524,6 +544,10 @@ where
                                 } else if let Some(reply) = command.reply { let _ = reply.send(Ok(json!({}))); }
                             }
                         } else if event["type"] == "error" {
+                            if query_outstanding {
+                                query_outstanding = false;
+                                continue;
+                            }
                             toggle_intent = None;
                             if let Some(command) = pending.take()
                                 && let Some(reply) = command.reply { let _ = reply.send(Err(ProtocolError::new("soloist_error", "Soloist declined the playback command"))); }
@@ -531,6 +555,9 @@ where
                             let kind = event["type"].as_str().unwrap_or("");
                             if ["playback_changed", "playback_state"].contains(&kind) {
                                 toggle_intent = None;
+                            }
+                            if kind == "playback_state" {
+                                query_outstanding = false;
                             }
                             state.update(|s| apply_event(s, &event, &mut position));
                             if kind == "volume_changed"
@@ -552,9 +579,7 @@ where
                                 stale |= kind == "device_changed" && active && !device_active;
                                 device_active = active;
                             }
-                            if stale {
-                                socket.send(Message::Text(command("get_state").to_string().into())).await?;
-                            }
+                            snapshot_wanted |= stale;
                         }
                     }
                     Message::Close(_) => bail!("Soloist's local API closed"),
@@ -793,6 +818,22 @@ mod tests {
     }
 
     #[test]
+    fn a_position_held_at_the_end_of_a_track_stops_waking_the_loop() {
+        let mut s = BackendState::default();
+        let mut p = Position::default();
+        apply_event(
+            &mut s,
+            &json!({"type":"playback_state","status":"playing",
+                "item":{"uri":"spotify:track:abc","entity_type":"track",
+                    "decorations":{"playback":{"duration_ms":210_999}}},
+                "position":{"position_ms":300_000,"speed":1}}),
+            &mut p,
+        );
+        assert_eq!(p.value(&s), 210_999);
+        assert!(p.advancing_ms(&s).is_none());
+    }
+
+    #[test]
     fn the_loop_sleeps_unless_there_is_work() {
         assert!(next_wakeup(None, None).is_none());
         let deadline = Instant::now() + Duration::from_millis(50);
@@ -917,6 +958,32 @@ mod tests {
         f.push(json!({"type":"device_changed","is_active":true}))
             .await;
         assert_eq!(f.next_command().await["command"], "get_state");
+        f.finish().await;
+    }
+
+    #[tokio::test]
+    async fn a_refused_query_does_not_fail_the_next_command() {
+        let mut f = Fixture::new("query").await;
+        f.push(json!({"type":"auth_state","logged_in":true,"is_active":false}))
+            .await;
+        f.wait_for(|s| s.session_connected).await;
+        f.push(json!({"type":"device_changed","is_active":true}))
+            .await;
+        assert_eq!(f.next_command().await["command"], "get_state");
+        let (reply, result) = oneshot::channel();
+        f.commands
+            .send(EngineRequest {
+                command: Command::Next,
+                reply: Some(reply),
+            })
+            .await
+            .unwrap();
+        assert_eq!(f.next_command().await["command"], "skip_next");
+        f.push(json!({"type":"error","message":"command requires authentication"}))
+            .await;
+        f.push(json!({"type":"command_result","command":"skip_next"}))
+            .await;
+        assert!(result.await.unwrap().is_ok());
         f.finish().await;
     }
 

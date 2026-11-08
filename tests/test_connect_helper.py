@@ -131,6 +131,49 @@ class ConnectHelperTests(unittest.TestCase):
         self.assertEqual(posted[0]["blob"], token)
         self.assertEqual(posted[0]["userName"], "harry")
 
+    def test_the_deadline_cannot_be_retried_away(self) -> None:
+        self.assertFalse(issubclass(helper.DeadlineExceeded, Exception))
+        calls: list[int] = []
+
+        def slow(*_args: object) -> dict[str, object]:
+            calls.append(1)
+            helper.on_deadline(0, None)
+            return {}
+
+        with mock.patch.object(helper, "request_json", side_effect=slow), \
+                mock.patch.object(helper.time, "sleep"), \
+                self.assertRaises(helper.DeadlineExceeded):
+            helper.request_json_with_retry("192.168.1.2", 1000, "/zc")
+        self.assertEqual(len(calls), 1)
+
+    def test_a_token_is_sent_under_the_signed_in_account(self) -> None:
+        receiver = {
+            "id": "0123456789abcdef0123456789abcdef01234567",
+            "address": "192.168.1.20",
+            "port": 5389,
+            "cpath": "/zc",
+            "serviceVersion": "1.0",
+            "tokenType": "accesstoken",
+        }
+        posted: list[dict[str, str]] = []
+
+        def fake_request_json(
+            _address: str, _port: int, _path: str,
+            method: str = "GET", fields: dict[str, str] | None = None,
+        ) -> dict[str, object]:
+            if method == "GET":
+                return {"status": 101, "deviceID": receiver["id"], "tokenType": "accesstoken"}
+            posted.append(dict(fields or {}))
+            return {"status": 101}
+
+        with mock.patch.object(helper, "discover_receivers", return_value=[receiver]), \
+                mock.patch.object(helper, "load_credentials",
+                                  return_value=("old-account", 1, b"stored")), \
+                mock.patch.object(helper, "request_json", side_effect=fake_request_json):
+            helper.activate_receiver(receiver["id"],
+                                     "desktop-streaming-token-value-1234567890", "current")
+        self.assertEqual(posted[0]["userName"], "current")
+
     def test_device_auth_never_follows_a_redirect_with_the_token(self) -> None:
         handler = helper.NoRedirect()
         request = helper.urllib.request.Request("https://spclient.wg.spotify.com/x")

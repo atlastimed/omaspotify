@@ -55,6 +55,11 @@ Item {
     }
     namesOnDisk = names
     scanned = true
+    // The scan may have evicted some, and a row must not point at a file now gone.
+    var kept = ({})
+    for (var url in cached)
+      if (names[Api.artworkCacheName(url)]) kept[url] = true
+    cached = kept
     if (queue.length > 0) {
       var known = Api.shallowCopy(cached)
       var nextFailed = Api.shallowCopy(failed)

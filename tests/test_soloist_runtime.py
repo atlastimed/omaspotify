@@ -285,6 +285,24 @@ class SoloistRuntimeTests(unittest.TestCase):
                 runtime.start_receiver()
         self.assertEqual(expired.exception.code, runtime.EXIT_EXPIRED)
 
+    def test_status_reports_a_backend_from_older_source_only_when_asked(self):
+        runtime.RUNTIME.mkdir()
+        record = runtime.RUNTIME / "backend-source.sha256"
+        record.write_text("old\n")
+        reply = subprocess.CompletedProcess([], 0, "new\n", "")
+        with (
+            patch.object(runtime.sys, "argv", ["runtime", "status", "--no-key", "--backend"]),
+            patch.object(runtime, "run", return_value=reply),
+        ):
+            self.assertIs(runtime.status()["backendCurrent"], False)
+            record.write_text("new\n")
+            self.assertIs(runtime.status()["backendCurrent"], True)
+        with (
+            patch.object(runtime.sys, "argv", ["runtime", "status", "--no-key"]),
+            patch.object(runtime, "run", return_value=reply),
+        ):
+            self.assertNotIn("backendCurrent", runtime.status())
+
     def test_key_only_uses_stdin_and_not_status_output(self):
         secret = "fake-private-soloist-key"
         with (

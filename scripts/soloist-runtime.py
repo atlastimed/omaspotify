@@ -316,10 +316,23 @@ def install():
             )
 
 
+def backend_current():
+    """Whether the installed backend was built from this plugin's source."""
+    fingerprint = Path(__file__).resolve().parent / "backend-source-id.sh"
+    if not fingerprint.is_file():
+        return True
+    try:
+        recorded = (RUNTIME / "backend-source.sha256").read_text().strip()
+    except OSError:
+        return False
+    result = run([str(fingerprint)])
+    return result.returncode == 0 and result.stdout.strip() == recorded
+
+
 def status():
     info = installed_metadata()
     built_at = build_time()
-    return {
+    result = {
         "installed": (RUNTIME / "soloist").is_file(),
         "unit": (CONFIG / "systemd/user" / UNIT).is_file(),
         "key": None if "--no-key" in sys.argv else bool(key()),
@@ -329,6 +342,9 @@ def status():
         "daysRemaining": max(0, int((built_at + BUILD_LIFETIME - time.time()) / 86400)),
         "version": info.get("version", ""),
     }
+    if "--backend" in sys.argv:
+        result["backendCurrent"] = backend_current()
+    return result
 
 
 def initial_volume_args():

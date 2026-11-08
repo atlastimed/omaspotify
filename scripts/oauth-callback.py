@@ -38,8 +38,7 @@ MAX_REQUEST_BYTES = 4096
 MAX_RESPONSE_BYTES = 64 * 1024
 # The state pkce.sh generates is a few dozen hex characters.
 MAX_STATE_BYTES = 256
-# Junk connections get an answer and a close; this bounds how many we entertain.
-MAX_CONNECTIONS = 64
+LISTEN_BACKLOG = 8
 # One client gets this long in total, however slowly it keeps sending.
 PER_CONNECTION_TIMEOUT = 2.0
 
@@ -133,11 +132,13 @@ def serve(port, path, timeout, stdin=None, stdout=None, ready=None):
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         listener.bind(("127.0.0.1", port))
-        listener.listen(MAX_CONNECTIONS)
+        listener.listen(LISTEN_BACKLOG)
         if ready is not None:
             ready(listener.getsockname()[1])
 
-        for _ in range(MAX_CONNECTIONS):
+        # Bounded by the deadline alone: counting connections would let a web page
+        # end the sign-in just by sending enough of them.
+        while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break

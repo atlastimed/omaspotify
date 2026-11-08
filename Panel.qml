@@ -1172,7 +1172,7 @@ Item {
     var next = Api.listIndexAfterMove(list.count, list.currentIndex, delta)
     if (next < 0) return false
     list.currentIndex = next
-    list.positionViewAtIndex(next, list.Contain === undefined ? 2 : list.Contain)
+    list.positionViewAtIndex(next, ListView.Contain)
     return true
   }
 

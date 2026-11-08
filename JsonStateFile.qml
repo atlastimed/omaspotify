@@ -82,6 +82,8 @@ Item {
   }
 
   function failSave() {
+    // What the file holds is no longer known, so the next save must really write.
+    heldHash = ""
     saving = false
     saveWatchdog.stop()
     saveFailed()

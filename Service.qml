@@ -1740,6 +1740,7 @@ Item {
     var spec = libraryCollectionSpec(kind)
     var fill = { kind: kind, spec: spec, serial: dataSerial, pages: ({}),
       showProgress: root[spec.items].length === 0 }
+    if (fill.showProgress) root[spec.loading] = true
     if (spec.cursor === true) fillNextCursorPage(fill, spec.path, spec.query, 0)
     else requestFillOffsets(fill, [0], 0)
   }
@@ -1797,7 +1798,10 @@ Item {
 
   function absorbFillPage(fill, position, items, payload) {
     fill.pages[position] = items
-    if (fill.showProgress) root[fill.spec.items] = laidOutFill(fill)
+    if (fill.showProgress) {
+      root[fill.spec.items] = laidOutFill(fill)
+      root[fill.spec.loading] = false
+    }
     noteHarvest(fill.kind, payload)
     if (fill.spec.checkSaved === true) checkSavedItemsInBackground(items)
     else markItemsSaved(items, true)
@@ -1815,6 +1819,7 @@ Item {
   function finishFill(fill, complete) {
     if (fill.serial !== dataSerial) return
     var spec = fill.spec
+    if (fill.showProgress) root[spec.loading] = false
     var rows = laidOutFill(fill)
     // A complete answer replaces the list, so what was removed elsewhere goes.
     // After a failure, pages that did arrive are kept with what we already had.
@@ -4531,7 +4536,7 @@ Item {
   // Spotify never reports a remote device as stopped: it just pauses at the end.
   readonly property bool playbackFinished: playbackState === MprisPlaybackState.Stopped
     || (useRemotePlayback && !playing && lengthSeconds > 0
-      && (positionSeconds < 1 || positionSeconds >= lengthSeconds - 2))
+      && (positionSeconds <= 0 || positionSeconds >= lengthSeconds - 1))
   onPlaybackFinishedChanged: sleepTimer.noteStopped(playbackFinished)
   onCurrentUriChanged: sleepTimer.noteCurrentUriChanged(currentUri)
   onCurrentTrackItemUriChanged: syncCurrentTrackSaved(false)

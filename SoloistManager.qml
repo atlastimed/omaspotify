@@ -31,6 +31,9 @@ Item {
   property bool startAfterSave: false
   property int statusGeneration: 0
   property bool helperSynced: false
+  // A plugin update can change the backend, which keeps working until repaired.
+  property bool backendCurrent: true
+  property bool backendChecked: false
   property int pairingTimeoutMs: 300000
   readonly property bool statusPollNeeded: pluginDir !== "" && (authenticationBusy || uiVisible)
   readonly property string failurePath: {
@@ -65,7 +68,7 @@ Item {
     status.generation = statusGeneration
     // A keyring still locked at the first check must not read as no key for ever.
     status.command = ["python3", pluginDir + "/scripts/soloist-runtime.py", "status",
-      keyAvailable ? "--no-key" : "--key"]
+      keyAvailable ? "--no-key" : "--key"].concat(backendChecked ? [] : ["--backend"])
     status.running = true
   }
   function applyStatus(generation, data) {
@@ -79,6 +82,10 @@ Item {
     serviceActive = data.running === true
     version = String(data.version || "")
     daysRemaining = Number(data.daysRemaining) || 0
+    if (typeof data.backendCurrent === "boolean") {
+      backendCurrent = data.backendCurrent
+      backendChecked = true
+    }
     syncInstalledHelper()
     if (serviceActive) terminalFailure = false
     else if (failurePath) failureFile.reload()
@@ -93,7 +100,9 @@ Item {
   }
   function applyFailureFile(raw) {
     var record = Api.parseJson(raw, null)
-    var message = record ? Api.playbackFailureMessage(String(record.code || "")) : ""
+    var code = record ? String(record.code || "") : ""
+    // Only the librespot engine reports this one, and the file outlives a switch.
+    var message = code === "reconnect_exhausted" ? "" : Api.playbackFailureMessage(code)
     if (!message) return
     terminalFailure = true
     lastError = message
@@ -222,7 +231,15 @@ Item {
     onExited: function(code) {
       root.setupBusy = false
       Qt.callLater(root.refreshStatus)
-      if (code === 0) { root.binaryAvailable = true; root.unitAvailable = true; root.setupSucceeded() }
+      if (code === 0) {
+        root.binaryAvailable = true
+        root.unitAvailable = true
+        root.backendCurrent = true
+        root.terminalFailure = false
+        root.lastError = ""
+        root.clearFailureFile()
+        root.setupSucceeded()
+      }
       else { root.lastError = "Soloist setup failed. Check the network and Rust toolchain, then retry."; root.setupFailed(root.lastError) }
     }
     // A command that cannot start never reports an exit.

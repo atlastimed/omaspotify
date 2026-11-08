@@ -72,6 +72,10 @@ class ConnectError(Exception):
     pass
 
 
+class DeadlineExceeded(BaseException):
+    """Not a ConnectError, which retry loops catch, because this must end the command."""
+
+
 def emit(payload: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(payload, ensure_ascii=False, separators=(",", ":")) + "\n")
 
@@ -770,14 +774,14 @@ def activate_receiver(device_id: str, access_token: str = "", user_id: str = "")
     if receiver is None:
         raise ConnectError("receiver is no longer discoverable")
     # Only the reusable-credential path needs a stored login, and installs that
-    # only ever used Soloist do not have one.
-    username = str(user_id or "").strip()
+    # only ever used Soloist do not have one. A token speaks for the signed-in
+    # account, which may not be the one the stored login belongs to.
+    token_user = str(user_id or "").strip()
     stored: tuple[str, int, bytes] | None = None
     try:
         stored = load_credentials()
-        username = stored[0]
     except ConnectError:
-        if not username:
+        if not token_user:
             raise
 
     info_query = urllib.parse.urlencode({
@@ -820,9 +824,11 @@ def activate_receiver(device_id: str, access_token: str = "", user_id: str = "")
                 raise ConnectError("local playback credentials are unavailable")
             public_key = str(info.get("publicKey") or "")
             blob, client_key = build_login_blob(
-                username, stored[1], stored[2],
+                stored[0], stored[1], stored[2],
                 str(info.get("deviceID") or device_id), public_key
             )
+        username = stored[0] if token_type == "default" and stored else (
+            token_user or (stored[0] if stored else ""))
         fields = {
             "action": "addUser",
             "version": str(receiver["serviceVersion"]),
@@ -934,7 +940,7 @@ def self_test() -> None:
 
 
 def on_deadline(_signum: int, _frame: object) -> None:
-    raise ConnectError("the speaker took too long to respond")
+    raise DeadlineExceeded
 
 
 def main() -> int:
@@ -974,6 +980,9 @@ def main() -> int:
             emit({"status": "ok"})
             return 0
         return 2
+    except DeadlineExceeded:
+        sys.stderr.write("the speaker took too long to respond\n")
+        return 6
     except ConnectError as error:
         # Error messages are intentionally generic and cannot contain response
         # payloads, credentials, encrypted blobs, keys, or endpoint URLs.

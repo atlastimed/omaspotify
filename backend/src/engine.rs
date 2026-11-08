@@ -310,11 +310,17 @@ async fn supervise_sessions(
 
 // Retrying cannot fix a refused login, so that one needs the user to sign in again.
 fn login_failure_or_error(error: librespot_core::Error) -> anyhow::Error {
-    if error.kind == librespot_core::error::ErrorKind::PermissionDenied {
+    if is_refused_login(&error) {
         crate::failure::Failure::MissingCredentials.into()
     } else {
         error.into()
     }
+}
+
+// An HTTP 403 reports the same kind of error, but that can pass, so go by the words too.
+fn is_refused_login(error: &librespot_core::Error) -> bool {
+    error.kind == librespot_core::error::ErrorKind::PermissionDenied
+        && error.error.to_string().starts_with("Login failed")
 }
 
 // Spotify hands the last song back to a device that returns with the same session id.
@@ -872,6 +878,17 @@ pub async fn send_with_reply(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_refused_login_is_treated_as_final() {
+        let refused = librespot_core::Error::permission_denied(std::io::Error::other(
+            "Login failed with reason: Bad credentials",
+        ));
+        assert!(is_refused_login(&refused));
+        let forbidden =
+            librespot_core::Error::permission_denied(std::io::Error::other("Status code 403"));
+        assert!(!is_refused_login(&forbidden));
+    }
+
     use super::*;
     use crate::{
         fade::{
