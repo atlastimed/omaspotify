@@ -37,6 +37,7 @@ var DISCOVERY_SEARCHES = [
 // matching the gentler taper used by common desktop audio mixers.
 // Zero remains a true mute in both directions.
 var ENGINE_CUBIC_FLOOR = 0.1
+var SECONDARY_TEXT_CONTRAST = 5.4
 
 function clampUnit(value) {
   return Math.max(0, Math.min(1, Number(value) || 0))
@@ -3342,4 +3343,58 @@ function mergeUnique(existing, incoming) {
     result.push(values[i])
   }
   return result
+}
+
+function contrastChannel(value) {
+  return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)
+}
+
+function colorLuminance(color) {
+  return 0.2126 * contrastChannel(color.r) + 0.7152 * contrastChannel(color.g)
+    + 0.0722 * contrastChannel(color.b)
+}
+
+function contrastRatio(first, second) {
+  var a = colorLuminance(first), b = colorLuminance(second)
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+}
+
+// Quieter text for subtitles and durations. The palette's own muted colour is
+// decorative and falls under 3:1 on most themes, so this blends the foreground
+// toward the background only as far as it stays comfortably readable, with room
+// for the hover fill a row can sit on.
+function secondaryTextColor(foreground, background) {
+  if (!foreground || !background || foreground.r === undefined
+      || background.r === undefined) return foreground
+  var share = 0.7
+  while (share < 1) {
+    var blended = Qt.rgba(
+      foreground.r * share + background.r * (1 - share),
+      foreground.g * share + background.g * (1 - share),
+      foreground.b * share + background.b * (1 - share), 1)
+    if (contrastRatio(blended, background) >= SECONDARY_TEXT_CONTRAST) return blended
+    share += 0.02
+  }
+  return foreground
+}
+
+// Where to print a month name above a heatmap: the first week starting in it.
+function heatmapMonthLabels(grid) {
+  var labels = []
+  var names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+    "Nov", "Dec"]
+  var weeks = Array.isArray(grid) ? grid : []
+  var previous = ""
+  for (var w = 0; w < weeks.length; w++) {
+    var key = weeks[w] && weeks[w][0] ? String(weeks[w][0].key || "") : ""
+    var month = key.slice(5, 7)
+    if (month && month !== previous) {
+      // A name squeezed against the next one reads as noise, so a partial first
+      // month goes without.
+      if (w > 0 || (weeks.length > 2 && String(weeks[2][0].key).slice(5, 7) === month))
+        labels.push({ week: w, text: names[Number(month) - 1] || "" })
+      previous = month
+    }
+  }
+  return labels
 }
