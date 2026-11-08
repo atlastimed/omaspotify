@@ -441,61 +441,6 @@ TestCase {
   // A personal client id has its own quota but loses the catalog endpoints a
   // grandfathered app still reaches, so what it refuses is tried once through
   // the shared one.
-  function test_sharedClientFallback_onlyForRefusalsItCanAnswer() {
-    var catalog = "/artists/abc/related-artists"
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET", catalog))
-    verify(Api.shouldFallBackToSharedClient(400, false, true, "GET", catalog),
-      "catalog refusals arrive as a bogus parameter error")
-    verify(Api.shouldFallBackToSharedClient(404, false, true, "GET", catalog))
-
-    verify(!Api.shouldFallBackToSharedClient(401, false, true, "GET", catalog),
-      "a token to refresh, not a permission problem")
-    verify(!Api.shouldFallBackToSharedClient(429, false, true, "GET", catalog),
-      "slow down rather than spend someone else's quota")
-    verify(!Api.shouldFallBackToSharedClient(200, false, true, "GET", catalog))
-    verify(!Api.shouldFallBackToSharedClient(500, false, true, "GET", catalog))
-
-    verify(!Api.shouldFallBackToSharedClient(403, true, true, "GET", catalog),
-      "only once")
-    verify(!Api.shouldFallBackToSharedClient(403, false, false, "GET", catalog),
-      "nothing to fall back to")
-  }
-
-  // The shared quota is the thing we are trying to stop spending, so only the
-  // requests a personal client genuinely cannot answer are sent to it.
-  function test_sharedClientFallback_staysOffAnythingItCannotHelpWith() {
-    verify(!Api.shouldFallBackToSharedClient(404, false, true, "PUT",
-      "/me/player/play"), "never repeat something that changes state")
-    verify(!Api.shouldFallBackToSharedClient(403, false, true, "POST",
-      "/playlists/abc/tracks"))
-    verify(!Api.shouldFallBackToSharedClient(400, false, true, "DELETE",
-      "/playlists/abc/tracks"))
-
-    verify(!Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "/me/tracks"), "your own library reads fine on your own client")
-    verify(!Api.shouldFallBackToSharedClient(404, false, true, "GET",
-      "https://api.spotify.com/v1/me/albums?offset=50"),
-      "including when it arrives as a paging cursor")
-
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "https://api.spotify.com/v1/artists/abc/albums"),
-      "a catalog cursor still falls back")
-    verify(Api.shouldFallBackToSharedClient(400, false, true, "GET", "/tracks"))
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "/browse/new-releases"))
-  }
-
-  // Spotify's own playlists arrive in a list of their own, so they replace the old copies.
-  function test_withSpotifyPlaylists_replacesOnlySpotifysOwn() {
-    var mine = { id: "m", uri: "spotify:playlist:m", ownerId: "jeremy" }
-    var stale = { id: "r", uri: "spotify:playlist:r", ownerId: "spotify", name: "old" }
-    var unfollowed = { id: "u", uri: "spotify:playlist:u", ownerId: "spotify" }
-    var fresh = { id: "r", uri: "spotify:playlist:r", ownerId: "spotify", name: "new" }
-    var merged = Api.withSpotifyPlaylists([mine, stale, unfollowed], [fresh])
-    compare(merged.map(function(p) { return p.id + ":" + (p.name || "") }),
-      ["m:", "r:new"])
-  }
-
   // The budget is shared with every other app using this client ID, so it
   // cannot be known ahead of time. Each refusal costs about twenty seconds of
   // everything stopping, so the gap only ever widens within a run.

@@ -3071,7 +3071,8 @@ function requestTimingLine(method, path, timings, context) {
   var queued = Math.max(0, Number(t.queuedMs) || 0)
   var auth = Math.max(0, Number(t.authMs) || 0)
   var wire = Math.max(0, Number(t.wireMs) || 0)
-  return String(method || "GET") + " " + redact(String(path || ""))
+  // Paging cursors carry whatever was searched for, which stays out of the journal.
+  return String(method || "GET") + " " + redact(String(path || "").split("?")[0])
     + " " + (queued + auth + wire) + " ms"
     + " (queue " + queued + ", auth " + auth + ", wire " + wire + ")"
     + " in-flight " + (Number(c.inFlight) || 0)

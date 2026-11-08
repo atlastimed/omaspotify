@@ -86,6 +86,16 @@ TestCase {
     compare(response.expiresIn, 1200)
   }
 
+  function test_tokenFailuresSayWhetherTheyCanPass() {
+    verify(OAuth.parseTokenResponse(0, "", "kept").transient, "no answer at all")
+    verify(OAuth.parseTokenResponse(503, "", "kept").transient)
+    verify(OAuth.parseTokenResponse(429, "", "kept").transient)
+    verify(!OAuth.parseTokenResponse(400,
+      JSON.stringify({ error: "invalid_grant" }), "kept").transient)
+    verify(!OAuth.parseTokenResponse(400,
+      JSON.stringify({ error: "invalid_client" }), "kept").transient)
+  }
+
   function test_mockedInvalidGrantResponse() {
     var response = OAuth.parseTokenResponse(400, JSON.stringify({
       error: "invalid_grant",
@@ -95,6 +105,16 @@ TestCase {
     verify(!response.ok)
     verify(response.invalidGrant)
     compare(response.error, "Refresh token revoked")
+  }
+
+  function test_browserResponsesDeclareTheirRealLength() {
+    for (var response of [OAuth.successResponse(), OAuth.failureResponse()]) {
+      var body = response.substring(response.indexOf("\r\n\r\n") + 4)
+      var declared = Number(response.match(/Content-Length: (\d+)/)[1])
+      // Qt.btoa encodes UTF-8, so a non-ASCII character would cut the page short.
+      compare(declared, Qt.atob(Qt.btoa(body)).length)
+      verify(/^[\x00-\x7f]*$/.test(body), "the page must stay plain ASCII")
+    }
   }
 
   function test_browserResponsesDoNotEchoCredentials() {
