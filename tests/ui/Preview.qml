@@ -1,6 +1,8 @@
 import QtQuick
 import Quickshell
 import Quickshell.Io
+import qs.Commons
+import qs.Commons as Commons
 import "plugin" as Plugin
 import "plugin/Api.js" as Api
 import "FixtureApi.js" as Fixture
@@ -18,6 +20,51 @@ ShellRoot {
 
   Plugin.Service { id: service }
   Plugin.Panel { id: panel; service: service }
+
+  // Just enough of a bar for the widget and its popup to believe in.
+  QtObject {
+    id: fakeBar
+    readonly property color foreground: Commons.Color.foreground
+    readonly property color background: Commons.Color.background
+    readonly property color barForeground: Commons.Color.foreground
+    readonly property color urgent: Commons.Color.urgent
+    readonly property string fontFamily: Style.font.family
+    readonly property string position: "top"
+    readonly property bool vertical: false
+    readonly property int barSize: 26
+    readonly property bool foregroundAnimationEnabled: false
+    readonly property var clickTargets: []
+    property var activePopout: null
+    readonly property var shell: ({
+      serviceFor: function() { return service },
+      isPluginOpen: function() { return false },
+      hide: function() {},
+      summon: function() { return true },
+      toggle: function() {}
+    })
+    function barSizeFor() { return barSize }
+    function requestPopout(owner) { activePopout = owner }
+    function releasePopout(owner) { if (activePopout === owner) activePopout = null }
+    function notePopoutCard() {}
+    function popoutCardFor() { return null }
+    function targetBelongsToWindow() { return false }
+    function showTooltip() {}
+    function hideTooltip() {}
+    function run() {}
+  }
+
+  PanelWindow {
+    anchors { top: true; left: true; right: true }
+    implicitHeight: 26
+    color: Commons.Color.background
+
+    Plugin.BarWidget {
+      id: widget
+      bar: fakeBar
+      x: 600
+      settings: ({})
+    }
+  }
 
   property var pendingRequests: []
   property bool holdRequests: false
@@ -111,10 +158,13 @@ ShellRoot {
     } },
     { shot: "queue", tab: "queue" },
     { shot: "stats", tab: "stats" },
-    { shot: "devices", tab: "devices" },
+    { shot: "devices", tab: "devices", wait: 2500 },
     { shot: "settings", tab: "setup" },
     { shot: "discover", tab: "discover" },
-    { shot: "nowplaying", tab: "home", run: function() { panel.nowPlayingExpanded = true } },
+    { shot: "nowplaying", tab: "home", run: function() {
+      panel.equalizerMode = "bars"
+      panel.nowPlayingExpanded = true
+    } },
     { shot: "shortcuts", tab: "home", run: function() { panel.toggleShortcutHelp() },
       after: function() { panel.toggleShortcutHelp() } },
     { shot: "context-menu", tab: "home", settled: function() {
@@ -137,12 +187,42 @@ ShellRoot {
       Fixture.mode = "idle"
       service.remotePlayback = null
     }, after: function() { Fixture.mode = "full" } },
-    { shot: "loading", tab: "library", before: function() {
+    { shot: "loading", tab: "library", run: function() {
       harness.holdRequests = true
       panel.libraryType = "albums"
       service.savedAlbums = []
       service.savedAlbumsLoaded = false
-    }, after: function() { harness.holdRequests = false; flush.start() } }
+      service.loadLibrary("albums", false)
+    }, after: function() { harness.holdRequests = false; flush.start() } },
+    { shot: "confirm", tab: "setup", settled: function() {
+      panel.askToConfirm("Log out of Spotify on this computer?", "Log out", function() {})
+    }, after: function() { panel.dismissTransientPopup() } },
+    { shot: "eq-pixels", tab: "home", run: function() {
+      panel.equalizerMode = "pixels"
+      panel.nowPlayingExpanded = true
+    } },
+    { shot: "eq-scope", tab: "home", run: function() {
+      panel.equalizerMode = "scope"
+      panel.nowPlayingExpanded = true
+    } },
+    { shot: "eq-matrix", tab: "home", run: function() {
+      panel.equalizerMode = "matrix"
+      panel.nowPlayingExpanded = true
+    } },
+    { shot: "mini", tab: "home", settled: function() {
+      panel.close()
+      widget.open()
+    } },
+    { shot: "mini-help", tab: "home", settled: function() {
+      panel.close()
+      widget.open()
+      widget.toggleMiniShortcutHelp()
+    }, after: function() { widget.close() } },
+    { shot: "mini-menu", tab: "home", settled: function() {
+      panel.close()
+      widget.contextMenuVisible = true
+      widget.open()
+    }, after: function() { widget.close(); widget.contextMenuVisible = false } }
   ]
 
   property int stepIndex: -1
@@ -177,7 +257,7 @@ ShellRoot {
 
   Timer {
     id: settle
-    interval: harness.settleMs
+    interval: harness.current && harness.current.wait ? harness.current.wait : harness.settleMs
     onTriggered: {
       try {
         if (harness.current.settled) harness.current.settled()

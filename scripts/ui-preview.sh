@@ -47,6 +47,25 @@ cp "$source_root/"*.qml "$source_root/"*.js "$work/app/plugin/"
 cp -r "$omarchy_path/shell/Commons" "$omarchy_path/shell/Ui" "$work/app/"
 cp "$source_root/tests/ui/Preview.qml" "$work/app/shell.qml"
 cp "$source_root/tests/ui/FixtureApi.js" "$work/app/"
+cp -r "$source_root/scripts" "$work/app/plugin/scripts"
+# Pretend audio, so the equalizer has something to draw.
+mkdir -p "$work/bin"
+cat > "$work/bin/pw-dump" <<'FAKE'
+#!/usr/bin/env bash
+echo '[{"id":1,"info":{"props":{"media.class":"Stream/Output/Audio","application.process.binary":"soloist","object.serial":7}}}]'
+FAKE
+cat > "$work/bin/cava" <<'FAKE'
+#!/usr/bin/env bash
+t=0
+while true; do
+  line=""
+  for b in {0..47}; do line+="$(( (b * 37 + t * 53) % 400 + 500 - (b > 24 ? (b - 24) * 18 : (24 - b) * 12) ));"; done
+  printf '%s\n' "${line//-/}"
+  t=$((t + 1))
+  sleep 0.1
+done
+FAKE
+chmod +x "$work/bin/pw-dump" "$work/bin/cava"
 
 colors=(1f6f8b 8b1f5e 2d8b1f 8b6d1f 4a1f8b 1f8b7a 8b2d1f 3d5a80 a44a3f 6a994e 7b2cbf 386641)
 for i in "${!colors[@]}"; do
@@ -61,7 +80,7 @@ default_floating_border none
 exec dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- env QT_QPA_PLATFORM=wayland QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 PREVIEW_ART="$work/art" PREVIEW_OUT="$out" PREVIEW_ONLY="$only" qs --no-color -p "$work/app" > "$work/qs.log" 2>&1
 CONF
 
-env -i PATH="$PATH" HOME="$home" USER="$USER" LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="$work/runtime" \
+env -i PATH="$work/bin:$PATH" HOME="$home" USER="$USER" LANG="${LANG:-C.UTF-8}" XDG_RUNTIME_DIR="$work/runtime" \
   XDG_STATE_HOME="$home/.local/state" XDG_CACHE_HOME="$home/.cache" XDG_CONFIG_HOME="$home/.config" \
   WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_HEADLESS_OUTPUTS=1 \
   timeout "${PREVIEW_TIMEOUT:-120}" unshare --user --map-current-user --net \
