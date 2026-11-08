@@ -81,9 +81,7 @@ the crawl.
 The rate limit belongs to your configured client ID and is shared with any other
 clients you configure to use that same developer app. On a
 429 the app honours `Retry-After` for everything, and the gap between background
-requests doubles and stays wide for the rest of the run. One page you are
-waiting on may try once during a cooldown, in case the refusal has slack in it;
-after being refused itself it waits its turn. Every request logs where its time
+requests doubles and stays wide for the rest of the run. Every request logs where its time
 went — queueing, token refresh, or the network — which is what makes a slow call
 diagnosable at all. See `docs/LIBRARY-DATA.md` for the measurements.
 
@@ -142,7 +140,9 @@ similar) is written to `$XDG_STATE_HOME/omaspotify/session.json` so it
 does not pollute Omarchy's `shell.json`. Older copies kept as plugin settings
 are read once and removed from `shell.json` after that file is written.
 Short-lived access tokens and PKCE values remain in the shell process. OAuth
-state is checked, callback listeners bind explicitly to IPv4 loopback, API URLs
+state is checked by the callback listener, which takes the expected value over
+stdin and keeps listening after a request that lacks it, so a stray local request
+cannot end a sign-in. Callback listeners bind explicitly to IPv4 loopback, API URLs
 are restricted to
 `https://api.spotify.com/v1`, and sensitive credential patterns are redacted
 before an error can reach the interface.
@@ -154,6 +154,18 @@ It does not request profile or email permissions.
 The Spotify account grant unlocks search, library, and remote control. Local
 playback remains a separate approval. The full player and mini-player stay
 usable after the account connects, even while that second step is unfinished.
+
+A failed token refresh keeps the session unless Spotify says the grant is over;
+requests then back off for a few seconds rather than each trying again.
+
+Stored library, history and searches carry the account they belong to. Signing in
+with a different account puts the first account's listening record aside, because
+Spotify keeps only the last fifty plays and it could never be rebuilt, and restores
+it if that account returns. Signing out deletes all of them.
+
+The library cache is only marked fresh after a complete, error-free fill of every
+collection, and it is checked against the clock when used, so a long-lived shell
+still refreshes it. Artwork on disk is capped at 3,000 files.
 
 ## Local Spotify Connect
 
@@ -299,7 +311,9 @@ keybinding check.
 
 ## Followed releases
 
-`FollowedReleases.qml` loads only while the releases tab is open. Cursor-paged
+`FollowedReleases.qml` does its network work only while the releases tab is open,
+and its cache file is first read when the panel opens rather than at shell start,
+so a large cache costs nothing until someone uses it. Cursor-paged
 followed artists are cached for six hours; each artist's first ten albums/singles,
 including empty results, for 24 hours. Each user-triggered batch makes at most 25
 album requests, sequentially, through the existing bounded transport. Failures

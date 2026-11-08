@@ -907,15 +907,7 @@ Item {
     if (playHistoryReady) return
     var stored = Api.parsePlayHistoryRecord(raw)
     accountOwnerId = stored.owner
-    playHistory = Api.mergePlayHistory(stored.plays, playHistory)
-    touchedDates = Api.mergeTouchDates(stored.touched, touchedDates)
-    playlistEdits = stored.playlistEdits
-    savedTracksThrough = stored.savedTracksThrough
-    savedTracksOffset = stored.savedTracksOffset
-    savedTracksNewest = stored.savedTracksNewest
-    likedByArtist = Api.mergeLikedIndex(likedByArtist, stored.likedByArtist, 200)
-    playDays = Api.mergeDayCounts(stored.playDays, playDays)
-    playsCountedThrough = Math.max(stored.playsCountedThrough, playsCountedThrough)
+    mergeStoredRecord(stored)
     playHistoryReady = true
     if (pendingAccountOwner) {
       var owner = pendingAccountOwner
@@ -928,6 +920,18 @@ Item {
     }
     ensureSavedTracksCrawl()
     refreshPlaylistEdits()
+  }
+
+  function mergeStoredRecord(stored) {
+    playHistory = Api.mergePlayHistory(stored.plays, playHistory)
+    touchedDates = Api.mergeTouchDates(stored.touched, touchedDates)
+    playlistEdits = stored.playlistEdits
+    savedTracksThrough = stored.savedTracksThrough
+    savedTracksOffset = stored.savedTracksOffset
+    savedTracksNewest = stored.savedTracksNewest
+    likedByArtist = Api.mergeLikedIndex(likedByArtist, stored.likedByArtist, 200)
+    playDays = Api.mergeDayCounts(stored.playDays, playDays)
+    playsCountedThrough = Math.max(stored.playsCountedThrough, playsCountedThrough)
   }
 
   function encodePlayHistoryFile() {
@@ -950,6 +954,7 @@ Item {
     if (accountOwnerId === id) return
     var inherited = accountOwnerId !== ""
     if (inherited) {
+      setAsideAccountRecord(accountOwnerId)
       dataSerial++
       spotifyApi.cancelAll()
       clearData()
@@ -958,9 +963,32 @@ Item {
     accountOwnerId = id
     playHistoryFile.markDirty()
     if (inherited) {
+      accountRecordReader.path = accountRecordPath(id)
+      accountRecordReader.reload()
       loadSidebarPlaylists()
       openView(activeView, true)
     }
+  }
+
+  function accountRecordPath(owner) {
+    return stateDir + "/plays." + Qt.md5(owner) + ".json"
+  }
+
+  // Spotify keeps only the last fifty plays, so this history can never be fetched
+  // again. A different account puts it aside, and it returns with its owner.
+  function setAsideAccountRecord(owner) {
+    accountRecordWriter.path = accountRecordPath(owner)
+    accountRecordWriter.setText(encodePlayHistoryFile())
+  }
+
+  function applyAccountRecord(raw) {
+    mergeStoredRecord(Api.parsePlayHistoryRecord(raw))
+    playHistoryFile.markDirty()
+  }
+
+  function deleteAccountRecords() {
+    Quickshell.execDetached(["find", stateDir, "-maxdepth", "1", "-type", "f",
+      "-name", "plays.*.json", "-delete"])
   }
 
   // Called whenever a session is known. Reading liked songs is deep background
@@ -4296,6 +4324,7 @@ Item {
     clearData()
     // Only a real sign-out forgets it; a changed or briefly blank client id must not.
     forgetPersonalRecord()
+    deleteAccountRecords()
   }
 
   function clearData() {
@@ -4889,7 +4918,21 @@ Item {
       + 'for name in session plays library queries releases; do\n'
       + '  [ -e "$name.json" ] || : >"$name.json"\n'
       + '  chmod 600 "$name.json"\n'
-      + 'done\n', "sh", root.stateDir]
+      + 'done\n'
+      + 'chmod 600 plays.*.json 2>/dev/null || :\n', "sh", root.stateDir]
+  }
+
+  FileView {
+    id: accountRecordWriter
+    atomicWrites: true
+    printErrors: false
+    onSaved: root.repairStateDir()
+  }
+
+  FileView {
+    id: accountRecordReader
+    printErrors: false
+    onLoaded: root.applyAccountRecord(text())
   }
 
   Timer {

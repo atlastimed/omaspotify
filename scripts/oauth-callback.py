@@ -70,7 +70,7 @@ def read_request_line(connection, limit=MAX_REQUEST_BYTES, deadline=None):
             connection.settimeout(min(remaining, PER_CONNECTION_TIMEOUT))
         try:
             chunk = connection.recv(1024)
-        except (TimeoutError, socket.timeout):
+        except TimeoutError:
             return None
         except OSError as error:
             if error.errno == errno.EINTR:
@@ -144,7 +144,7 @@ def serve(port, path, timeout, stdin=None, stdout=None, ready=None):
             listener.settimeout(remaining)
             try:
                 connection, _ = listener.accept()
-            except (TimeoutError, socket.timeout):
+            except TimeoutError:
                 break
             except OSError:
                 break

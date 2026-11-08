@@ -529,7 +529,16 @@ ShellRoot {
           top.check(svc.currentUserId === "bob", "the second profile was not read")
           top.check(!svc.playDays["2026-09-14"], "the next account inherited the record")
           top.check(svc.searchHistory.length === 0, "the next account inherited searches")
-          done()
+          // Spotify can never give this history back, so picking the wrong account
+          // in the sign-in dialog must not cost the first owner their record.
+          svc.currentUserId = ""
+          top.handler = function(x) { top.reply(x, 200, { id: "alice", display_name: "Alice" }) }
+          svc.loadProfile()
+          // /me is background work, which holds back for a few seconds after a page load.
+          top.waitUntil(function() { return !!svc.playDays["2026-09-14"] }, 9000, function() {
+            top.check(svc.playDays["2026-09-14"] === 3, "the first owner's record did not come back")
+            done()
+          })
         })
       })
     } },
