@@ -4899,7 +4899,7 @@ Item {
   ArtworkCache {
     id: artworkCache
     directory: root.artworkDir
-    enabled: root.artworkEnabled && root.lazyCachesWanted
+    wanted: root.artworkEnabled && root.lazyCachesWanted
     priorityItems: root.sidebarRawItems
   }
 

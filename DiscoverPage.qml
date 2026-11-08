@@ -1,25 +1,17 @@
-import QtQuick
-import QtQuick.Controls
-import qs.Commons
-import qs.Ui
+pragma ComponentBehavior: Bound
 
-import "Api.js" as Api
+import QtQuick
 
 Item {
   id: page
 
   property var panel: null
 
-  component KeyHint: PanelKeyHint {
-    panel: page.panel
-  }
-
   MediaCollection {
     anchors.fill: parent
     service: page.panel.service
     sourceItems: page.panel.service ? page.panel.service.discoverPlaylists : []
     filterText: page.panel.discoverFilter
-    showFilter: false
     showQueue: false
     showPlaylist: false
     showSave: true
@@ -28,6 +20,7 @@ Item {
     hasMore: false
     restoredContentY: page.panel.scrollFor("discover")
     stateKey: "discover"
+    emptyGlyph: "󰲸"
     emptyMessage: page.panel.service && page.panel.service.discoverLoading
       ? "Finding playlists picked for you…"
       : (page.panel.discoverFilter.trim() ? "No matches in Discover."

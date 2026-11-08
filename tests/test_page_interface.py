@@ -16,10 +16,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 PANEL = ROOT / "Panel.qml"
 POPUPS = ["ShortcutHelpPopup", "LyricsInstallPopup", "MediaContextMenu",
-          "PlaylistPicker", "CreatePlaylistPopup", "SleepPopup"]
-# Pages take the panel as `page.panel`, popups as `popup.panel`.
+          "PlaylistPicker", "CreatePlaylistPopup", "SleepPopup", "ConfirmPopup"]
+PIECES = ["PlayerFooter", "PanelSidebar", "PanelShortcuts", "PanelToast", "PageTabs",
+          "SettingToggle", "SettingButton", "SettingField"]
+# Pages take the panel as `page.panel`, popups as `popup.panel`, and the other
+# pieces split out of the panel as `part.panel`.
 PARTS = [(p, "page") for p in sorted(ROOT.glob("*Page.qml"))]
 PARTS += [(ROOT / f"{n}.qml", "popup") for n in POPUPS]
+PARTS += [(ROOT / f"{n}.qml", "part") for n in PIECES]
 PAGES = [p for p, _ in PARTS]
 
 # Things every Item has, which a page may legitimately read off the panel.
@@ -102,7 +106,7 @@ class PageInterface(unittest.TestCase):
         panel_ids = set(re.findall(r"^\s*id:\s*(\w+)", panel, re.M))
         panel_locals = set(re.findall(r"\bvar\s+(\w+)", panel))
         # The root id each extracted file uses is a convention, not a leak.
-        roots = {"page", "popup"}
+        roots = {"page", "popup", "part"}
 
         offenders = []
         for path, _ in PARTS:
@@ -133,9 +137,65 @@ class HoverHighlights(unittest.TestCase):
         offenders = []
         for path in sorted(ROOT.glob("*.qml")):
             for number, line in enumerate(path.read_text().splitlines(), 1):
-                if re.search(r"[hH]asCursor:.*(cursorOn\(|miniCursorActive)", line):
+                if re.search(r"([hH]asCursor|selected):.*(cursorOn\(|miniCursorActive)", line):
                     offenders.append(f"{path.name} line {number}")
         self.assertFalse(offenders, "; ".join(offenders))
+
+    def test_hover_never_paints_beside_a_keyboard_cursor(self):
+        """A row that fills on hover must also yield to the keyboard, or two rows
+        look current at once."""
+        offenders = []
+        for name in ("MediaRow", "SidebarRow"):
+            text = (ROOT / f"{name}.qml").read_text()
+            if not re.search(r"hovered && hoverPaints", text):
+                offenders.append(name)
+        self.assertFalse(offenders, "; ".join(offenders))
+
+
+class ReadableText(unittest.TestCase):
+    def test_the_decorative_muted_colour_is_not_used_for_text(self):
+        offenders = []
+        for path in sorted(ROOT.glob("*.qml")):
+            for number, line in enumerate(path.read_text().splitlines(), 1):
+                if "Color.muted" in line:
+                    offenders.append(f"{path.name} line {number}")
+        self.assertFalse(offenders, "; ".join(offenders))
+
+
+class PlainText(unittest.TestCase):
+    def test_text_from_outside_cannot_turn_into_rich_text(self):
+        """Left on its default, a Text renders any markup it is handed, and an
+        image tag in a speaker's name or an error message fetches over the network."""
+        offenders = []
+        for path in sorted(ROOT.glob("*.qml")):
+            text = path.read_text()
+            for match in re.finditer(r"(?m)^\s*Text \{", text):
+                depth, at = 0, match.end() - 1
+                while at < len(text):
+                    depth += {"{": 1, "}": -1}.get(text[at], 0)
+                    if depth == 0:
+                        break
+                    at += 1
+                block = text[match.start():at]
+                value = re.search(r"(?m)^\s*text: (.*)$", block)
+                if not value or "textFormat:" in block:
+                    continue
+                if not re.fullmatch(r'"[^"]*"', value.group(1).strip()):
+                    line = text[:match.start()].count("\n") + 1
+                    offenders.append(f"{path.name} line {line}")
+        self.assertFalse(offenders, "; ".join(offenders))
+
+
+class CursorActions(unittest.TestCase):
+    def test_every_action_a_control_highlights_can_be_reached(self):
+        """A control can only light up for an action the panel can land on."""
+        panel = strip_strings(PANEL.read_text())
+        text = PANEL.read_text()
+        offered = set(re.findall(r'"((?:nav|lib|home|library|search|detail|playlist|queue|stats)-[\w-]+)"', text))
+        self.assertIn("lib-sort", offered)
+        self.assertIn("queue-refresh", offered)
+        self.assertIn("function pageCursorActions", text)
+        self.assertNotIn("page-list", panel)
 
 
 if __name__ == "__main__":

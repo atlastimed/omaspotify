@@ -1,9 +1,9 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Popup {
   id: popup
@@ -166,24 +166,27 @@ Popup {
       topPadding: Style.space(4)
       bottomPadding: Style.space(4)
       text: popup.panel.contextItem ? String(popup.panel.contextItem.name || "Spotify item") : "Spotify item"
-      color: popup.panel.muted
+      textFormat: Text.PlainText
+      color: popup.panel.foreground
       font.family: popup.panel.fontFamily
       font.pixelSize: Style.font.caption
       font.bold: true
       elide: Text.ElideRight
     }
 
-    Text {
-      width: parent.width
-      leftPadding: Style.space(8)
-      rightPadding: Style.space(8)
-      text: "Arrows or Enter to choose · Esc to close"
-      color: popup.panel.muted
-      font.family: popup.panel.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
     PanelSeparator { width: parent.width; foreground: popup.panel.foreground }
+
+    ContextMenuButton {
+      contextAction: "ctx-pin"
+      visible: popup.panel.contextFromSidebar
+      text: popup.panel.contextItem && popup.panel.contextItem.pinned
+        ? "Unpin from the top" : "Pin to the top"
+      iconText: "󰐃"
+      onClicked: {
+        popup.close()
+        popup.panel.togglePinnedContextItem()
+      }
+    }
 
     ContextMenuButton {
       contextAction: "ctx-play"
@@ -326,9 +329,15 @@ Popup {
       text: "Remove from playlist"
       iconText: "󰅖"
       onClicked: {
-        var position = popup.panel.playlistPosition(popup.panel.contextItem)
+        var item = popup.panel.contextItem
+        var playlist = popup.panel.contextPlaylist
+        var position = popup.panel.playlistPosition(item)
+        var service = popup.panel.service
         popup.close()
-        popup.panel.service.removePlaylistItem(popup.panel.contextItem, position, popup.panel.contextPlaylist)
+        popup.panel.askToConfirm("Remove “" + String(item.name || "this song") + "” from "
+          + String(playlist.name || "this playlist") + "?", "Remove", function() {
+            service.removePlaylistItem(item, position, playlist)
+          })
       }
     }
 

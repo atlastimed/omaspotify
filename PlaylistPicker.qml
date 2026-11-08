@@ -1,9 +1,9 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Popup {
   id: popup
@@ -20,6 +20,7 @@ Popup {
   focus: true
   closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
 
+  onOpened: playlistPickerList.forceActiveFocus()
   onClosed: Qt.callLater(function() { popup.panel.restoreFocus() })
 
   background: BorderSurface {
@@ -37,6 +38,7 @@ Popup {
       text: popup.panel.pendingPlaylistItem
         ? "Add “" + String(popup.panel.pendingPlaylistItem.name || "song") + "” to a playlist"
         : "Add to playlist"
+      textFormat: Text.PlainText
       color: popup.panel.foreground
       font.family: popup.panel.fontFamily
       font.pixelSize: Style.font.subtitle
@@ -99,12 +101,14 @@ Popup {
       highlightFollowsCurrentItem: true
       activeFocusOnTab: true
       ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
+      currentIndex: 0
       Keys.onReturnPressed: if (currentItem) currentItem.clicked()
       Keys.onEnterPressed: if (currentItem) currentItem.clicked()
 
       FastScrollHandler { parent: playlistPickerList; flickable: playlistPickerList }
 
       delegate: Button {
+        id: pickerRow
         required property var modelData
         width: Math.max(80, ListView.view.width
           - (playlistPickerList.contentHeight > playlistPickerList.height
@@ -113,6 +117,7 @@ Popup {
         iconText: "󰲸"
         foreground: popup.panel.foreground
         leftAlign: true
+        hasCursor: ListView.isCurrentItem && playlistPickerList.activeFocus
         onClicked: {
           if (popup.panel.service && popup.panel.pendingPlaylistItem)
             popup.panel.service.addItemToPlaylist(popup.panel.pendingPlaylistItem, modelData)

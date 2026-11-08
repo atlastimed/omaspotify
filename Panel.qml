@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import Quickshell
@@ -59,7 +61,6 @@ Item {
   property var restoredPlaylist: null
   property int restoredPlaylistItemCount: 0
   property int restoredDetailItemCount: 0
-  readonly property bool artworkVisible: !service || service.artworkEnabled
 
   property string draftClientId: ""
   property string draftDeviceName: "OmaSpotify"
@@ -98,6 +99,7 @@ Item {
   property string contextPlaybackUri: ""
   property int contextSourceIndex: -1
   property var contextPlaylist: null
+  property bool contextFromSidebar: false
   property var pendingPlaylistItem: null
   property string newPlaylistName: ""
   property string createPlaylistName: ""
@@ -110,7 +112,10 @@ Item {
   readonly property color foreground: Commons.Color.foreground
   readonly property color background: Commons.Color.background
   readonly property color accent: Commons.Color.accent
-  readonly property color muted: Commons.Color.muted
+  // Readable secondary text. The theme's own muted colour is decorative.
+  readonly property color muted: Api.secondaryTextColor(Commons.Color.foreground,
+    Commons.Color.background)
+  readonly property int pageGap: Style.space(8)
   // In-panel popups have no blur behind them, so a translucent theme popup
   // colour is floored to stay readable over the list beneath.
   readonly property color popupBackground: Api.opaqueSurface(
@@ -135,7 +140,7 @@ Item {
     && artistSearchText.trim() !== ""
   readonly property bool shortcutsBlocked: mediaContextMenu.opened
     || playlistPicker.opened || createPlaylistPopup.opened || sleepPopup.opened
-    || shortcutHelpPopup.opened || lyricsInstallPopup.opened
+    || shortcutHelpPopup.opened || lyricsInstallPopup.opened || confirmPopup.opened
   readonly property bool shortcutHintsEnabled: service
     ? service.shortcutHintsEnabled : true
   readonly property bool typingInField: {
@@ -151,10 +156,19 @@ Item {
   readonly property real windowHeight: window.height
   // The library is a list or a grid, never both. Everything the keyboard does
   // has to follow whichever one is on screen.
-  readonly property var sidebarListView: libraryViewIsGrid ? playlistGrid
-    : playlistShortcuts
+  readonly property var sidebarListView: sidebar.libraryView
   readonly property int playlistShortcutIndex: sidebarListView.currentIndex
   readonly property bool searchFieldFocused: unifiedSearchField.activeFocus
+  readonly property bool searchBarVisible: unifiedSearchBar.visible
+  readonly property bool searchInline: contentPane.width >= Style.space(560)
+  readonly property bool shortcutHelpOpen: shortcutHelpPopup.opened
+  // The keyboard is showing the cursor. Hover moves it without drawing it.
+  readonly property bool keyboardCursorShown: panelCursorVisible && !panelCursorFromPointer
+  readonly property bool pageRefreshing: service && (service.homeLoading
+    || service.devicesLoading || service.queueLoading || service.detailLoading)
+  // Worked out once per cursor change, so the hints on screen share one answer.
+  property var cursorNav: ({ tab: {}, back: {}, regionActions: [], sidebarIndex: -1,
+    sidebarCount: 0, pageIndex: -1, pageCount: 0 })
   readonly property bool hintCtrlHeld: (heldModifierFlags & Qt.ControlModifier) !== 0
   readonly property bool hintShiftHeld: (heldModifierFlags & Qt.ShiftModifier) !== 0
   readonly property bool hintAltHeld: (heldModifierFlags & Qt.AltModifier) !== 0
@@ -336,6 +350,7 @@ Item {
   function openMediaContext(item, sceneX, sceneY, sourceItems, contextUri, index,
       playbackContextUri) {
     if (!item) return
+    contextFromSidebar = false
     contextItem = item
     contextSourceItems = Array.isArray(sourceItems) ? sourceItems : []
     contextSourceUri = String(contextUri || "")
@@ -374,7 +389,43 @@ Item {
       sleepPopup.close()
       return true
     }
+    if (confirmPopup.opened) {
+      confirmPopup.close()
+      return true
+    }
     return false
+  }
+
+  function askToConfirm(message, confirmText, action) {
+    confirmPopup.message = String(message || "")
+    confirmPopup.confirmText = String(confirmText || "Confirm")
+    confirmPopup.action = action
+    confirmPopup.open()
+  }
+
+  function dismissFailure() {
+    if (!service || !service.lastError || currentTab === "login") return false
+    service.lastError = ""
+    return true
+  }
+
+  function retryAfterFailure() {
+    dismissFailure()
+    refreshCurrentView()
+  }
+
+  // Refresh the current surface. Invalidating the entire sidebar here used to
+  // spend dozens of unrelated requests.
+  function refreshCurrentView() {
+    if (!service) return
+    service.retryApiRequests()
+    if (currentTab === "home" && homeType === "releases") service.releaseFeed.load()
+    else if (showingUniversalSearch) runUnifiedSearch(true)
+    else if (currentTab === "detail" && service.detailItem)
+      service.openDetail(service.detailItem,
+        service.detailItem.type === "artist" ? artistSearchText : "")
+    else if (currentTab === "library") service.loadLibrary(libraryType, false, true)
+    else service.refreshView(currentTab)
   }
 
   function disarmEscapeClose() {
@@ -411,11 +462,15 @@ Item {
 
   function turnPlaylistIntoOwn(playlist) {
     if (!service || !playlist) return
-    service.makePlaylistYourOwn(playlist, function(copy) {
-      if (!copy) return
-      root.chooseTab("playlists")
-      root.service.openPlaylist(copy)
-    })
+    askToConfirm("Copy every available song from “" + String(playlist.name || "this playlist")
+      + "” into a new private playlist, then stop following the original?", "Make my copy",
+      function() {
+        root.service.makePlaylistYourOwn(playlist, function(copy) {
+          if (!copy) return
+          root.chooseTab("playlists")
+          root.service.openPlaylist(copy)
+        })
+      })
   }
 
   function playlistForContext(uri) {
@@ -693,7 +748,7 @@ Item {
     if (!shortcutHintsEnabled) return
     shortcutModeLatched = true
     if (sequence) applySequenceModifiers(sequence)
-    syncCollectionCursor()
+    scheduleCursorRefresh()
   }
 
   function clearShortcutMode() {
@@ -754,9 +809,7 @@ Item {
 
   function pageListCount() {
     var collection = pageCollection()
-    if (collection) return collection.listCount
-    var list = pageListView()
-    return list ? list.count : 0
+    return collection ? collection.listCount : 0
   }
 
   function firstVisibleIndexOf(list) {
@@ -808,12 +861,7 @@ Item {
     var collection = collectionForListAction(panelCursorAction)
     if (collection && collection.jumpToFirstVisible) {
       collection.jumpToFirstVisible()
-      return
     }
-    var list = pageListView()
-    if (!list || list.count <= 0) return
-    var index = firstVisibleIndexOf(list)
-    if (index >= 0) list.currentIndex = index
   }
 
   function searchPageLanding() {
@@ -845,65 +893,33 @@ Item {
 
   function navHintFor(region, action) {
     if (!shortcutHintsEnabled || !shortcutModeLatched) return ""
-    var tab = tabDestination(false)
-    var back = tabDestination(true)
+    var nav = cursorNav
     var listAction = ""
     var listIndex = -1
     var listCount = 0
     if (region === "sidebar") {
       listAction = "sidebar-playlists"
-      listIndex = sidebarListView.currentIndex
-      listCount = sidebarListView.count
+      listIndex = nav.sidebarIndex
+      listCount = nav.sidebarCount
     } else if (region === "page") {
-      listAction = Api.isCursorListAction(panelCursorAction)
-        ? panelCursorAction : ""
-      var collection = collectionForListAction(listAction || "list")
-      var list = pageListView()
-      if (collection) {
-        listIndex = collection.listCurrentIndex
-        listCount = collection.listCount
-      } else if (list) {
-        listIndex = list.currentIndex
-        listCount = list.count
-      }
+      listAction = Api.isCursorListAction(panelCursorAction) ? panelCursorAction : ""
+      listIndex = nav.pageIndex
+      listCount = nav.pageCount
     }
     return Api.cursorNavHint({
       region: region,
       action: action,
       currentRegion: panelCursorRegion,
       currentAction: panelCursorAction,
-      regionActions: regionCursorActions(panelCursorRegion),
-      tabRegion: tab.region,
-      tabAction: tab.action,
-      backtabRegion: back.region,
-      backtabAction: back.action,
+      regionActions: nav.regionActions,
+      tabRegion: nav.tab.region,
+      tabAction: nav.tab.action,
+      backtabRegion: nav.back.region,
+      backtabAction: nav.back.action,
       listAction: listAction,
       listIndex: listIndex,
       listCount: listCount,
       cursorActive: panelCursorVisible,
-      modifiersHeld: hintCtrlHeld || hintShiftHeld || hintAltHeld
-    })
-  }
-
-  function pageListRowHint(index, list) {
-    if (!list || !panelCursorVisible || !shortcutHintsActive) return ""
-    var actions = pageCursorActions()
-    var prev = Api.moveCursorAction(actions, "list", -1)
-    var next = Api.moveCursorAction(actions, "list", 1)
-    var tab = tabDestination(false)
-    var back = tabDestination(true)
-    return Api.cursorListRowHint({
-      rowIndex: index,
-      currentIndex: list.currentIndex,
-      count: list.count,
-      tabRowIndex: firstVisibleIndexOf(list),
-      atList: panelCursorRegion === "page" && panelCursorAction === "list",
-      previousIsCurrent: panelCursorRegion === "page" && panelCursorAction === prev
-        && prev !== "list",
-      nextIsCurrent: panelCursorRegion === "page" && panelCursorAction === next
-        && next !== "list",
-      tabIsList: tab.region === "page" && tab.action === "list",
-      backtabIsList: back.region === "page" && back.action === "list",
       modifiersHeld: hintCtrlHeld || hintShiftHeld || hintAltHeld
     })
   }
@@ -933,28 +949,29 @@ Item {
     })
   }
 
-  function findNamedItem(item, name) {
-    if (!item) return null
-    if (item.visible === false) return null
-    if (item.objectName === name) return item
-    var kids = item.children
-    if (!kids) return null
-    for (var i = 0; i < kids.length; i++) {
-      var found = findNamedItem(kids[i], name)
-      if (found) return found
-    }
-    return null
+  // Runs on every cursor move, so it never walks into the rows of a list.
+  // The extra arguments are only there to redo this when one of them changes.
+  function sidebarListRowHint(index) {
+    return sidebarPlaylistNavHint(index)
   }
 
   function findNamedItems(item, name, found) {
     var results = found || []
     if (!item || item.visible === false) return results
-    if (item.objectName === name) results.push(item)
+    if (item.objectName === name) {
+      results.push(item)
+      return results
+    }
+    if (item.objectName === "media-collection") return results
     var kids = item.children
     if (!kids) return results
     for (var i = 0; i < kids.length; i++)
       findNamedItems(kids[i], name, results)
     return results
+  }
+
+  function findNamedItem(item, name) {
+    return findNamedItems(item, name)[0] || null
   }
 
   function pageCollection() {
@@ -963,10 +980,6 @@ Item {
 
   function pageCollections() {
     return findNamedItems(pageLoader.item, "media-collection")
-  }
-
-  function pageListView() {
-    return findNamedItem(pageLoader.item, "page-list")
   }
 
   function collectionForListAction(action) {
@@ -984,15 +997,22 @@ Item {
   function sidebarCursorActions() {
     if (currentTab === "login") return []
     var actions = []
+    if (extraNarrowWidth) {
+      var narrow = extraNarrowNavigationItems()
+      for (var n = 0; n < narrow.length; n++) actions.push("nav-" + narrow[n].id)
+      return actions
+    }
     var items = primaryNavigationItems()
     for (var i = 0; i < items.length; i++)
       actions.push("nav-" + items[i].id)
     actions.push("nav-library")
     if (accountConnected && service && !service.playlistActionBusy)
       actions.push("nav-create")
-    if (!compactWidth && service && service.sidebarPlaylists().length)
-      actions.push("sidebar-playlists")
-    actions.push("nav-settings")
+    if (!compactWidth) {
+      actions.push("lib-filter", "lib-sort", "lib-view")
+      if (service && service.sidebarItems.length) actions.push("sidebar-playlists")
+    }
+    actions.push("nav-setup")
     return actions
   }
 
@@ -1018,16 +1038,20 @@ Item {
       if (service && service.currentArtistContextAvailable) actions.push("artist")
       if (service && service.currentAlbumContextAvailable) actions.push("album")
     }
-    if (service && service.playbackControllable)
-      actions.push("shuffle", spokenWordPlaying ? "back15" : "previous", "play",
-        spokenWordPlaying ? "forward30" : "next", "repeat")
-    else if (service && service.playbackStartable) actions.push("play")
-    if (service && service.lyricsAvailable) actions.push("lyrics")
-    actions.push("expand")
+    if (service && service.playbackControllable) {
+      if (!extraNarrowWidth) actions.push("shuffle")
+      actions.push(spokenWordPlaying ? "back15" : "previous", "play",
+        spokenWordPlaying ? "forward30" : "next")
+      if (!extraNarrowWidth) actions.push("repeat")
+    } else if (service && service.playbackStartable) actions.push("play")
     if (service && service.lengthSeconds > 0 && service.playbackControllable)
       actions.push("seek")
-    actions.push("devices", "sleep")
-    if (service && service.volumeSupported) actions.push("volume")
+    if (!extraNarrowWidth) {
+      if (service && service.volumeSupported) actions.push("volume")
+      actions.push("devices", "sleep")
+      if (service && service.lyricsAvailable) actions.push("lyrics")
+      actions.push("expand")
+    }
     return actions
   }
 
@@ -1043,14 +1067,14 @@ Item {
         "library-shows", "library-episodes", "library-audiobooks")
     if (currentTab === "playlists" && service && service.selectedPlaylist)
       actions.push("playlist-play", "playlist-more")
+    if (currentTab === "queue") actions.push("queue-refresh")
+    if (currentTab === "stats")
+      actions.push("stats-short_term", "stats-medium_term", "stats-long_term")
     if (showingUniversalSearch) {
       if (service && service.searchError) actions.push("retry-search")
       for (var s = 0; s < Api.SEARCH_TYPES.length; s++)
         actions.push("search-" + Api.SEARCH_TYPES[s])
     }
-    var artistCatalog = currentTab === "detail" && service && service.detailItem
-      && service.detailItem.type === "artist" && !artistScopedSearchActive
-      && !showingUniversalSearch
     if (currentTab === "detail" && service && service.detailItem
         && !showingUniversalSearch) {
       var kind = service.detailItem.type
@@ -1059,16 +1083,23 @@ Item {
         actions.push("detail-play")
       actions.push("detail-save", "detail-more")
     }
-    if (artistCatalog) {
-      actions.push("list-albums", "list-songs")
-      if (service && service.artistThisIsPlaylist) actions.push("detail-thisis")
-    } else {
-      var collection = pageCollection()
-      if (collection && collection.showSort) actions.push("sort")
-      if (collection || pageListView()) actions.push("list")
-      if (collection && collection.hasMore) actions.push("more")
-      if (collection && collection.filterScanAvailable) actions.push("filter-scan")
+    // Some pages list their own controls: Settings, Devices, search history.
+    var page = pageLoader.item
+    if (page && page.cursorActions) actions = actions.concat(page.cursorActions())
+    var collections = pageCollections()
+    for (var c = 0; c < collections.length; c++) {
+      var collection = collections[c]
+      if (collections.length === 1 && collection.showSort) actions.push("sort")
+      actions.push(collection.keyboardListId || "list")
+      if (collections.length === 1) {
+        if (collection.hasMore) actions.push("more")
+        if (collection.filterScanAvailable) actions.push("filter-scan")
+      }
     }
+    if (currentTab === "detail" && service && service.artistThisIsPlaylist
+        && !artistScopedSearchActive && !showingUniversalSearch
+        && service.detailItem && service.detailItem.type === "artist")
+      actions.push("detail-thisis")
     return actions
   }
 
@@ -1113,10 +1144,12 @@ Item {
     var fallback = region === "footer" ? "play" : ""
     panelCursorAction = Api.ensureCursorAction(regionCursorActions(region),
       panelCursorAction, fallback)
-    syncCollectionCursor()
+    scheduleCursorRefresh()
   }
 
   function setPanelCursor(region, action) {
+    if (panelCursorActive && panelCursorFromPointer && panelCursorRegion === region
+        && panelCursorAction === action) return
     panelCursorActive = true
     panelCursorFromPointer = true
     panelCursorRegion = region
@@ -1139,18 +1172,13 @@ Item {
     var next = Api.listIndexAfterMove(list.count, list.currentIndex, delta)
     if (next < 0) return false
     list.currentIndex = next
+    list.positionViewAtIndex(next, list.Contain === undefined ? 2 : list.Contain)
     return true
   }
 
   function movePageList(delta) {
     var collection = collectionForListAction(panelCursorAction)
-    if (collection && collection.moveCurrent) return collection.moveCurrent(delta)
-    var list = pageListView()
-    if (!list) return false
-    var next = Api.listIndexAfterMove(list.count, list.currentIndex, delta)
-    if (next < 0) return false
-    list.currentIndex = next
-    return true
+    return collection && collection.moveCurrent ? collection.moveCurrent(delta) : false
   }
 
   function enterListAction(action, delta) {
@@ -1161,13 +1189,7 @@ Item {
     }
     if (!Api.isCursorListAction(action)) return
     var collection = collectionForListAction(action)
-    if (collection && collection.jumpToEdge) {
-      collection.jumpToEdge(delta < 0)
-      return
-    }
-    var list = pageListView()
-    if (list && list.count > 0)
-      list.currentIndex = delta < 0 ? list.count - 1 : 0
+    if (collection && collection.jumpToEdge) collection.jumpToEdge(delta < 0)
   }
 
   function movePanelCursor(delta) {
@@ -1188,8 +1210,6 @@ Item {
     for (var i = 0; i < collections.length; i++) {
       if (collections[i] && collections[i].blurList) collections[i].blurList()
     }
-    var list = pageListView()
-    if (list && list.activeFocus) list.focus = false
   }
 
   function syncCursorFocus() {
@@ -1204,40 +1224,53 @@ Item {
     if (Api.isCursorListAction(panelCursorAction)) {
       var collection = collectionForListAction(panelCursorAction)
       if (collection && collection.focusList) collection.focusList()
-      else if (pageListView()) {
-        var list = pageListView()
-        list.forceActiveFocus()
-        if (list.currentIndex < 0 && list.count > 0) list.currentIndex = 0
-      }
       return
     }
     blurPageLists()
     focusScope.forceActiveFocus()
   }
 
-  function syncCollectionCursor() {
-    var collections = pageCollections()
-    var actions = pageCursorActions()
-    var tab = tabDestination(false)
-    var back = tabDestination(true)
+  function scheduleCursorRefresh() {
+    Qt.callLater(refreshCursorState)
+  }
+
+  function refreshCursorState() {
+    var latched = shortcutHintsEnabled && shortcutModeLatched
     var hintsOn = shortcutHintsActive
+    var collections = pageCollections()
+    var tab = latched ? tabDestination(false) : ({})
+    var back = latched ? tabDestination(true) : ({})
+    var current = latched ? collectionForListAction(
+      Api.isCursorListAction(panelCursorAction) ? panelCursorAction : "list") : null
+    if (latched) cursorNav = {
+      tab: tab,
+      back: back,
+      regionActions: regionCursorActions(panelCursorRegion),
+      sidebarIndex: sidebarListView.currentIndex,
+      sidebarCount: sidebarListView.count,
+      pageIndex: current ? current.listCurrentIndex : -1,
+      pageCount: current ? current.listCount : 0
+    }
+    var actions = hintsOn ? pageCursorActions() : []
+    var shown = keyboardCursorShown
     for (var i = 0; i < collections.length; i++) {
       var collection = collections[i]
       var id = collection.keyboardListId || "list"
-      var prev = Api.moveCursorAction(actions, id, -1)
-      var next = Api.moveCursorAction(actions, id, 1)
+      var prev = hintsOn ? Api.moveCursorAction(actions, id, -1) : ""
+      var next = hintsOn ? Api.moveCursorAction(actions, id, 1) : ""
+      collection.cursorHost = root
+      collection.keyboardCursorShown = shown
       collection.keyboardHintsActive = hintsOn
-      collection.keyboardSortSelected = cursorOn("page", "sort")
-      collection.keyboardMoreSelected = cursorOn("page", "more")
-      collection.keyboardFilterScanSelected = cursorOn("page", "filter-scan")
+      collection.keyboardSortSelected = cursorShown("page", "sort")
+      collection.keyboardMoreSelected = cursorShown("page", "more")
+      collection.keyboardFilterScanSelected = cursorShown("page", "filter-scan")
       collection.keyboardFilterScanHint = hintsOn ? navHintFor("page", "filter-scan") : ""
       collection.keyboardSortHint = hintsOn ? navHintFor("page", "sort") : ""
       collection.keyboardMoreHint = hintsOn ? navHintFor("page", "more") : ""
-      collection.keyboardListHint = ""
       collection.keyboardAtList = cursorOn("page", id)
-      collection.keyboardAtListPrev = cursorOn("page", prev)
+      collection.keyboardAtListPrev = hintsOn && cursorOn("page", prev)
         && !Api.isCursorListAction(prev)
-      collection.keyboardAtListNext = cursorOn("page", next)
+      collection.keyboardAtListNext = hintsOn && cursorOn("page", next)
         && !Api.isCursorListAction(next)
       collection.keyboardListIsTab = hintsOn && tab.region === "page"
         && tab.action === id
@@ -1263,13 +1296,14 @@ Item {
     else if (action === "nav-queue") chooseTab("queue")
     else if (action === "nav-nowplaying") toggleNowPlayingExpanded()
     else if (action === "nav-stats") chooseTab("stats")
-    else if (action === "nav-library") chooseTab("library")
-    else if (action === "nav-playlists") chooseTab("playlists")
     else if (action === "nav-create") openCreatePlaylistPopup()
+    else if (action === "lib-filter") cycleLibraryFilter()
+    else if (action === "lib-sort") cycleLibrarySort()
+    else if (action === "lib-view") cycleLibraryView()
     else if (action === "sidebar-playlists") {
-      var rows = service ? service.sidebarPlaylists() : []
+      var rows = service ? service.sidebarItems : []
       openSidebarItem(rows[sidebarListView.currentIndex])
-    } else if (action === "nav-settings") chooseTab("setup")
+    } else if (action.indexOf("nav-") === 0) chooseTab(action.substring(4))
     else if (action === "back") goBack()
     else if (action === "search") focusSearch()
     else if (action === "scope") toggleSearchScope()
@@ -1282,7 +1316,12 @@ Item {
       }
     }
     else if (action === "retry-search" && service) service.retrySearch(searchType)
-    else if (action === "refresh") refreshButton.clicked()
+    else if (action === "refresh") refreshCurrentView()
+    else if (action === "queue-refresh" && service) service.loadQueue()
+    else if (action.indexOf("stats-") === 0 && service)
+      service.setStatsRange(action.substring(6))
+    else if (pageLoader.item && pageLoader.item.activateCursorAction
+        && pageLoader.item.activateCursorAction(action)) return
     else if (action === "close") requestClose()
     else if (action === "like" && service) service.toggleCurrentTrackSaved()
     else if (action === "context") openNowPlayingContext()
@@ -1299,7 +1338,7 @@ Item {
     else if (action === "lyrics") openLyrics()
     else if (action === "expand") toggleNowPlayingExpanded()
     else if (action === "devices") chooseTab("devices")
-    else if (action === "sleep") sleepPopup.open()
+    else if (action === "sleep") openSleepPopup()
     else if (action === "volume") toggleMute()
     else if (action === "releases-more" && service) {
       if (service.releaseFeed.error) service.retryReleaseFeed()
@@ -1338,11 +1377,6 @@ Item {
     } else if (Api.isCursorListAction(action)) {
       var current = collectionForListAction(action)
       if (current && current.activateCurrent) current.activateCurrent()
-      else {
-        var list = pageListView()
-        if (list && list.currentItem && list.currentItem.triggerPrimary)
-          list.currentItem.triggerPrimary()
-      }
     } else if (action === "more") {
       var more = pageCollection()
       if (more && more.requestMore) more.requestMore()
@@ -1384,18 +1418,18 @@ Item {
         return true
       }
     }
-    var list = pageListView()
-    if (list && list.count > 0) {
-      if (list.currentIndex < 0) list.currentIndex = 0
-      if (list.currentItem && list.currentItem.itemData) {
-        var row = list.currentItem
-        var point = row.mapToItem(null, row.width / 2, row.height / 2)
-        openMediaContext(row.itemData, point.x, point.y,
-          list.model || [], "", list.currentIndex)
-        return true
-      }
-    }
     return false
+  }
+
+  function openSidebarContext(item, sceneX, sceneY) {
+    if (!item) return false
+    openMediaContext(item, sceneX, sceneY, [], item.uri, -1)
+    contextFromSidebar = true
+    return true
+  }
+
+  function togglePinnedContextItem() {
+    if (service && contextItem) service.togglePinnedItem(contextItem)
   }
 
   function nowPlayingContextItem() {
@@ -1411,9 +1445,8 @@ Item {
     if (!item) return false
     var x = Style.space(80)
     var y = Math.max(Style.space(8), window.height - Style.space(160))
-    var anchor = currentTrackMoreButton.visible ? currentTrackMoreButton
-      : currentTrackLikeButton
-    if (anchor && anchor.visible) {
+    var anchor = playerFooter.contextAnchor()
+    if (anchor) {
       var point = anchor.mapToItem(window.contentItem, anchor.width, 0)
       x = point.x
       y = point.y
@@ -1427,6 +1460,13 @@ Item {
         || panelCursorAction === "detail-more") {
       activatePanelCursor()
       return mediaContextMenu.opened
+    }
+    if (panelCursorAction === "sidebar-playlists" && service) {
+      var entry = service.sidebarItems[sidebarListView.currentIndex]
+      var row = sidebarListView.currentItem
+      var point = row ? row.mapToItem(null, row.width / 2, row.height / 2)
+        : ({ x: Style.space(80), y: Style.space(120) })
+      return openSidebarContext(entry, point.x, point.y)
     }
     if (panelCursorRegion === "page"
         || Api.isCursorListAction(panelCursorAction)) {
@@ -1543,7 +1583,7 @@ Item {
       return handleContextMenuKey(event)
 
     if (createPlaylistPopup.opened || playlistPicker.opened
-        || shortcutHelpPopup.opened || lyricsInstallPopup.opened)
+        || shortcutHelpPopup.opened || lyricsInstallPopup.opened || confirmPopup.opened)
       return false
 
     if (unifiedSearchField.activeFocus && tabbing) {
@@ -1617,20 +1657,23 @@ Item {
       ensurePanelCursor()
       // The first key only shows a cursor the pointer left behind.
       if (leftByPointer) return true
+      if (horizontal && !ctrl && !alt && pageLoader.item && pageLoader.item.adjustCursorAction
+          && pageLoader.item.adjustCursorAction(panelCursorAction, delta)) return true
       if (!ctrl && !alt && (panelCursorAction === "seek"
           || panelCursorAction === "volume") && horizontal) {
         if (panelCursorAction === "seek") seekBy(delta * 5)
         else adjustVolume(delta * 0.05)
         return true
       }
+      if (panelCursorAction === "sidebar-playlists" && libraryViewIsGrid
+          && (vertical || horizontal)
+          && moveSidebarPlaylists(vertical ? delta * sidebarListView.columns : delta))
+        return true
       if (vertical && panelCursorAction === "sidebar-playlists"
           && moveSidebarPlaylists(delta))
         return true
       if (vertical && Api.isCursorListAction(panelCursorAction)
-          && movePageList(delta)) {
-        syncCollectionCursor()
-        return true
-      }
+          && movePageList(delta)) return true
       movePanelCursor(delta)
       return true
     }
@@ -1911,6 +1954,10 @@ Item {
     else shortcutHelpPopup.open()
   }
 
+  function openSleepPopup() {
+    sleepPopup.open()
+  }
+
   function openLyrics() {
     if (!service || !service.lyricsAvailable) return
     var result = service.requestLyrics(lyricsRequestKey)
@@ -2099,11 +2146,17 @@ Item {
     root.rememberCurrentContentTab()
     if (panelCursorActive) ensurePanelCursor()
   }
-  onPanelCursorActionChanged: syncCollectionCursor()
-  onPanelCursorRegionChanged: syncCollectionCursor()
-  onPanelCursorActiveChanged: syncCollectionCursor()
-  onShortcutModeLatchedChanged: syncCollectionCursor()
-  onHeldModifierFlagsChanged: syncCollectionCursor()
+  onPanelCursorActionChanged: scheduleCursorRefresh()
+  onPanelCursorRegionChanged: scheduleCursorRefresh()
+  onPanelCursorActiveChanged: scheduleCursorRefresh()
+  onPanelCursorVisibleChanged: scheduleCursorRefresh()
+  onPanelCursorFromPointerChanged: scheduleCursorRefresh()
+  onShortcutHintsActiveChanged: scheduleCursorRefresh()
+  onShortcutModeLatchedChanged: scheduleCursorRefresh()
+  onHeldModifierFlagsChanged: scheduleCursorRefresh()
+  onPlaylistShortcutIndexChanged: scheduleCursorRefresh()
+  onSearchFieldFocusedChanged: scheduleCursorRefresh()
+  onArtistScopedSearchActiveChanged: scheduleCursorRefresh()
   onFullyConnectedChanged: Qt.callLater(function() { root.updateLoginGate() })
   onAccountConnectedChanged: Qt.callLater(function() { root.updateLoginGate() })
   onSessionPendingChanged: Qt.callLater(function() { root.updateLoginGate() })
@@ -2154,14 +2207,25 @@ Item {
   }
 
 
-  function libraryFilterLabel() {
-    if (!service) return "All"
-    var mode = service.libraryFilter
+  function libraryFilterName(mode) {
     if (mode === "playlist") return "Playlists"
     if (mode === "artist") return "Artists"
     if (mode === "album") return "Albums"
     if (mode === "show") return "Podcasts"
-    return "All"
+    return "Everything"
+  }
+
+  function nextInCycle(modes, current) {
+    return modes[(modes.indexOf(current) + 1) % modes.length]
+  }
+
+  function libraryFilterLabel() {
+    return libraryFilterName(service ? service.libraryFilter : "all")
+  }
+
+  function nextLibraryFilterLabel() {
+    return libraryFilterName(nextInCycle(Api.libraryFilterModes(),
+      service ? service.libraryFilter : "all"))
   }
 
   function libraryFilterIcon() {
@@ -2181,12 +2245,20 @@ Item {
     service.setLibraryFilter(modes[(at + 1) % modes.length])
   }
 
-  function librarySortLabel() {
-    var mode = service ? service.librarySort : "library"
+  function librarySortName(mode) {
     if (mode === "recent") return "Recents"
     if (mode === "added") return "Recently added"
     if (mode === "alpha") return "Alphabetical"
     return "Library order"
+  }
+
+  function librarySortLabel() {
+    return librarySortName(service ? service.librarySort : "library")
+  }
+
+  function nextLibrarySortLabel() {
+    return librarySortName(nextInCycle(Api.librarySortModes(),
+      service ? service.librarySort : "library"))
   }
 
   function cycleLibrarySort() {
@@ -2204,12 +2276,20 @@ Item {
     return "󰕲"
   }
 
-  function libraryViewLabel() {
-    var mode = service ? service.libraryView : "list"
+  function libraryViewName(mode) {
     if (mode === "compact-list") return "Compact list"
     if (mode === "grid") return "Grid"
     if (mode === "compact-grid") return "Compact grid"
     return "List"
+  }
+
+  function libraryViewLabel() {
+    return libraryViewName(service ? service.libraryView : "list")
+  }
+
+  function nextLibraryViewLabel() {
+    return libraryViewName(nextInCycle(Api.libraryViewModes(),
+      service ? service.libraryView : "list"))
   }
 
   function cycleLibraryView() {
@@ -2256,9 +2336,18 @@ Item {
     openItem(item)
   }
 
-  function sidebarPlaylistName(item) {
-    var name = item && item.name ? String(item.name) : "Playlist"
-    return name.length > 22 ? name.substring(0, 21) + "…" : name
+  function sidebarItemSelected(item) {
+    if (!item || !service) return false
+    if (currentTab === "playlists")
+      return !!service.selectedPlaylist && service.selectedPlaylist.id === item.id
+    return currentTab === "detail" && !!service.detailItem && service.detailItem.id === item.id
+  }
+
+  function sidebarItemPlaying(item) {
+    if (!item || !item.uri || !service) return false
+    var contextUri = service.remotePlayback ? service.remotePlayback.contextUri : ""
+    if (contextUri) return contextUri === item.uri
+    return !!service.currentAlbumItem && service.currentAlbumItem.uri === item.uri
   }
 
   function playlistOptions() {
@@ -2351,9 +2440,10 @@ Item {
     var name = String(createPlaylistName || "").trim()
     if (!service || !name || service.playlistActionBusy) return
     service.createPlaylist(name, function(playlist) {
+      // A failure leaves the popup up with the name still in it, to try again.
+      if (!playlist) return
       createPlaylistPopup.close()
       createPlaylistName = ""
-      if (!playlist) return
       root.chooseTab("playlists")
       root.service.openPlaylist(playlist)
     })
@@ -2408,6 +2498,11 @@ Item {
     panel: root
   }
 
+  ConfirmPopup {
+    id: confirmPopup
+    panel: root
+  }
+
   FloatingWindow {
     id: window
     visible: root.opened
@@ -2415,7 +2510,7 @@ Item {
     color: root.background
     implicitWidth: 980
     implicitHeight: 720
-    minimumSize: Qt.size(700, 560)
+    minimumSize: Qt.size(Style.space(560), Style.space(440))
 
     onVisibleChanged: {
       if (!visible && root.opened && !root.closingFromHost) root.requestClose()
@@ -2483,6 +2578,16 @@ Item {
           event.accepted = true
           return
         }
+        if (root.typingInField) {
+          root.releaseSearchFocus()
+          event.accepted = true
+          return
+        }
+        if (root.dismissFailure()) {
+          root.disarmEscapeClose()
+          event.accepted = true
+          return
+        }
         if (root.leaveUtilityTab()) {
           event.accepted = true
           return
@@ -2495,260 +2600,19 @@ Item {
         event.accepted = true
       }
 
-      Shortcut {
-        sequence: "/"
-        enabled: unifiedSearchBar.visible && !root.shortcutsBlocked
-          && !root.textInputFocused()
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.activateSearch()
-        }
+      PanelShortcuts {
+        panel: root
       }
-      Shortcut {
-        sequence: "Ctrl+F"
-        enabled: unifiedSearchBar.visible && !root.shortcutsBlocked
-          && !unifiedSearchField.activeFocus
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.activateSearch()
-        }
-      }
-      Shortcut {
-        sequence: "C"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.openCurrentContextMenu()
-        }
-      }
-      Shortcut {
-        sequence: "Menu"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.openCurrentContextMenu()
-        }
-      }
-      Shortcut {
-        sequence: "Shift+F10"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.openCurrentContextMenu()
-        }
-      }
-      Shortcut {
-        sequence: "Alt+Left"
-        enabled: !root.shortcutsBlocked
-          && (root.currentTab === "detail" || root.navigationStack.length > 0)
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.goBack()
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+,"
-        enabled: root.accountConnected && !root.shortcutsBlocked
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.chooseTab("setup")
-        }
-      }
-      Shortcut {
-        sequence: "Alt+Shift+H"
-        enabled: root.accountConnected && !root.shortcutsBlocked
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.chooseTab("home")
-        }
-      }
-      Shortcut {
-        sequence: "Alt+Shift+Q"
-        enabled: root.accountConnected && !root.shortcutsBlocked
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.chooseTab("queue")
-        }
-      }
-      Shortcut {
-        sequence: "Alt+Shift+I"
-        enabled: root.accountConnected && !root.shortcutsBlocked
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.chooseTab("stats")
-        }
-      }
-      Shortcut {
-        sequence: "Alt+Shift+N"
-        enabled: root.accountConnected && !root.shortcutsBlocked
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.toggleNowPlayingExpanded()
-        }
-      }
-      Shortcut {
-        sequence: "Alt+Shift+D"
-        enabled: root.accountConnected && !root.shortcutsBlocked
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.chooseTab("devices")
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+Shift+A"
-        enabled: root.accountConnected && !root.shortcutsBlocked
-          && root.service && root.service.currentArtistContextAvailable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.openCurrentArtist()
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+Shift+B"
-        enabled: root.accountConnected && !root.shortcutsBlocked
-          && root.service && root.service.currentAlbumContextAvailable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.openCurrentAlbum()
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+Shift+L"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.lyricsAvailable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.openLyrics()
-        }
-      }
-      Shortcut {
-        sequence: "Space"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.playbackStartable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          if (root.service) root.service.togglePlayback()
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+Right"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.playbackControllable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          if (root.service) root.service.next()
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+Left"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.playbackControllable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          if (root.service) root.service.previous()
-        }
-      }
-      Shortcut {
-        sequence: "M"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.volumeSupported
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.toggleMute()
-        }
-      }
-      Shortcut {
-        sequence: "V"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.nowPlayingExpanded
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.cycleEqualizerMode()
-        }
-      }
-      Shortcut {
-        sequence: "E"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.currentTab !== "login"
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.toggleNowPlayingExpanded()
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+S"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.playbackControllable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.service.setShuffle(!root.service.shuffle)
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+R"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.playbackControllable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.service.cycleRepeat()
-        }
-      }
-      Shortcut {
-        sequence: "Shift+Left"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.playbackControllable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.seekBy(-10)
-        }
-      }
-      Shortcut {
-        sequence: "Shift+Right"
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.playbackControllable
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.seekBy(10)
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+Up"
-        autoRepeat: false
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.volumeSupported
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.adjustVolume(0.05)
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+Down"
-        autoRepeat: false
-        enabled: !root.shortcutsBlocked && !root.textInputFocused()
-          && root.service && root.service.volumeSupported
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.adjustVolume(-0.05)
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+/"
-        enabled: !root.textInputFocused()
-          && (!root.shortcutsBlocked || shortcutHelpPopup.opened)
-        onActivated: {
-          root.latchShortcutMode(sequence)
-          root.toggleShortcutHelp()
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+H"
-        enabled: root.shortcutHintsActive
-        onActivated: root.disableShortcutHints()
+
+      // A click anywhere else hands the keys back, so Space plays again.
+      TapHandler {
+        gesturePolicy: TapHandler.DragThreshold
+        onTapped: if (root.searchFieldFocused) root.releaseSearchFocus()
       }
 
       Item {
         anchors.fill: parent
-        anchors.margins: Style.space(14)
+        anchors.margins: Style.space(12)
 
         Row {
           id: workspace
@@ -2760,420 +2624,15 @@ Item {
           anchors.bottomMargin: Style.space(10)
           spacing: sidebar.visible ? Style.space(10) : 0
 
-          BorderSurface {
+          PanelSidebar {
             id: sidebar
+            panel: root
             visible: root.currentTab !== "login" && !root.extraNarrowWidth
             width: visible
               ? (root.compactWidth ? Style.space(54)
-                : Math.min(Style.space(214), Math.max(Style.space(176), workspace.width * 0.225)))
+                : Math.min(Style.space(250), Math.max(Style.space(176), workspace.width * 0.23)))
               : 0
             height: parent.height
-            color: "transparent"
-            borderSpec: Border.none()
-
-            Row {
-              id: brandRow
-              visible: !root.compactHeight
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: parent.top
-              anchors.margins: visible ? Style.space(2) : 0
-              height: visible ? Style.space(24) : 0
-              spacing: Style.space(9)
-
-              OpticalGlyph {
-                width: root.compactWidth ? parent.width : Style.space(18)
-                height: parent.height
-                text: ""
-                color: root.accent
-                fontFamily: root.fontFamily
-                fontSize: Style.font.iconLarge
-              }
-
-              Column {
-                visible: !root.compactWidth
-                width: Math.max(20, parent.width - Style.space(38)
-                  - brandSettingsButton.width - parent.spacing)
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 0
-
-                Text {
-                  width: parent.width
-                  text: root.appName
-                  color: root.foreground
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.subtitle
-                  font.bold: true
-                  elide: Text.ElideRight
-                }
-              }
-
-              Button {
-                id: brandSettingsButton
-                visible: !root.compactWidth
-                width: visible ? implicitWidth : 0
-                anchors.verticalCenter: parent.verticalCenter
-                iconText: "󰒓"
-                foreground: root.foreground
-                selected: root.currentTab === "setup"
-                horizontalPadding: Style.space(4)
-                focusable: false
-                hasCursor: root.cursorShown("sidebar", "nav-settings")
-                tooltipText: root.shortcutHint("Settings", "Ctrl+,")
-                onClicked: root.chooseTab("setup")
-                onHovered: function(on) {
-                  if (on) root.setPanelCursor("sidebar", "nav-settings")
-                }
-                KeyHint { region: "sidebar"; action: "nav-settings"; sequences: ["Ctrl+,"] }
-              }
-            }
-
-            Column {
-              id: primaryNavigation
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: brandRow.visible ? brandRow.bottom : parent.top
-              anchors.margins: Style.space(2)
-              anchors.topMargin: Style.space(8)
-              spacing: Style.space(2)
-
-              PanelSeparator {
-                width: parent.width
-                foreground: root.foreground
-              }
-
-              Repeater {
-                model: root.primaryNavigationItems()
-
-                Button {
-                  required property var modelData
-                  readonly property bool radioEntry: modelData.id === "radio"
-                  width: primaryNavigation.width
-                  text: root.compactWidth ? "" : modelData.label
-                  iconText: root.compactWidth ? "" : modelData.icon
-                  foreground: root.foreground
-                  selected: radioEntry ? root.radioNavigationSelected()
-                    : root.currentTab === modelData.id
-                  leftAlign: !root.compactWidth
-                  horizontalPadding: root.compactWidth
-                    ? 0 : Style.spacing.controlPaddingX
-                  focusable: false
-                  hasCursor: root.cursorShown("sidebar", "nav-" + modelData.id)
-                  tooltipText: radioEntry && root.service && root.service.lastRadioPlaylist
-                    ? modelData.label + " · " + root.service.lastRadioPlaylist.name
-                    : root.shortcutHint(modelData.label,
-                      root.primaryNavigationShortcut(modelData.id))
-                  onClicked: {
-                    if (radioEntry) root.openLastRadio()
-                    else if (modelData.id === "nowplaying") root.toggleNowPlayingExpanded()
-                    else root.chooseTab(modelData.id)
-                  }
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("sidebar", "nav-" + modelData.id)
-                  }
-                  KeyHint {
-                    region: "sidebar"
-                    action: "nav-" + modelData.id
-                    sequences: root.primaryNavigationShortcut(modelData.id)
-                  }
-                  OpticalGlyph {
-                    anchors.fill: parent
-                    visible: root.compactWidth
-                    text: modelData.icon
-                    color: parent.selected
-                      ? Style.selectedStateColor(root.foreground, root.accent)
-                      : root.foreground
-                    fontFamily: root.fontFamily
-                    fontSize: Style.font.icon
-                  }
-                }
-              }
-
-              PanelSeparator {
-                width: parent.width
-                foreground: root.foreground
-              }
-            }
-
-            Text {
-              id: playlistShortcutsHeading
-              visible: false
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: primaryNavigation.bottom
-              anchors.leftMargin: Style.space(2)
-              anchors.rightMargin: Style.space(2)
-              anchors.topMargin: Style.space(8)
-              height: 0
-              text: ""
-            }
-
-            Column {
-              id: libraryNavigation
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: playlistShortcutsHeading.visible
-                ? playlistShortcutsHeading.bottom : primaryNavigation.bottom
-              anchors.leftMargin: Style.space(2)
-              anchors.rightMargin: Style.space(2)
-              anchors.topMargin: Style.space(6)
-              spacing: Style.space(2)
-
-              Grid {
-                width: parent.width
-                columns: root.compactWidth ? 1 : 2
-                spacing: Style.space(2)
-
-                Button {
-                  width: root.compactWidth ? parent.width
-                    : Math.max(20, parent.width - createPlaylistShortcut.width
-                      - parent.spacing)
-                  text: root.compactWidth ? "" : "Liked Songs"
-                  iconText: root.compactWidth ? "" : "󰋑"
-                  foreground: root.foreground
-                  selected: root.currentTab === "library"
-                  leftAlign: !root.compactWidth
-                  horizontalPadding: root.compactWidth
-                    ? 0 : Style.spacing.controlPaddingX
-                  focusable: false
-                  hasCursor: root.cursorShown("sidebar", "nav-library")
-                  tooltipText: "Liked Songs"
-                  onClicked: root.chooseTab("library")
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("sidebar", "nav-library")
-                  }
-                  KeyHint { region: "sidebar"; action: "nav-library" }
-                  OpticalGlyph {
-                    anchors.fill: parent
-                    visible: root.compactWidth
-                    text: "󰋑"
-                    color: parent.selected
-                      ? Style.selectedStateColor(root.foreground, root.accent)
-                      : root.foreground
-                    fontFamily: root.fontFamily
-                    fontSize: Style.font.icon
-                  }
-                }
-
-                Button {
-                  id: createPlaylistShortcut
-                  width: root.compactWidth
-                    ? parent.width : implicitWidth
-                  text: "+"
-                  foreground: root.foreground
-                  fontSize: Style.font.subtitle
-                  horizontalPadding: Style.space(7)
-                  focusable: false
-                  hasCursor: root.cursorShown("sidebar", "nav-create")
-                  tooltipText: "Create a new playlist"
-                  enabled: root.accountConnected && root.service
-                    && !root.service.playlistActionBusy
-                  onClicked: root.openCreatePlaylistPopup()
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("sidebar", "nav-create")
-                  }
-                  KeyHint { region: "sidebar"; action: "nav-create" }
-                }
-              }
-            }
-
-            // Kind of thing, sort order and view, all on one row. The two
-            // icons say what they are; the sort order needs its words.
-            Row {
-              id: libraryControls
-              visible: !root.compactWidth
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: libraryNavigation.bottom
-              anchors.margins: Style.space(2)
-              anchors.topMargin: Style.space(6)
-              height: visible ? implicitHeight : 0
-              spacing: Style.space(2)
-
-              Button {
-                id: libraryFilterButton
-                iconText: root.libraryFilterIcon()
-                foreground: root.muted
-                focusable: false
-                tooltipText: "Showing · " + root.libraryFilterLabel()
-                onClicked: root.cycleLibraryFilter()
-              }
-
-              Button {
-                id: librarySortButton
-                width: Math.max(40, parent.width - libraryFilterButton.width
-                  - libraryViewButton.width - parent.spacing * 2)
-                text: root.librarySortLabel()
-                iconText: "󰒺"
-                foreground: root.muted
-                leftAlign: true
-                focusable: false
-                tooltipText: "Sort the library"
-                onClicked: root.cycleLibrarySort()
-              }
-
-              Button {
-                id: libraryViewButton
-                iconText: root.libraryViewIcon()
-                foreground: root.muted
-                focusable: false
-                tooltipText: "View · " + root.libraryViewLabel()
-                onClicked: root.cycleLibraryView()
-              }
-            }
-
-            GridView {
-              id: playlistGrid
-              visible: !root.compactWidth && root.libraryViewIsGrid
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: libraryControls.bottom
-              anchors.bottom: setupNavButton.top
-              anchors.margins: Style.space(2)
-              model: root.service ? root.service.sidebarItems : []
-              cellWidth: Math.max(Style.space(56),
-                Math.floor(width / Math.max(1, Math.floor(width / Style.space(84)))))
-              cellHeight: root.libraryViewIsCompact
-                ? cellWidth : cellWidth + Style.space(16)
-              clip: true
-              reuseItems: true
-              keyNavigationEnabled: false
-
-              delegate: SidebarRow {
-                required property var modelData
-                width: playlistGrid.cellWidth
-                height: playlistGrid.cellHeight
-                item: modelData
-                compact: root.libraryViewIsCompact
-                grid: true
-                thumbnailSize: Math.min(width, height) - Style.space(10)
-                fallbackGlyph: root.sidebarItemIcon(modelData)
-                service: root.service
-                foreground: root.foreground
-                accent: root.accent
-                muted: root.muted
-                fontFamily: root.fontFamily
-                selected: root.currentTab === "playlists" && root.service
-                  && root.service.selectedPlaylist
-                  && root.service.selectedPlaylist.id === modelData.id
-                onActivated: root.openSidebarItem(modelData)
-                onContextRequested: {
-                  if (root.service) root.service.togglePinnedItem(modelData)
-                }
-              }
-            }
-
-            ListView {
-              id: playlistShortcuts
-              visible: !root.compactWidth && !root.libraryViewIsGrid
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: libraryControls.bottom
-              anchors.bottom: setupNavButton.top
-              anchors.margins: Style.space(2)
-              model: root.service ? root.service.sidebarItems : []
-              clip: true
-              spacing: Style.space(1)
-              reuseItems: true
-              keyNavigationEnabled: false
-              highlightFollowsCurrentItem: true
-
-              FastScrollHandler {
-                parent: playlistShortcuts
-                flickable: playlistShortcuts
-                onScrolled: {
-                  if (playlistShortcuts.atYEnd && root.service
-                      && root.service.playlistsNext
-                      && !root.service.playlistsLoading)
-                    root.service.loadMorePlaylists()
-                }
-              }
-
-              onMovementEnded: {
-                if (atYEnd && root.service && root.service.playlistsNext
-                    && !root.service.playlistsLoading) root.service.loadMorePlaylists()
-              }
-
-              delegate: SidebarRow {
-                required property var modelData
-                required property int index
-                width: ListView.view.width
-                height: root.libraryRowHeight
-                item: modelData
-                compact: root.libraryViewIsCompact
-                grid: false
-                thumbnailSize: root.libraryThumbSize
-                fallbackGlyph: root.sidebarItemIcon(modelData)
-                service: root.service
-                foreground: root.foreground
-                accent: root.accent
-                muted: root.muted
-                fontFamily: root.fontFamily
-                hasCursor: root.cursorShown("sidebar", "sidebar-playlists")
-                  && ListView.isCurrentItem
-                selected: root.currentTab === "playlists" && root.service
-                  && root.service.selectedPlaylist
-                  && root.service.selectedPlaylist.id === modelData.id
-                onActivated: root.openSidebarItem(modelData)
-                onContextRequested: {
-                  if (root.service) root.service.togglePinnedItem(modelData)
-                }
-                onHoveredChanged: {
-                  if (!hovered) return
-                  playlistShortcuts.currentIndex = index
-                  root.setPanelCursor("sidebar", "sidebar-playlists")
-                }
-                KeyHint {
-                  active: root.shortcutHintsActive
-                  navHint: {
-                    playlistShortcuts.currentIndex
-                    playlistShortcuts.contentY
-                    root.panelCursorAction
-                    root.panelCursorRegion
-                    root.hintCtrlHeld
-                    root.hintShiftHeld
-                    root.hintAltHeld
-                    return root.sidebarPlaylistNavHint(index)
-                  }
-                }
-              }
-            }
-
-            // The cog lives in the title row, so this only covers the narrow
-            // and short layouts where that row is gone.
-            Button {
-              id: setupNavButton
-              visible: !brandSettingsButton.visible
-              height: visible ? implicitHeight : 0
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.bottom: parent.bottom
-              anchors.margins: Style.space(2)
-              text: root.compactWidth ? "" : "Settings"
-              iconText: root.compactWidth ? ""
-                : (root.service && root.service.auth.loggedIn ? "󰀄" : "󰒓")
-              foreground: root.foreground
-              selected: root.currentTab === "setup"
-              leftAlign: !root.compactWidth
-              focusable: false
-              hasCursor: root.cursorShown("sidebar", "nav-settings")
-              tooltipText: root.shortcutHint("Settings", "Ctrl+,")
-              KeyHint { region: "sidebar"; action: "nav-settings"; sequences: ["Ctrl+,"] }
-              onClicked: root.chooseTab("setup")
-              onHovered: function(on) {
-                if (on) root.setPanelCursor("sidebar", "nav-settings")
-              }
-              OpticalGlyph {
-                anchors.fill: parent
-                visible: root.compactWidth
-                text: root.service && root.service.auth.loggedIn ? "󰀄" : "󰒓"
-                color: parent.selected
-                  ? Style.selectedStateColor(root.foreground, root.accent)
-                  : root.foreground
-                fontFamily: root.fontFamily
-                fontSize: Style.font.icon
-              }
-            }
           }
 
           Item {
@@ -3188,15 +2647,17 @@ Item {
               anchors.right: parent.right
               anchors.top: parent.top
               height: visible ? Style.space(32) : 0
-              spacing: Style.space(3)
+              spacing: Style.space(2)
 
               Repeater {
+                id: extraNarrowButtons
                 model: root.extraNarrowNavigationItems()
 
                 Button {
+                  id: narrowNavButton
                   required property var modelData
-                  width: Math.max(1, (extraNarrowNavigation.width
-                    - extraNarrowNavigation.spacing * 6) / 7)
+                  width: Math.max(1, (extraNarrowNavigation.width - extraNarrowNavigation.spacing
+                    * (extraNarrowButtons.count - 1)) / extraNarrowButtons.count)
                   height: extraNarrowNavigation.height
                   horizontalPadding: 0
                   verticalPadding: 0
@@ -3204,12 +2665,16 @@ Item {
                   selected: root.currentTab === modelData.id
                   tooltipText: modelData.label
                   focusable: false
+                  hasCursor: root.cursorShown("sidebar", "nav-" + modelData.id)
                   onClicked: root.chooseTab(modelData.id)
+                  onHovered: function(on) {
+                    if (on) root.setPanelCursor("sidebar", "nav-" + narrowNavButton.modelData.id)
+                  }
 
                   OpticalGlyph {
                     anchors.fill: parent
-                    text: modelData.icon
-                    color: parent.selected
+                    text: narrowNavButton.modelData.icon
+                    color: narrowNavButton.selected
                       ? Style.selectedStateColor(root.foreground, root.accent)
                       : root.foreground
                     fontFamily: root.fontFamily
@@ -3219,181 +2684,150 @@ Item {
               }
             }
 
-            Row {
+            Item {
               id: pageHeader
               anchors.left: parent.left
               anchors.right: parent.right
               anchors.top: extraNarrowNavigation.visible
                 ? extraNarrowNavigation.bottom : parent.top
-              anchors.topMargin: extraNarrowNavigation.visible
-                ? Style.space(4) : 0
-              height: Math.max(closeButton.implicitHeight, titleColumn.implicitHeight)
-              spacing: Style.space(5)
+              anchors.topMargin: extraNarrowNavigation.visible ? Style.space(4) : 0
+              height: Math.max(closeButton.implicitHeight, Style.space(30))
 
-              Button {
-                id: backButton
-                visible: root.currentTab === "detail" || root.navigationStack.length > 0
+              Row {
+                id: headerLeading
+                anchors.left: parent.left
                 anchors.verticalCenter: parent.verticalCenter
-                iconText: "󰁍"
-                foreground: root.foreground
-                tooltipText: root.shortcutHint("Back", "Alt+Left")
-                focusable: false
-                hasCursor: root.cursorShown("header", "back")
-                onClicked: root.goBack()
-                onHovered: function(on) { if (on) root.setPanelCursor("header", "back") }
-                KeyHint { region: "header"; action: "back"; sequences: ["Alt+Left"] }
-              }
+                spacing: Style.space(4)
 
-              Column {
-                id: titleColumn
-                width: Math.max(80, parent.width
-                  - (backButton.visible ? backButton.width + parent.spacing : 0)
-                  - (shortcutHintsDismissButton.visible
-                    ? shortcutHintsDismissButton.width : 0)
-                  - shortcutHelpButton.width - refreshButton.width - closeButton.width
-                  - parent.spacing * (shortcutHintsDismissButton.visible ? 4 : 3))
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(1)
+                Button {
+                  id: backButton
+                  visible: root.currentTab === "detail" || root.navigationStack.length > 0
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: "󰁍"
+                  foreground: root.foreground
+                  tooltipText: root.shortcutHint("Back", "Alt+Left")
+                  focusable: false
+                  hasCursor: root.cursorShown("header", "back")
+                  onClicked: root.goBack()
+                  onHovered: function(on) { if (on) root.setPanelCursor("header", "back") }
+                  KeyHint { region: "header"; action: "back"; sequences: ["Alt+Left"] }
+                }
 
                 Text {
-                  width: parent.width
+                  id: pageTitleText
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Math.min(implicitWidth, root.searchInline
+                    ? Math.max(Style.space(100), contentPane.width * 0.3)
+                    : Math.max(Style.space(80), pageHeader.width - headerActions.width
+                      - (backButton.visible ? backButton.width + headerLeading.spacing : 0)
+                      - Style.space(8)))
                   text: root.pageTitle()
+                  textFormat: Text.PlainText
                   color: root.foreground
                   font.family: root.fontFamily
                   font.pixelSize: Style.font.title
                   font.bold: true
                   elide: Text.ElideRight
                 }
-
               }
 
-              Button {
-                id: shortcutHintsDismissButton
-                visible: root.shortcutHintsActive && !root.extraNarrowWidth
+              Row {
+                id: headerActions
+                anchors.right: parent.right
                 anchors.verticalCenter: parent.verticalCenter
-                text: "Ctrl+H · Hide hints"
-                foreground: root.foreground
-                fontSize: Style.font.caption
-                focusable: false
-                tooltipText: "Hide shortcut hints until re-enabled in Settings · Ctrl+H"
-                onClicked: root.disableShortcutHints()
-              }
+                spacing: Style.space(1)
 
-              Button {
-                id: shortcutHelpButton
-                visible: !root.extraNarrowWidth
-                anchors.verticalCenter: parent.verticalCenter
-                text: "?"
-                foreground: root.foreground
-                fontSize: Style.font.subtitle
-                tooltipText: root.shortcutHint("Keyboard shortcuts", "Ctrl+/")
-                focusable: false
-                hasCursor: root.cursorShown("header", "help")
-                onClicked: root.toggleShortcutHelp()
-                onHovered: function(on) { if (on) root.setPanelCursor("header", "help") }
-                KeyHint { region: "header"; action: "help"; sequences: ["Ctrl+/"] }
-              }
-
-              Button {
-                id: refreshButton
-                visible: root.currentTab !== "login" && root.currentTab !== "setup"
-                anchors.verticalCenter: parent.verticalCenter
-                iconText: "󰑐"
-                foreground: root.foreground
-                tooltipText: "Refresh"
-                focusable: false
-                hasCursor: root.cursorShown("header", "refresh")
-                onHovered: function(on) {
-                  if (on) root.setPanelCursor("header", "refresh")
+                Button {
+                  id: shortcutHintsDismissButton
+                  visible: root.shortcutHintsActive && !root.extraNarrowWidth
+                  anchors.verticalCenter: parent.verticalCenter
+                  text: "Ctrl+H · Hide hints"
+                  foreground: root.foreground
+                  fontSize: Style.font.caption
+                  focusable: false
+                  tooltipText: "Hide shortcut hints until re-enabled in Settings · Ctrl+H"
+                  onClicked: root.disableShortcutHints()
                 }
-                KeyHint { region: "header"; action: "refresh" }
-                onClicked: {
-                  if (!root.service) return
-                  root.service.retryApiRequests()
-                  if (root.currentTab === "home" && root.homeType === "releases")
-                    root.service.releaseFeed.load()
-                  else if (root.showingUniversalSearch) root.runUnifiedSearch(true)
-                  else if (root.currentTab === "detail" && root.service.detailItem)
-                    root.service.openDetail(root.service.detailItem,
-                      root.service.detailItem.type === "artist"
-                        ? root.artistSearchText : "")
-                  else if (root.currentTab === "library")
-                    root.service.loadLibrary(root.libraryType, false, true)
-                  else root.service.refreshView(root.currentTab)
-                  // Refresh the current surface. Invalidating the entire
-                  // sidebar here used to spend dozens of unrelated requests.
-                }
-              }
 
-              Button {
-                id: closeButton
-                anchors.verticalCenter: parent.verticalCenter
-                iconText: "󰅖"
-                foreground: root.escapeCloseArmed ? Commons.Color.urgent : root.foreground
-                bordered: root.escapeCloseArmed
-                borderSpec: root.escapeCloseArmed
-                  ? Border.flat(Commons.Color.urgent, Math.max(1, Style.normalBorderWidth))
-                  : closeButton._borderSpec
-                tooltipText: root.escapeCloseArmed
-                  ? "Press Esc again to close"
-                  : root.shortcutHint("Close", "Esc, Esc")
-                focusable: false
-                hasCursor: root.cursorShown("header", "close")
-                onClicked: root.requestClose()
-                onHovered: function(on) { if (on) root.setPanelCursor("header", "close") }
-                KeyHint { region: "header"; action: "close"; sequences: ["Esc"] }
+                Button {
+                  id: shortcutHelpButton
+                  visible: !root.extraNarrowWidth
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: "󰋖"
+                  foreground: root.foreground
+                  horizontalPadding: Style.space(7)
+                  tooltipText: root.shortcutHint("Keyboard shortcuts", "Ctrl+/")
+                  focusable: false
+                  hasCursor: root.cursorShown("header", "help")
+                  onClicked: root.toggleShortcutHelp()
+                  onHovered: function(on) { if (on) root.setPanelCursor("header", "help") }
+                  KeyHint { region: "header"; action: "help"; sequences: ["Ctrl+/"] }
+                }
+
+                Button {
+                  id: refreshButton
+                  visible: root.currentTab !== "login" && root.currentTab !== "setup"
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: "󰑐"
+                  iconSpinning: root.pageRefreshing
+                  foreground: root.foreground
+                  horizontalPadding: Style.space(7)
+                  tooltipText: "Refresh"
+                  focusable: false
+                  hasCursor: root.cursorShown("header", "refresh")
+                  onHovered: function(on) {
+                    if (on) root.setPanelCursor("header", "refresh")
+                  }
+                  KeyHint { region: "header"; action: "refresh" }
+                  onClicked: root.refreshCurrentView()
+                }
+
+                Button {
+                  id: closeButton
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: "󰅖"
+                  foreground: root.escapeCloseArmed ? Commons.Color.urgent : root.foreground
+                  horizontalPadding: Style.space(7)
+                  bordered: root.escapeCloseArmed
+                  borderSpec: root.escapeCloseArmed
+                    ? Border.flat(Commons.Color.urgent, Math.max(1, Style.normalBorderWidth))
+                    : closeButton._borderSpec
+                  tooltipText: root.escapeCloseArmed
+                    ? "Press Esc again to close"
+                    : root.shortcutHint("Close", "Esc, Esc")
+                  focusable: false
+                  hasCursor: root.cursorShown("header", "close")
+                  onClicked: root.requestClose()
+                  onHovered: function(on) { if (on) root.setPanelCursor("header", "close") }
+                  KeyHint { region: "header"; action: "close"; sequences: ["Esc"] }
+                }
               }
             }
 
-            BorderSurface {
-              id: statusBanner
-              anchors.left: parent.left
-              anchors.right: parent.right
-              anchors.top: pageHeader.bottom
-              anchors.topMargin: visible ? Style.space(6) : 0
-              implicitHeight: visible ? messageText.implicitHeight + Style.space(12) : 0
-              height: implicitHeight
-              visible: root.service && (root.service.lastError !== "" || root.service.statusMessage !== "")
-              color: root.service && root.service.lastError !== ""
-                ? Style.selectedFillFor(root.foreground, Commons.Color.urgent)
-                : Style.normalFillFor(root.foreground, root.accent)
-              borderSpec: Border.controlSpec("normal", root.foreground,
-                root.service && root.service.lastError !== "" ? Commons.Color.urgent : root.accent)
-              radius: Style.cornerRadius
-
-              Text {
-                id: messageText
-                anchors.fill: parent
-                anchors.margins: Style.space(6)
-                text: !root.service ? "" : (root.service.lastError || root.service.statusMessage)
-                color: root.foreground
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                wrapMode: Text.WordWrap
-              }
-            }
-
-            Row {
+            // One field for the page you are on and for all of Spotify. It shares
+            // the title row when there is room, and takes its own row when not.
+            Item {
               id: unifiedSearchBar
               visible: root.currentTab !== "login" && root.currentTab !== "devices"
                 && root.currentTab !== "setup" && root.currentTab !== "stats"
               anchors.left: parent.left
+              anchors.leftMargin: root.searchInline ? headerLeading.width + Style.space(14) : 0
               anchors.right: parent.right
-              anchors.top: statusBanner.visible ? statusBanner.bottom : pageHeader.bottom
-              anchors.topMargin: visible ? Style.space(8) : 0
-              height: visible ? Style.space(38) : 0
-              spacing: Style.space(6)
+              anchors.rightMargin: root.searchInline ? headerActions.width + Style.space(10) : 0
+              anchors.top: root.searchInline ? pageHeader.top : pageHeader.bottom
+              anchors.topMargin: root.searchInline || !visible ? 0 : Style.space(6)
+              height: visible ? Style.space(30) : 0
 
               TextField {
                 id: unifiedSearchField
-                width: searchScopeButton.visible
-                  ? Math.max(0, parent.width - searchScopeButton.width
-                    - parent.spacing)
-                  : parent.width
-                height: parent.height
+                anchors.fill: parent
                 foreground: root.foreground
+                leftPadding: Style.space(26)
+                rightPadding: searchAccessories.width + Style.space(6)
+                verticalPadding: Style.space(4)
                 placeholderText: root.activeSearchScope.available && root.searchInContext
                   ? "Search in " + root.activeSearchScope.label : "Search Spotify"
+                placeholderTextColor: root.muted
                 enabled: root.service && root.service.auth.loggedIn
                 hasCursor: root.cursorShown("header", "search")
                 onTextEdited: root.editUnifiedSearch(text)
@@ -3441,37 +2875,67 @@ Item {
                 KeyHint { region: "header"; action: "search"; sequences: ["/", "Ctrl+F"] }
               }
 
-              Button {
-                id: searchScopeButton
-                visible: root.activeSearchScope.available
-                width: visible ? Math.min(parent.width * 0.4,
-                  Math.max(parent.width * 0.2, implicitWidth)) : 0
-                height: parent.height
-                clip: true
+              Text {
+                anchors.left: parent.left
+                anchors.leftMargin: Style.space(8)
                 anchors.verticalCenter: parent.verticalCenter
-                text: root.searchScopeButtonText()
-                iconText: root.searchInContext ? "󰄬" : "󰄱"
-                foreground: root.foreground
-                selected: root.searchInContext
-                bordered: true
-                focusable: false
-                hasCursor: root.cursorShown("header", "scope")
-                onHovered: function(on) {
-                  if (on) root.setPanelCursor("header", "scope")
+                text: "󰍉"
+                color: root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.icon
+              }
+
+              Row {
+                id: searchAccessories
+                anchors.right: parent.right
+                anchors.rightMargin: Style.space(3)
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: Style.space(1)
+
+                Button {
+                  id: searchClearButton
+                  visible: unifiedSearchField.text !== ""
+                  anchors.verticalCenter: parent.verticalCenter
+                  iconText: "󰅖"
+                  iconSize: Style.font.bodySmall
+                  foreground: root.foreground
+                  horizontalPadding: Style.space(5)
+                  verticalPadding: Style.space(3)
+                  focusable: false
+                  tooltipText: "Clear · Esc"
+                  onClicked: root.clearUnifiedSearch()
                 }
-                horizontalPadding: Style.space(8)
-                tooltipText: root.searchInContext
-                  ? root.shortcutHint("Search all of Spotify", "Ctrl+F or /")
-                  : root.shortcutHint("Search only in "
-                    + root.activeSearchScope.label, "Ctrl+F or /")
-                onClicked: root.toggleSearchScope()
-                KeyHint {
-                  region: "header"
-                  action: "scope"
-                  sequences: ["/", "Ctrl+F"]
-                  active: root.shortcutHintsEnabled && root.shortcutModeLatched
-                    && !root.shortcutsBlocked
-                    && (root.shortcutHintsActive || unifiedSearchField.activeFocus)
+
+                Button {
+                  id: searchScopeButton
+                  visible: root.activeSearchScope.available
+                  width: visible ? Math.min(unifiedSearchBar.width * 0.42, implicitWidth) : 0
+                  anchors.verticalCenter: parent.verticalCenter
+                  clip: true
+                  text: root.searchInContext ? root.searchScopeButtonText() : "All of Spotify"
+                  fontSize: Style.font.bodySmall
+                  foreground: root.foreground
+                  selected: root.searchInContext
+                  focusable: false
+                  hasCursor: root.cursorShown("header", "scope")
+                  onHovered: function(on) {
+                    if (on) root.setPanelCursor("header", "scope")
+                  }
+                  horizontalPadding: Style.space(7)
+                  verticalPadding: Style.space(2)
+                  tooltipText: root.searchInContext
+                    ? root.shortcutHint("Search all of Spotify", "Ctrl+F or /")
+                    : root.shortcutHint("Search only in "
+                      + root.activeSearchScope.label, "Ctrl+F or /")
+                  onClicked: root.toggleSearchScope()
+                  KeyHint {
+                    region: "header"
+                    action: "scope"
+                    sequences: ["/", "Ctrl+F"]
+                    active: root.shortcutHintsEnabled && root.shortcutModeLatched
+                      && !root.shortcutsBlocked
+                      && (root.shortcutHintsActive || unifiedSearchField.activeFocus)
+                  }
                 }
               }
             }
@@ -3480,11 +2944,34 @@ Item {
               id: pageLoader
               anchors.left: parent.left
               anchors.right: parent.right
-              anchors.top: unifiedSearchBar.visible ? unifiedSearchBar.bottom
-                : (statusBanner.visible ? statusBanner.bottom : pageHeader.bottom)
-              anchors.topMargin: Style.space(8)
+              anchors.top: unifiedSearchBar.visible && !root.searchInline
+                ? unifiedSearchBar.bottom : pageHeader.bottom
+              anchors.topMargin: root.pageGap
               anchors.bottom: parent.bottom
               sourceComponent: root.pageComponent()
+              onLoaded: {
+                pageFade.restart()
+                root.scheduleCursorRefresh()
+              }
+
+              NumberAnimation {
+                id: pageFade
+                target: pageLoader
+                property: "opacity"
+                from: 0.2
+                to: 1
+                duration: Style.duration(120)
+                easing.type: Easing.OutCubic
+              }
+            }
+
+            PanelToast {
+              panel: root
+              anchors.left: parent.left
+              anchors.right: parent.right
+              anchors.bottom: parent.bottom
+              anchors.bottomMargin: Style.space(6)
+              z: 40
             }
           }
         }
@@ -3494,11 +2981,22 @@ Item {
           panel: root
           visible: root.nowPlayingExpanded && root.currentTab !== "login"
           active: visible && window.visible
+          onVisibleChanged: if (visible) nowPlayingFade.restart()
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.top: parent.top
           anchors.bottom: footerSeparator.top
           anchors.bottomMargin: Style.space(10)
+        }
+
+        NumberAnimation {
+          id: nowPlayingFade
+          target: nowPlayingView
+          property: "opacity"
+          from: 0
+          to: 1
+          duration: Style.duration(160)
+          easing.type: Easing.OutCubic
         }
 
         PanelSeparator {
@@ -3511,597 +3009,14 @@ Item {
           foreground: root.foreground
         }
 
-        BorderSurface {
+        PlayerFooter {
           id: playerFooter
+          panel: root
           visible: root.currentTab !== "login"
           anchors.left: parent.left
           anchors.right: parent.right
           anchors.bottom: parent.bottom
-          height: visible ? Style.space(root.compactHeight ? 72 : 84) : 0
-          color: "transparent"
-          borderSpec: Border.none()
-
-          Row {
-            id: playerRow
-            anchors.fill: parent
-            anchors.margins: Style.space(2)
-            anchors.leftMargin: 0
-            anchors.rightMargin: 0
-            spacing: Style.space(root.extraNarrowWidth ? 6 : 12)
-
-            Item {
-              id: nowPlaying
-              readonly property bool actionsOnly: root.nowPlayingExpanded
-              width: actionsOnly
-                ? (nowPlayingActions.visible ? nowPlayingActions.width : 0)
-                : root.extraNarrowWidth
-                ? Math.max(Style.space(80), playerRow.width - transport.width
-                  - playerRow.spacing)
-                : Math.max(Style.space(170), Math.min(Style.space(240),
-                  playerRow.width * 0.29))
-              height: parent.height
-              readonly property real metadataSpacing: Style.space(9)
-              readonly property bool artworkVisible: !actionsOnly
-                && (!root.service || root.service.artworkEnabled)
-
-              BorderSurface {
-                id: nowPlayingArtwork
-                width: nowPlaying.artworkVisible ? Math.min(parent.height,
-                  Style.space(root.extraNarrowWidth ? 52 : 68)) : 0
-                height: width
-                visible: nowPlaying.artworkVisible
-                anchors.left: parent.left
-                anchors.verticalCenter: parent.verticalCenter
-                radius: Style.cornerRadius
-                color: Style.selectedFillFor(root.foreground, root.accent)
-                borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
-
-                RetryImage {
-                  id: playerArtworkImage
-                  anchors.fill: parent
-                  anchors.margins: Style.space(2)
-                  requestedSource: root.service && root.service.artworkEnabled
-                    ? Api.idleMediaText(root.service.artUrl,
-                      root.service.lastPlayedItem, "imageUrl", "")
-                    : ""
-                  sourceSize.width: 136
-                  sourceSize.height: 136
-                  fillMode: Image.PreserveAspectFit
-                  asynchronous: true
-                  cache: true
-                  visible: status === Image.Ready
-                }
-
-                Text {
-                  anchors.centerIn: parent
-                  visible: playerArtworkImage.status !== Image.Ready
-                  text: "󰎈"
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.iconLarge
-                }
-
-                MouseArea {
-                  anchors.fill: parent
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.toggleNowPlayingExpanded()
-                }
-              }
-
-              Column {
-                anchors.left: nowPlayingArtwork.right
-                anchors.leftMargin: nowPlayingArtwork.visible
-                  ? nowPlaying.metadataSpacing : 0
-                anchors.right: parent.right
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: Style.space(3)
-
-                Row {
-                  width: parent.width
-                  spacing: Style.space(3)
-
-                  Text {
-                    visible: !nowPlaying.actionsOnly
-                    width: Math.max(20, parent.width
-                      - (nowPlayingActions.visible
-                        ? nowPlayingActions.width + parent.spacing : 0))
-                    anchors.verticalCenter: parent.verticalCenter
-                    text: Api.idleMediaText(
-                      root.service ? root.service.title : "",
-                      root.service ? root.service.lastPlayedItem : null, "name",
-                      "Nothing playing")
-                    color: root.service && root.service.title
-                      ? root.foreground : root.muted
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.body
-                    font.bold: true
-                    elide: Text.ElideRight
-                  }
-
-                  Row {
-                    id: nowPlayingActions
-                    visible: (!root.extraNarrowWidth || nowPlaying.actionsOnly)
-                      && root.service && !!root.service.currentTrackItem
-                    spacing: Style.space(1)
-                    anchors.verticalCenter: parent.verticalCenter
-
-                    Button {
-                      id: currentTrackLikeButton
-                      objectName: "current-track-like"
-                      visible: root.service && !!root.service.currentTrackItem
-                      iconText: root.service && root.service.currentTrackSaved
-                        ? "󰋑" : "󰋕"
-                      iconSize: Style.font.body
-                      foreground: Commons.Color.urgent
-                      accent: Commons.Color.urgent
-                      enabled: root.service && root.service.currentTrackSaveAvailable
-                      horizontalPadding: Style.space(4)
-                      verticalPadding: Style.space(2)
-                      tooltipText: root.service && root.service.currentTrackSaveChecking
-                        ? "Checking liked status…"
-                        : (root.service && root.service.currentTrackSaveBusy
-                          ? "Updating liked status…"
-                          : (root.service && root.service.currentTrackSaved
-                            ? "Remove like" : "Like this song"))
-                      hasCursor: root.cursorShown("footer", "like")
-                      onClicked: if (root.service)
-                        root.service.toggleCurrentTrackSaved()
-                      onHovered: function(on) {
-                        if (on) root.setPanelCursor("footer", "like")
-                      }
-                      KeyHint { region: "footer"; action: "like" }
-                    }
-
-                    Button {
-                      id: currentTrackMoreButton
-                      objectName: "current-track-more"
-                      visible: root.service && !!root.service.currentTrackItem
-                      iconText: "󰇙"
-                      iconSize: Style.font.body
-                      foreground: root.foreground
-                      horizontalPadding: Style.space(4)
-                      verticalPadding: Style.space(2)
-                      tooltipText: root.shortcutHint("Song actions", "C")
-                      hasCursor: root.cursorShown("footer", "context")
-                      onClicked: root.openNowPlayingContext()
-                      onHovered: function(on) {
-                        if (on) root.setPanelCursor("footer", "context")
-                      }
-                      KeyHint {
-                        region: "footer"
-                        action: "context"
-                        sequences: ["C"]
-                      }
-                    }
-                  }
-                }
-
-                CursorSurface {
-                  id: currentArtistCursor
-                  z: 2
-                  clip: false
-                  visible: !nowPlaying.actionsOnly
-                  width: parent.width
-                  height: currentArtistLinks.implicitHeight
-                  hasCursor: root.cursorShown("footer", "artist")
-                    || currentArtistHover.hovered
-                  foreground: root.foreground
-                  HoverHandler {
-                    id: currentArtistHover
-                    onHoveredChanged: if (hovered)
-                      root.setPanelCursor("footer", "artist")
-                  }
-                  PanelToolTip {
-                    visible: currentArtistHover.hovered
-                    text: root.shortcutHint("Open artist", "Ctrl+Shift+A")
-                  }
-
-                  ArtistLinks {
-                    id: currentArtistLinks
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.rightMargin: currentArtistHint.reservedRight
-                    anchors.verticalCenter: parent.verticalCenter
-                    artists: root.service ? root.service.currentArtists : []
-                    fallbackText: Api.idleMediaText(
-                      root.service ? root.service.artist : "",
-                      root.service ? root.service.lastPlayedItem : null,
-                      "subtitle", "Choose something to play")
-                    fallbackClickable: root.service && root.service.artist !== ""
-                      && root.service.currentArtistContextAvailable
-                      && artists.length === 0
-                    color: root.service && root.service.artist
-                      && root.service.currentArtistContextAvailable ? root.accent
-                      : root.muted
-                    accent: root.accent
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    onArtistRequested: function(item) { root.openItem(item) }
-                    onFallbackRequested: root.openCurrentArtist()
-                  }
-
-                  KeyHint {
-                    id: currentArtistHint
-                    region: "footer"
-                    action: "artist"
-                    sequences: ["Ctrl+Shift+A"]
-                  }
-                }
-
-                CursorSurface {
-                  id: currentAlbumCursor
-                  z: 1
-                  clip: false
-                  width: parent.width
-                  height: currentAlbumLinks.implicitHeight
-                  visible: !nowPlaying.actionsOnly && root.service
-                    && root.service.currentAlbumContextAvailable
-                  hasCursor: root.cursorShown("footer", "album")
-                    || currentAlbumHover.hovered
-                  foreground: root.foreground
-                  HoverHandler {
-                    id: currentAlbumHover
-                    onHoveredChanged: if (hovered)
-                      root.setPanelCursor("footer", "album")
-                  }
-                  PanelToolTip {
-                    visible: currentAlbumHover.hovered
-                    text: root.shortcutHint("Open album", "Ctrl+Shift+B")
-                  }
-
-                  ArtistLinks {
-                    id: currentAlbumLinks
-                    anchors.left: parent.left
-                    anchors.right: parent.right
-                    anchors.rightMargin: currentAlbumHint.reservedRight
-                    anchors.verticalCenter: parent.verticalCenter
-                    artists: []
-                    fallbackText: root.service ? root.service.album : ""
-                    fallbackClickable: visible
-                    color: root.accent
-                    accent: root.accent
-                    font.family: root.fontFamily
-                    font.pixelSize: Style.font.caption
-                    onFallbackRequested: root.openCurrentAlbum()
-                  }
-
-                  KeyHint {
-                    id: currentAlbumHint
-                    region: "footer"
-                    action: "album"
-                    sequences: ["Ctrl+Shift+B"]
-                  }
-                }
-              }
-
-              MouseArea {
-                anchors.fill: parent
-                acceptedButtons: Qt.RightButton
-                z: 20
-                enabled: root.service && !!root.service.currentTrackItem
-                onClicked: root.openNowPlayingContext()
-              }
-            }
-
-            Column {
-              id: transport
-              width: root.extraNarrowWidth
-                ? Math.max(Style.space(88), Math.min(Style.space(108),
-                  parent.width * 0.42))
-                : Math.max(120, parent.width - nowPlaying.width
-                  - outputControls.width - parent.spacing * 2)
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(1)
-
-              Row {
-                anchors.horizontalCenter: parent.horizontalCenter
-                spacing: Style.space(3)
-
-                TransportButton {
-                  visible: !root.extraNarrowWidth
-                  glyphText: "󰒟"
-                  foreground: root.foreground
-                  selected: root.service && root.service.shuffle
-                  hasCursor: root.cursorShown("footer", "shuffle")
-                  tooltipText: root.shortcutHint("Shuffle", "Ctrl+S")
-                  enabled: root.service && root.service.playbackControllable
-                  onClicked: if (root.service) root.service.setShuffle(!root.service.shuffle)
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "shuffle")
-                  }
-                  KeyHint { region: "footer"; action: "shuffle"; sequences: ["Ctrl+S"] }
-                }
-                TransportButton {
-                  glyphText: "󰒮"
-                  visible: !root.spokenWordPlaying
-                  foreground: root.foreground
-                  hasCursor: root.cursorShown("footer", "previous")
-                  tooltipText: root.shortcutHint("Previous", "Ctrl+Left")
-                  enabled: root.service && root.service.playbackControllable
-                  onClicked: if (root.service) root.service.previous()
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "previous")
-                  }
-                  KeyHint { region: "footer"; action: "previous"; sequences: ["Ctrl+Left"] }
-                }
-                TransportButton {
-                  glyphText: "󰵛"
-                  visible: root.spokenWordPlaying
-                  foreground: root.foreground
-                  hasCursor: root.cursorShown("footer", "back15")
-                  tooltipText: "Back 15 seconds"
-                  enabled: root.service && root.service.playbackControllable
-                  onClicked: if (root.service) root.service.skipBySeconds(-15)
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "back15")
-                  }
-                }
-                TransportButton {
-                  glyphText: root.service && root.service.playing ? "󰏤" : "󰐊"
-                  glyphSize: Style.font.iconLarge
-                  foreground: root.foreground
-                  selected: root.service && root.service.playing
-                  hasCursor: root.cursorShown("footer", "play")
-                  tooltipText: root.shortcutHint(
-                    root.service && root.service.playing ? "Pause"
-                      : (root.service && root.service.canResumeLastPlayed
-                        ? "Resume last played" : "Play"), "Space")
-                  enabled: root.service && root.service.playbackStartable
-                  onClicked: if (root.service) root.service.togglePlayback()
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "play")
-                  }
-                  KeyHint { region: "footer"; action: "play"; sequences: ["Space"] }
-                }
-                TransportButton {
-                  glyphText: "󰵙"
-                  visible: root.spokenWordPlaying
-                  foreground: root.foreground
-                  hasCursor: root.cursorShown("footer", "forward30")
-                  tooltipText: "Forward 30 seconds"
-                  enabled: root.service && root.service.playbackControllable
-                  onClicked: if (root.service) root.service.skipBySeconds(30)
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "forward30")
-                  }
-                }
-                TransportButton {
-                  glyphText: "󰒭"
-                  visible: !root.spokenWordPlaying
-                  foreground: root.foreground
-                  hasCursor: root.cursorShown("footer", "next")
-                  tooltipText: root.shortcutHint("Next", "Ctrl+Right")
-                  enabled: root.service && root.service.playbackControllable
-                  onClicked: if (root.service) root.service.next()
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "next")
-                  }
-                  KeyHint { region: "footer"; action: "next"; sequences: ["Ctrl+Right"] }
-                }
-                TransportButton {
-                  visible: !root.extraNarrowWidth
-                  glyphText: root.service && root.service.repeatMode === "track" ? "󰑘" : "󰑖"
-                  foreground: root.foreground
-                  selected: root.service && root.service.repeatMode !== "off"
-                  hasCursor: root.cursorShown("footer", "repeat")
-                  tooltipText: root.shortcutHint("Repeat: "
-                    + Api.repeatModeLabel(root.service
-                      ? root.service.repeatMode : "off"), "Ctrl+R")
-                  enabled: root.service && root.service.playbackControllable
-                  onClicked: if (root.service) root.service.cycleRepeat()
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "repeat")
-                  }
-                  KeyHint { region: "footer"; action: "repeat"; sequences: ["Ctrl+R"] }
-                }
-                TransportButton {
-                  visible: !root.extraNarrowWidth
-                  glyphText: "󰎈"
-                  foreground: root.foreground
-                  hasCursor: root.cursorShown("footer", "lyrics")
-                  tooltipText: root.shortcutHint("Open lyrics in Omasing",
-                    "Ctrl+Shift+L")
-                  enabled: root.service && root.service.lyricsAvailable
-                  onClicked: root.openLyrics()
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "lyrics")
-                  }
-                  KeyHint { region: "footer"; action: "lyrics"; sequences: ["Ctrl+Shift+L"] }
-                }
-                TransportButton {
-                  glyphText: root.nowPlayingExpanded ? "󰊔" : "󰊓"
-                  foreground: root.foreground
-                  selected: root.nowPlayingExpanded
-                  hasCursor: root.cursorShown("footer", "expand")
-                  tooltipText: root.shortcutHint(root.nowPlayingExpanded
-                    ? "Back to browsing" : "Now playing view", "E")
-                  onClicked: root.toggleNowPlayingExpanded()
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "expand")
-                  }
-                  KeyHint { region: "footer"; action: "expand"; sequences: ["E"] }
-                }
-              }
-
-              Row {
-                width: parent.width
-                spacing: Style.space(6)
-
-                Text {
-                  id: positionFooterTime
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: Api.millisecondsToClock((root.service ? root.service.positionSeconds : 0) * 1000)
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-
-                CursorSurface {
-                  id: seekCursor
-                  width: Math.max(30, parent.width - positionFooterTime.implicitWidth
-                    - durationFooterTime.implicitWidth - Style.space(12))
-                  height: positionSlider.implicitHeight
-                  anchors.verticalCenter: parent.verticalCenter
-                  hasCursor: root.cursorShown("footer", "seek")
-                  foreground: root.foreground
-                  HoverHandler {
-                    onHoveredChanged: if (hovered) root.setPanelCursor("footer", "seek")
-                  }
-
-                PlaybackSlider {
-                  id: positionSlider
-                  anchors.fill: parent
-                  bar: root.panelBar
-                  minimum: 0
-                  maximum: Math.max(1, root.service ? root.service.lengthSeconds : 1)
-                  step: 5
-                  sourceValue: root.service ? root.service.positionSeconds : 0
-                  sourcePending: root.service && root.service.pendingRemoteSeek !== null
-                  acknowledgeTolerance: 2
-                  contextKey: root.service
-                    ? root.service.currentUri + "|" + root.service.playbackDeviceName : ""
-                  onCommitted: function(value) {
-                    if (root.service) root.service.seekSeconds(value)
-                  }
-
-                  HoverHandler { id: positionSliderHover }
-                  PanelToolTip {
-                    visible: positionSliderHover.hovered
-                    text: "Seek 10 seconds · Shift+Left / Shift+Right"
-                  }
-                  KeyHint {
-                    region: "footer"
-                    action: "seek"
-                    sequences: ["Shift+Left", "Shift+Right"]
-                    active: root.shortcutHintsActive && root.service
-                      && root.service.playbackControllable
-                  }
-                }
-                }
-
-                Text {
-                  id: durationFooterTime
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: Api.millisecondsToClock((root.service ? root.service.lengthSeconds : 0) * 1000)
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-            }
-
-            Column {
-              id: outputControls
-              visible: !root.extraNarrowWidth
-              width: visible
-                ? Math.max(Style.space(128), Math.min(Style.space(170),
-                  playerRow.width * 0.22)) : 0
-              anchors.verticalCenter: parent.verticalCenter
-              spacing: Style.space(3)
-
-              Row {
-                width: parent.width
-                spacing: Style.space(5)
-
-                Button {
-                  iconText: "󰋋"
-                  foreground: root.foreground
-                  hasCursor: root.cursorShown("footer", "devices")
-                  tooltipText: root.shortcutHint("Devices", "Alt+Shift+D")
-                  onClicked: root.chooseTab("devices")
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "devices")
-                  }
-                  KeyHint { region: "footer"; action: "devices"; sequences: ["Alt+Shift+D"] }
-                }
-
-                Button {
-                  iconText: "󰔛"
-                  foreground: root.foreground
-                  selected: root.service && root.service.sleepActive
-                  hasCursor: root.cursorShown("footer", "sleep")
-                  tooltipText: root.service ? root.service.sleepStatusText() : "Sleep timer"
-                  onClicked: sleepPopup.open()
-                  onHovered: function(on) {
-                    if (on) root.setPanelCursor("footer", "sleep")
-                  }
-                  KeyHint { region: "footer"; action: "sleep" }
-                }
-
-                CursorSurface {
-                  width: Math.max(35, parent.width - Style.space(74))
-                  height: volumeSlider.implicitHeight
-                  anchors.verticalCenter: parent.verticalCenter
-                  hasCursor: root.cursorShown("footer", "volume")
-                  foreground: root.foreground
-                  HoverHandler {
-                    onHoveredChanged: if (hovered) root.setPanelCursor("footer", "volume")
-                  }
-
-                PlaybackSlider {
-                  id: volumeSlider
-                  anchors.fill: parent
-                  enabled: root.service && root.service.volumeSupported
-                  bar: root.panelBar
-                  minimum: 0
-                  maximum: 1
-                  step: 0.05
-                  sourceValue: root.service ? root.service.volume : 0
-                  sourcePending: root.service && root.service.volumePending
-                  contextKey: root.service ? root.service.playbackDeviceName : ""
-                  liveCommit: true
-                  onCommitted: function(value, live) {
-                    root.setPanelVolume(value, live)
-                  }
-                  onRightClicked: root.toggleMute()
-
-                  HoverHandler { id: volumeSliderHover }
-                  PanelToolTip {
-                    visible: volumeSliderHover.hovered
-                    text: "Volume · Ctrl+Up / Ctrl+Down · M to mute"
-                  }
-                  KeyHint {
-                    region: "footer"
-                    action: "volume"
-                    sequences: ["M", "Ctrl+Up", "Ctrl+Down"]
-                    active: root.shortcutHintsActive && root.service
-                      && root.service.volumeSupported
-                  }
-                }
-                }
-              }
-
-              Row {
-                width: parent.width
-                layoutDirection: Qt.RightToLeft
-                spacing: Style.space(4)
-                visible: root.service && root.service.playbackDeviceName !== ""
-
-                // As wide as the name, up to what the row has left, so a
-                // long name elides instead of running past the row and a
-                // short one keeps the icon beside it.
-                Text {
-                  anchors.verticalCenter: parent.verticalCenter
-                  width: Math.min(implicitWidth,
-                    Math.max(0, parent.width - deviceGlyph.width - parent.spacing))
-                  text: root.service ? root.service.playbackDeviceName : ""
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                  elide: Text.ElideRight
-                }
-
-                Text {
-                  id: deviceGlyph
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "󰦧"
-                  color: root.muted
-                  font.family: root.fontFamily
-                  font.pixelSize: Style.font.caption
-                }
-              }
-            }
-          }
+          height: visible ? Style.space(root.compactHeight ? 68 : 76) : 0
         }
       }
     }

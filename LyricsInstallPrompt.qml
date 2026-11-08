@@ -1,14 +1,18 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
+
+import "Api.js" as Api
 
 Item {
   id: root
 
   property var service: null
   property color foreground: Commons.Color.foreground
-  property color muted: Commons.Color.muted
+  property color muted: Api.secondaryTextColor(Commons.Color.foreground, Commons.Color.background)
   property color urgent: Commons.Color.urgent
   property string surfaceKey: ""
   property bool cancelHasCursor: false
@@ -33,6 +37,7 @@ Item {
     Text {
       objectName: "lyrics-install-title"
       width: parent.width
+      textFormat: Text.PlainText
       text: root.availability === "disabled" ? "Enable Omasing Lyrics?"
         : (root.availability === "ready" && root.errorText
           ? "Omasing didn't open" : "Install Omasing Lyrics?")
@@ -46,6 +51,7 @@ Item {
     Text {
       objectName: "lyrics-install-description"
       width: parent.width
+      textFormat: Text.PlainText
       text: root.availability === "disabled"
         ? "Omasing is already installed. Enable it and add its widget to the center of your bar?"
         : (root.availability === "ready"
@@ -72,6 +78,7 @@ Item {
       width: parent.width
       visible: text !== ""
       text: root.errorText
+      textFormat: Text.PlainText
       color: root.urgent
       font.family: Style.font.family
       font.pixelSize: Style.font.bodySmall

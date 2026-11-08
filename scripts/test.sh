@@ -33,7 +33,7 @@ fi
 
 omarchy plugin validate .
 # Lint every source file so a new one is never missed.
-"$qmllint" -I /usr/share/omarchy/shell ./*.js ./*.qml
+QMLLINT=$qmllint scripts/lint-qml.sh
 
 QT_QPA_PLATFORM=offscreen "$qml_test_runner" \
   -input tests \
@@ -75,8 +75,7 @@ elif (( forbidden_status != 1 )); then
 fi
 
 if (( integration )); then
-  # Never on the live desktop, even when one is available.
-  env -u WAYLAND_DISPLAY bash scripts/test-quickshell.sh
+  bash scripts/test-quickshell.sh
   bash scripts/test-companion.sh
 fi
 

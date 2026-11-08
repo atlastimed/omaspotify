@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
@@ -11,8 +13,89 @@ Item {
 
   property var panel: null
 
-  component KeyHint: PanelKeyHint {
-    panel: page.panel
+  readonly property var service: panel ? panel.service : null
+  readonly property int toggleColumns: width >= Style.space(640) ? 2 : 1
+  readonly property real toggleWidth: Math.floor((settingsContent.width
+    - Style.space(6) * (toggleColumns - 1)) / toggleColumns)
+  readonly property bool barTextCanScroll:
+    Api.canScrollBarText(panel.draftShowTitle, panel.draftShowArtist)
+
+  function cursorTargets(item, found) {
+    var targets = found || []
+    if (!item || item.visible === false) return targets
+    if (item.cursorId) {
+      if (item.enabled !== false) targets.push(item)
+      return targets
+    }
+    var kids = item.children
+    if (!kids) return targets
+    for (var i = 0; i < kids.length; i++) cursorTargets(kids[i], targets)
+    return targets
+  }
+
+  function cursorActions() {
+    return cursorTargets(settingsContent).map(function(item) { return item.cursorId })
+  }
+
+  function targetFor(action) {
+    var targets = cursorTargets(settingsContent)
+    for (var i = 0; i < targets.length; i++)
+      if (targets[i].cursorId === action) return targets[i]
+    return null
+  }
+
+  function activateCursorAction(action) {
+    var target = targetFor(action)
+    if (!target) return false
+    if (target.activate) target.activate()
+    return true
+  }
+
+  function adjustCursorAction(action, delta) {
+    var target = targetFor(action)
+    if (!target || !target.adjust) return false
+    target.adjust(delta)
+    return true
+  }
+
+  function saveToggle(name) {
+    panel[name] = !panel[name]
+    panel.enforceScrollAvailability()
+    panel.persistDraftSettings()
+  }
+
+  Connections {
+    target: page.panel
+    function onPanelCursorActionChanged() {
+      if (!page.panel.keyboardCursorShown || page.panel.panelCursorRegion !== "page") return
+      var target = page.targetFor(page.panel.panelCursorAction)
+      var flick = setupScroll.contentItem
+      if (!target || !flick) return
+      var top = target.mapToItem(settingsContent, 0, 0).y
+      if (top < flick.contentY) flick.contentY = Math.max(0, top - Style.space(24))
+      else if (top + target.height > flick.contentY + flick.height)
+        flick.contentY = top + target.height - flick.height + Style.space(8)
+    }
+  }
+
+  component SettingNote: Text {
+    width: parent ? parent.width : implicitWidth
+    textFormat: Text.PlainText
+    color: page.panel.muted
+    font.family: page.panel.fontFamily
+    font.pixelSize: Style.font.bodySmall
+    wrapMode: Text.WordWrap
+  }
+
+  component SectionTitle: PanelSectionHeader {
+    color: page.panel.muted
+    fontFamily: page.panel.fontFamily
+    fontSize: Style.font.bodySmall
+  }
+
+  component Section: Column {
+    width: parent ? parent.width : implicitWidth
+    spacing: Style.space(7)
   }
 
   ScrollView {
@@ -22,580 +105,395 @@ Item {
     ScrollBar.horizontal.policy: ScrollBar.AlwaysOff
 
     Column {
-      width: setupScroll.availableWidth
+      id: settingsContent
+      width: setupScroll.availableWidth - Style.space(12)
       spacing: Style.space(16)
 
-      Column {
-        width: parent.width
-        spacing: Style.space(7)
-
-        Text {
-          text: "SPOTIFY ACCOUNT"
-          color: page.panel.foreground
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
-        Text {
-          width: parent.width
-          text: "Connect Spotify to search, browse your library, manage playlists, and listen on this computer or another Spotify Connect device."
-          color: page.panel.muted
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.body
-          wrapMode: Text.WordWrap
-        }
+      Section {
+        SectionTitle { text: "Spotify account" }
 
         BorderSurface {
           width: parent.width
-          implicitHeight: accountStatus.implicitHeight + Style.space(16)
+          implicitHeight: accountStatus.implicitHeight + Style.space(14)
           color: Style.normalFillFor(page.panel.foreground, page.panel.accent)
           borderSpec: Border.controlSpec("normal", page.panel.foreground, page.panel.accent)
           radius: Style.cornerRadius
 
-          Text {
+          Row {
             id: accountStatus
-            anchors.fill: parent
-            anchors.margins: Style.space(8)
-            text: !page.panel.service ? "Spotify is unavailable"
-              : (page.panel.service.loginBusy ? page.panel.service.loginProgress + "…"
-              : (page.panel.fullyConnected ? "Connected and ready to play"
-              : (page.panel.service.auth.loggedIn
-                ? "Spotify is connected · playback needs approval"
-                : (page.panel.service.daemon.credentialsAvailable
-                  ? "Playback is ready · Spotify needs approval"
-                  : "Not connected"))))
-            color: page.panel.fullyConnected ? page.panel.accent : page.panel.foreground
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.body
-            wrapMode: Text.WordWrap
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.left: parent.left
+            anchors.right: parent.right
+            anchors.leftMargin: Style.space(9)
+            anchors.rightMargin: Style.space(9)
+            spacing: Style.space(8)
+
+            Text {
+              anchors.verticalCenter: parent.verticalCenter
+              textFormat: Text.PlainText
+              text: page.panel.fullyConnected ? "󰄬" : "󰋼"
+              color: page.panel.fullyConnected ? page.panel.accent : page.panel.foreground
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.icon
+            }
+
+            Text {
+              width: Math.max(40, parent.width - Style.space(24))
+              anchors.verticalCenter: parent.verticalCenter
+              text: !page.service ? "Spotify is unavailable"
+                : (page.service.loginBusy ? page.service.loginProgress + "…"
+                : (page.panel.fullyConnected ? "Connected and ready to play"
+                : (page.service.auth.loggedIn
+                  ? "Spotify is connected · playback needs approval"
+                  : (page.service.daemon.credentialsAvailable
+                    ? "Playback is ready · Spotify needs approval"
+                    : "Not connected"))))
+              textFormat: Text.PlainText
+              color: page.panel.foreground
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.body
+              wrapMode: Text.WordWrap
+            }
           }
         }
 
-        Row {
-          spacing: Style.space(7)
+        Flow {
+          width: parent.width
+          spacing: Style.space(6)
 
-          Button {
+          SettingButton {
+            panel: page.panel
+            cursorId: "set-login"
             text: page.panel.connectionButtonText()
             iconText: "󰍂"
-            foreground: page.panel.foreground
-            selected: page.panel.fullyConnected
             visible: !page.panel.fullyConnected
-            enabled: page.panel.service && !page.panel.service.loginBusy
-            onClicked: if (page.panel.service) page.panel.service.login()
+            enabled: page.service && !page.service.loginBusy
+            onClicked: if (page.service) page.service.login()
           }
-          Button {
+          SettingButton {
+            panel: page.panel
+            cursorId: "set-cancel-login"
             text: "Cancel"
-            foreground: page.panel.foreground
-            visible: page.panel.service && page.panel.service.loginBusy
-            onClicked: if (page.panel.service) page.panel.service.cancelLogin()
+            visible: page.service && page.service.loginBusy
+            onClicked: if (page.service) page.service.cancelLogin()
           }
-          Button {
+          SettingButton {
+            panel: page.panel
+            cursorId: "set-reconnect"
             text: "Reconnect Spotify"
             iconText: "󰑐"
-            foreground: page.panel.foreground
-            visible: page.panel.service && page.panel.service.auth.loggedIn
-            enabled: page.panel.service && !page.panel.service.loginBusy
+            visible: page.service && page.service.auth.loggedIn
+            enabled: page.service && !page.service.loginBusy
             tooltipText: "Reconnect if library or playlist features are not working"
-            onClicked: page.panel.service.reconnectAccount()
+            onClicked: page.service.reconnectAccount()
           }
-          Button {
+          SettingButton {
+            panel: page.panel
+            cursorId: "set-logout"
             text: "Log out"
             iconText: "󰍃"
-            foreground: page.panel.foreground
-            visible: page.panel.service && (page.panel.service.auth.loggedIn
-              || page.panel.service.daemon.credentialsAvailable)
-            enabled: page.panel.service && !page.panel.service.loginBusy
-              && !page.panel.service.daemon.busy
-            onClicked: page.panel.service.logout()
+            visible: page.service && (page.service.auth.loggedIn
+              || page.service.daemon.credentialsAvailable)
+            enabled: page.service && !page.service.loginBusy
+              && !page.service.daemon.busy
+            onClicked: page.panel.askToConfirm(
+              "Log out of Spotify on this computer? You will need to sign in again to listen here.",
+              "Log out", function() { page.service.logout() })
           }
         }
 
-        Text {
-          width: parent.width
+        SettingNote {
           text: page.panel.connectionErrorText()
           color: Commons.Color.urgent
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          wrapMode: Text.WordWrap
           visible: text !== ""
         }
       }
 
-      PanelSeparator { foreground: page.panel.foreground }
+      Section {
+        visible: page.service && !page.service.usesSoloist && !page.service.daemon.playbackReady
 
-      Column {
-        id: localPlaybackSetup
-        width: parent.width
-        spacing: Style.space(7)
-        visible: page.panel.service && !page.panel.service.usesSoloist && !page.panel.service.daemon.playbackReady
+        SectionTitle { text: "Playback on this computer" }
 
-        Text {
-          text: "PLAYBACK ON THIS COMPUTER"
-          color: page.panel.foreground
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
-        Text {
-          width: parent.width
-          text: "A lightweight background player starts only when you need it, works with Omarchy's media controls, and appears in Spotify Connect as this computer."
-          color: page.panel.muted
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.body
-          wrapMode: Text.WordWrap
+        SettingNote {
+          text: "A lightweight background player starts only when you need it, works with Omarchy's media controls, and appears in Spotify Connect as this computer. " + page.panel.playbackStatusText()
         }
 
-        BorderSurface {
-          width: parent.width
-          implicitHeight: engineStatus.implicitHeight + Style.space(16)
-          color: Style.normalFillFor(page.panel.foreground, page.panel.accent)
-          borderSpec: Border.controlSpec("normal", page.panel.foreground, page.panel.accent)
-          radius: Style.cornerRadius
-
-          Text {
-            id: engineStatus
-            anchors.fill: parent
-            anchors.margins: Style.space(8)
-            text: page.panel.playbackStatusText()
-            color: page.panel.foreground
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.body
-            wrapMode: Text.WordWrap
-          }
+        SettingButton {
+          panel: page.panel
+          cursorId: "set-playback-setup"
+          text: page.service && page.service.daemon.setupBusy
+            ? "Setting up playback…" : "Set up playback"
+          iconText: "󰓃"
+          enabled: page.service && !page.service.loginBusy
+          onClicked: page.service.login()
         }
-
-        Row {
-          spacing: Style.space(7)
-
-          Button {
-            text: page.panel.service && page.panel.service.daemon.setupBusy
-              ? "Setting up playback…" : "Set up playback"
-            iconText: "󰓃"
-            foreground: page.panel.foreground
-            visible: page.panel.service && !page.panel.service.daemon.playbackReady
-            enabled: page.panel.service && !page.panel.service.loginBusy
-            onClicked: page.panel.service.login()
-          }
-        }
-      }
-
-      PanelSeparator {
-        foreground: page.panel.foreground
-        visible: localPlaybackSetup.visible
       }
 
       SoloistSetup {
         width: parent.width
         panel: page.panel
-        visible: page.panel.service && page.panel.service.usesSoloist
+        visible: page.service && page.service.usesSoloist
       }
 
-      Column {
-        width: parent.width
-        spacing: Style.space(7)
-
-        Text {
-          text: "PREFERENCES"
-          color: page.panel.foreground
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
-
-        Text {
-          text: "SPOTIFY CONNECT"
-          color: page.panel.muted
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
-        }
+      Section {
+        SectionTitle { text: "Spotify Connect" }
 
         Row {
           width: parent.width
           spacing: Style.space(8)
 
-          Column {
-            width: Math.round(parent.width * 0.58)
-            spacing: Style.space(4)
-
-            Text {
-              text: "THIS COMPUTER APPEARS AS"
-              color: page.panel.muted
-              font.family: page.panel.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-            }
-            TextField {
-              width: parent.width
-              foreground: page.panel.foreground
-              placeholderText: "OmaSpotify"
-              text: page.panel.draftDeviceName
-              onTextEdited: page.panel.draftDeviceName = text
-              onEditingFinished: page.panel.persistDraftSettings()
-            }
+          SettingField {
+            panel: page.panel
+            cursorId: "set-device-name"
+            width: Math.round(parent.width * 0.66)
+            label: "This computer appears as"
+            placeholderText: "OmaSpotify"
+            text: page.panel.draftDeviceName
+            onTextEdited: page.panel.draftDeviceName = text
+            onEditingFinished: page.panel.persistDraftSettings()
           }
-          Column {
-            width: Math.max(Style.space(150), parent.width - Math.round(parent.width * 0.58)
+
+          SettingField {
+            panel: page.panel
+            cursorId: "set-idle"
+            width: Math.max(Style.space(120), parent.width - Math.round(parent.width * 0.66)
               - parent.spacing)
-            spacing: Style.space(4)
-
-            Text {
-              text: "STOP WHEN IDLE · MINUTES"
-              color: page.panel.muted
-              font.family: page.panel.fontFamily
-              font.pixelSize: Style.font.caption
-              font.bold: true
-            }
-            TextField {
-              width: parent.width
-              foreground: page.panel.foreground
-              placeholderText: "15"
-              text: page.panel.draftIdleMinutes
-              validator: IntValidator { bottom: 0; top: 1440 }
-              onTextEdited: page.panel.draftIdleMinutes = text
-              onEditingFinished: page.panel.persistDraftSettings()
-            }
+            label: "Stop when idle, in minutes"
+            placeholderText: "15"
+            text: page.panel.draftIdleMinutes
+            validator: IntValidator { bottom: 0; top: 1440 }
+            onTextEdited: page.panel.draftIdleMinutes = text
+            onEditingFinished: page.panel.persistDraftSettings()
           }
         }
 
-        Column {
-          width: parent.width
-          spacing: Style.space(6)
-
-          Text {
-            text: "SPOTIFY DEVELOPER APP"
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-          }
-
-          TextField {
-            width: parent.width
-            foreground: page.panel.foreground
-            placeholderText: "Your app's 32-character client ID"
-            text: page.panel.draftClientId
-            onTextEdited: page.panel.draftClientId = text
-          }
-
-          Text {
-            width: parent.width
-            text: page.panel.draftClientId.trim()
-                  && !/^[0-9a-f]{32}$/i.test(page.panel.draftClientId.trim())
-              ? "Enter a client ID with exactly 32 hexadecimal characters."
-              : "Register http://127.0.0.1:8989/login in your app's Redirect URIs. Changing the client ID requires signing in again. No client secret is needed."
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.caption
-            wrapMode: Text.WordWrap
-          }
-
-          Button {
-            text: "Apply app"
-            foreground: page.panel.foreground
-            enabled: page.panel.service
-              && /^[0-9a-f]{32}$/i.test(page.panel.draftClientId.trim())
-              && page.panel.draftClientId.trim().toLowerCase()
-                !== String(page.panel.service.settings.clientId || "")
-            onClicked: page.panel.service.persistSettings({
-              clientId: page.panel.draftClientId.trim()
-            })
-          }
+        SettingNote {
+          text: page.service && page.service.usesSoloist
+            ? "The device name updates the next time local playback starts. This computer stays visible while the player is open, then sleeps at the idle timeout. Use 0 to keep it available."
+            : "The device name and audio quality update the next time local playback starts. This computer stays visible while the player is open, then sleeps at the idle timeout. Use 0 to keep it available."
         }
 
-        Column {
+        SettingField {
+          id: clientIdField
+          panel: page.panel
+          cursorId: "set-client-id"
           width: parent.width
-          spacing: Style.space(6)
-
-          Text {
-            text: "BAR PLAYER"
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-          }
-
-          Button {
-            text: "Mini-player first · "
-              + (page.panel.draftShowMiniPlayer ? "On" : "Off")
-            iconText: "󰍹"
-            foreground: page.panel.foreground
-            selected: page.panel.draftShowMiniPlayer
-            tooltipText: page.panel.draftShowMiniPlayer
-              ? "Clicking the bar icon opens the mini-player first"
-              : "Clicking the bar icon opens the full player directly"
-            onClicked: {
-              page.panel.draftShowMiniPlayer = !page.panel.draftShowMiniPlayer
-              page.panel.persistDraftSettings()
-            }
-          }
-
-          Button {
-            text: "Spinning vinyl artwork · "
-              + (page.panel.draftShowVinylRecord ? "On" : "Off")
-            iconText: "󰎈"
-            foreground: page.panel.foreground
-            selected: page.panel.draftShowVinylRecord
-            tooltipText: page.panel.draftShowVinylRecord
-              ? "Show spinning vinyl artwork in the mini-player"
-              : "Show the original rectangular artwork in the mini-player"
-            onClicked: {
-              page.panel.draftShowVinylRecord = !page.panel.draftShowVinylRecord
-              page.panel.persistDraftSettings()
-            }
-          }
-
-          Text {
-            width: parent.width
-            text: "Adds a spinning vinyl record for the mini-player artwork while music is playing."
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
+          label: "Spotify developer app"
+          placeholderText: "Your app's 32-character client ID"
+          text: page.panel.draftClientId
+          onTextEdited: page.panel.draftClientId = text
         }
 
-        Column {
+        SettingNote {
+          text: page.panel.draftClientId.trim()
+                && !/^[0-9a-f]{32}$/i.test(page.panel.draftClientId.trim())
+            ? "A client ID has exactly 32 hexadecimal characters."
+            : "Register http://127.0.0.1:8989/login in your app's Redirect URIs. Changing the client ID requires signing in again. No client secret is needed."
+        }
+
+        SettingButton {
+          panel: page.panel
+          cursorId: "set-apply-client"
+          text: "Apply app"
+          enabled: page.service
+            && /^[0-9a-f]{32}$/i.test(page.panel.draftClientId.trim())
+            && page.panel.draftClientId.trim().toLowerCase()
+              !== String(page.service.settings.clientId || "")
+          onClicked: page.service.persistSettings({
+            clientId: page.panel.draftClientId.trim()
+          })
+        }
+      }
+
+      Section {
+        SectionTitle { text: "Player and artwork" }
+
+        Flow {
           width: parent.width
           spacing: Style.space(6)
 
-          Text {
-            text: "KEYBOARD"
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-mini-player"
+            width: page.toggleWidth
+            label: "Mini-player first"
+            description: "The bar icon opens the mini-player, not the full player."
+            checked: page.panel.draftShowMiniPlayer
+            onClicked: page.saveToggle("draftShowMiniPlayer")
           }
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-artwork"
+            width: page.toggleWidth
+            label: "Artwork"
+            description: "Turn off to stop downloading covers and go text-only."
+            checked: page.panel.draftShowArtwork
+            onClicked: page.saveToggle("draftShowArtwork")
+          }
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-vinyl"
+            width: page.toggleWidth
+            label: "Spinning vinyl"
+            description: "Mini-player artwork spins like a record while music plays."
+            checked: page.panel.draftShowVinylRecord
+            onClicked: page.saveToggle("draftShowVinylRecord")
+          }
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-lyrics"
+            width: page.toggleWidth
+            label: "Lyrics button"
+            description: "Opens the Omasing lyrics window. Hide it if you do not use Omasing."
+            checked: page.panel.draftShowLyrics
+            onClicked: page.saveToggle("draftShowLyrics")
+          }
+        }
+      }
 
-          Button {
-            text: "Super + Shift + M · " + page.panel.draftShortcutPlayer
+      Section {
+        SectionTitle { text: "Keyboard" }
+
+        Flow {
+          width: parent.width
+          spacing: Style.space(6)
+
+          SettingButton {
+            panel: page.panel
+            cursorId: "set-shortcut-player"
+            width: page.toggleWidth
+            leftAlign: true
+            text: "Super+Shift+M opens: " + page.panel.draftShortcutPlayer
             iconText: "󰌌"
-            foreground: page.panel.foreground
-            selected: page.panel.draftShortcutPlayer !== "Omarchy Music app"
-            focusable: true
-            tooltipText: "Cycle between Omarchy's Music app, full player, and mini-player"
+            tooltipText: "Cycle between Omarchy's Music app, the full player, and the mini-player"
             onClicked: page.panel.cycleShortcutPlayer()
           }
-
-          Text {
-            width: parent.width
-            text: "Cycles Omarchy Music app → Full player → Mini player. Super+Shift+M then opens that target."
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-hints"
+            width: page.toggleWidth
+            label: "Shortcut hints"
+            description: "After a shortcut or Tab, controls show the next key. Ctrl+H turns this off."
+            checked: page.panel.draftShortcutHints
+            onClicked: page.saveToggle("draftShortcutHints")
           }
+        }
+      }
 
-          Button {
-            text: "Shortcut hints · "
-              + (page.panel.draftShortcutHints ? "On" : "Off")
-            iconText: "󰘳"
-            foreground: page.panel.foreground
-            selected: page.panel.draftShortcutHints
-            tooltipText: page.panel.draftShortcutHints
-              ? "The first shortcut lights matching controls with the next key"
-              : "Shortcuts still work, without the on-control overlay"
-            onClicked: {
-              page.panel.draftShortcutHints = !page.panel.draftShortcutHints
-              page.panel.persistDraftSettings()
-            }
+      Section {
+        SectionTitle { text: "Bar text" }
+
+        Flow {
+          width: parent.width
+          spacing: Style.space(6)
+
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-bar-title"
+            width: page.toggleWidth
+            label: "Song title"
+            description: "Show the title in the top bar."
+            checked: page.panel.draftShowTitle
+            onClicked: page.saveToggle("draftShowTitle")
           }
-
-          Button {
-            text: "Lyrics button · "
-              + (page.panel.draftShowLyrics ? "On" : "Off")
-            iconText: "󰑬"
-            foreground: page.panel.foreground
-            selected: page.panel.draftShowLyrics
-            tooltipText: page.panel.draftShowLyrics
-              ? "Show the Omasing lyrics button in the player and mini-player"
-              : "Hide the lyrics button and disable Ctrl+Shift+L"
-            onClicked: {
-              page.panel.draftShowLyrics = !page.panel.draftShowLyrics
-              page.panel.persistDraftSettings()
-            }
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-bar-artist"
+            width: page.toggleWidth
+            label: "Artist name"
+            description: "Show the artist in the top bar."
+            checked: page.panel.draftShowArtist
+            onClicked: page.saveToggle("draftShowArtist")
           }
-
-          Text {
-            width: parent.width
-            text: "Hide the lyrics button if you do not use Omasing. Playback is unaffected, and the button returns whenever you turn this back on."
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-bar-paused"
+            width: page.toggleWidth
+            label: "While paused"
+            description: "Keep the text visible while paused, rather than just the icon."
+            checked: page.panel.draftShowPausedTrack
+            onClicked: page.saveToggle("draftShowPausedTrack")
           }
-
-          Text {
-            width: parent.width
-            text: "After a shortcut or Tab, matching buttons glow and show the next key. Hold Ctrl, Shift, or Alt to see those chords, or press Ctrl+H to turn them off. Turn them on here again whenever you want the overlay back."
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-bar-scroll"
+            width: page.toggleWidth
+            label: "Scroll long text"
+            description: page.panel.barTextWidthUnlimited
+              ? "Unavailable while the width is unlimited, because the label always fits."
+              : "Long labels scroll and fade at the edges only when they do not fit."
+            checked: page.panel.draftScrollBarText
+            enabled: page.barTextCanScroll && !page.panel.barTextWidthUnlimited
+            opacity: enabled ? 1 : 0.5
+            onClicked: if (enabled) page.saveToggle("draftScrollBarText")
+          }
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-bar-fixed"
+            width: page.toggleWidth
+            label: "Fixed width"
+            description: page.panel.barTextWidthUnlimited
+              ? "Unavailable while the width is unlimited."
+              : "Keep the same width between songs, so the bar does not shift."
+            checked: page.panel.draftFixedBarWidth
+            enabled: page.barTextCanScroll && !page.panel.barTextWidthUnlimited
+            opacity: enabled ? 1 : 0.5
+            onClicked: if (enabled) page.saveToggle("draftFixedBarWidth")
           }
         }
 
         Column {
           width: parent.width
-          spacing: Style.space(6)
+          spacing: Style.space(4)
+          visible: page.barTextCanScroll && page.panel.draftScrollBarText
 
-          Text {
-            text: "ARTWORK"
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
+          Row {
+            width: parent.width
+
+            Text {
+              id: scrollSpeedTitle
+              text: "Scroll speed"
+              color: page.panel.muted
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            Item {
+              width: Math.max(0, parent.width - scrollSpeedTitle.implicitWidth
+                - scrollSpeedValue.implicitWidth)
+              height: 1
+            }
+            Text {
+              id: scrollSpeedValue
+              textFormat: Text.PlainText
+              text: page.panel.scrollSpeedLabel()
+              color: page.panel.foreground
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
           }
 
-          Button {
-            text: "Artwork · " + (page.panel.draftShowArtwork ? "On" : "Off")
-            iconText: "󰀥"
-            foreground: page.panel.foreground
-            selected: page.panel.draftShowArtwork
-            tooltipText: page.panel.draftShowArtwork
-              ? "Album and playlist covers are shown"
-              : "Covers are hidden and the space is given to text"
-            onClicked: {
-              page.panel.draftShowArtwork = !page.panel.draftShowArtwork
+          CursorSurface {
+            id: scrollSpeedCursor
+            readonly property string cursorId: "set-scroll-speed"
+            function adjust(delta) {
+              page.panel.draftScrollSpeed = Api.normalizedScrollSpeed(
+                page.panel.draftScrollSpeed + delta * 0.25)
               page.panel.persistDraftSettings()
             }
-          }
-
-          Text {
             width: parent.width
-            text: "Turn off to stop downloading album and playlist covers. The app becomes text-only."
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
-        }
+            height: scrollSpeedSlider.implicitHeight
+            hasCursor: page.panel.cursorShown("page", cursorId)
+            foreground: page.panel.foreground
 
-        Column {
-          width: parent.width
-          spacing: Style.space(6)
-
-          Text {
-            text: "BAR TEXT"
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-          }
-
-          Flow {
-            width: parent.width
-            spacing: Style.space(8)
-
-            Button {
-              text: "Title · " + (page.panel.draftShowTitle ? "On" : "Off")
-              foreground: page.panel.foreground
-              selected: page.panel.draftShowTitle
-              tooltipText: "Show the song title in the top bar"
-              onClicked: {
-                page.panel.draftShowTitle = !page.panel.draftShowTitle
-                page.panel.enforceScrollAvailability()
-                page.panel.persistDraftSettings()
-              }
-            }
-            Button {
-              text: "Artist · " + (page.panel.draftShowArtist ? "On" : "Off")
-              foreground: page.panel.foreground
-              selected: page.panel.draftShowArtist
-              tooltipText: "Show the artist name in the top bar"
-              onClicked: {
-                page.panel.draftShowArtist = !page.panel.draftShowArtist
-                page.panel.enforceScrollAvailability()
-                page.panel.persistDraftSettings()
-              }
-            }
-            Button {
-              text: "While paused · "
-                + (page.panel.draftShowPausedTrack ? "Show" : "Hide")
-              foreground: page.panel.foreground
-              selected: page.panel.draftShowPausedTrack
-              tooltipText: page.panel.draftShowPausedTrack
-                ? "Keep the configured title and artist visible while paused"
-                : "Show only the Spotify icon while paused"
-              onClicked: {
-                page.panel.draftShowPausedTrack = !page.panel.draftShowPausedTrack
-                page.panel.persistDraftSettings()
-              }
-            }
-            Button {
-              text: "Scroll overflow · " + (page.panel.draftScrollBarText ? "On" : "Off")
-              foreground: page.panel.foreground
-              selected: page.panel.draftScrollBarText
-              enabled: Api.canScrollBarText(page.panel.draftShowTitle, page.panel.draftShowArtist)
-                && !page.panel.barTextWidthUnlimited
-              tooltipText: page.panel.barTextWidthUnlimited
-                ? "Unavailable while the bar width is unlimited — the label always fits"
-                : "Scroll bar text only when it is too wide to fit"
-              onClicked: {
-                page.panel.draftScrollBarText = !page.panel.draftScrollBarText
-                page.panel.persistDraftSettings()
-              }
-            }
-            Button {
-              text: "Fixed width · " + (page.panel.draftFixedBarWidth ? "On" : "Off")
-              foreground: page.panel.foreground
-              selected: page.panel.draftFixedBarWidth
-              enabled: Api.canScrollBarText(page.panel.draftShowTitle, page.panel.draftShowArtist)
-                && !page.panel.barTextWidthUnlimited
-              tooltipText: page.panel.barTextWidthUnlimited
-                ? "Unavailable while the bar width is unlimited"
-                : "Always reserve the full width while a track is shown, so the bar does not shift between songs"
-              onClicked: {
-                page.panel.draftFixedBarWidth = !page.panel.draftFixedBarWidth
-                page.panel.persistDraftSettings()
-              }
-            }
-            // Discloses the width slider rather than changing a setting;
-            // the selected highlight marks the open state.
-            Button {
-              text: "Width · " + page.panel.maxBarTextWidthLabel()
-              foreground: page.panel.foreground
-              selected: page.panel.barTextWidthExpanded
-              enabled: Api.canScrollBarText(page.panel.draftShowTitle, page.panel.draftShowArtist)
-              tooltipText: "How wide the bar label may grow"
-              onClicked: page.panel.barTextWidthExpanded = !page.panel.barTextWidthExpanded
-            }
-          }
-
-          Column {
-            width: parent.width
-            spacing: Style.space(4)
-            visible: Api.canScrollBarText(page.panel.draftShowTitle, page.panel.draftShowArtist)
-              && page.panel.draftScrollBarText
-
-            Row {
-              width: parent.width
-
-              Text {
-                id: scrollSpeedTitle
-                text: "SCROLL SPEED"
-                color: page.panel.muted
-                font.family: page.panel.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-              Item {
-                width: Math.max(0, parent.width - scrollSpeedTitle.implicitWidth
-                  - scrollSpeedValue.implicitWidth)
-                height: 1
-              }
-              Text {
-                id: scrollSpeedValue
-                text: page.panel.scrollSpeedLabel()
-                color: page.panel.foreground
-                font.family: page.panel.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-              }
+            HoverHandler {
+              onHoveredChanged: if (hovered)
+                page.panel.setPanelCursor("page", scrollSpeedCursor.cursorId)
             }
 
             PanelSlider {
-              width: parent.width
+              id: scrollSpeedSlider
+              anchors.fill: parent
               bar: page.panel.panelBar
               minimum: 0.25
               maximum: 3
@@ -611,149 +509,128 @@ Item {
               }
             }
           }
+        }
 
-          Column {
+        Column {
+          width: parent.width
+          spacing: Style.space(4)
+          visible: page.barTextCanScroll
+
+          Row {
             width: parent.width
-            spacing: Style.space(4)
-            visible: Api.canScrollBarText(page.panel.draftShowTitle, page.panel.draftShowArtist)
-              && page.panel.barTextWidthExpanded
 
-            Row {
-              width: parent.width
+            Text {
+              id: maxBarWidthTitle
+              text: "Maximum width"
+              color: page.panel.muted
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.bodySmall
+            }
+            Item {
+              width: Math.max(0, parent.width - maxBarWidthTitle.implicitWidth
+                - maxBarWidthValue.implicitWidth)
+              height: 1
+            }
+            Text {
+              id: maxBarWidthValue
+              textFormat: Text.PlainText
+              text: page.panel.maxBarTextWidthLabel()
+              color: page.panel.foreground
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              font.bold: true
+            }
+          }
 
-              Text {
-                id: maxBarWidthTitle
-                text: "MAX WIDTH"
-                color: page.panel.muted
-                font.family: page.panel.fontFamily
-                font.pixelSize: Style.font.caption
-                font.bold: true
-              }
-              Item {
-                width: Math.max(0, parent.width - maxBarWidthTitle.implicitWidth
-                  - maxBarWidthValue.implicitWidth)
-                height: 1
-              }
-              Text {
-                id: maxBarWidthValue
-                text: page.panel.maxBarTextWidthLabel()
-                color: page.panel.foreground
-                font.family: page.panel.fontFamily
-                font.pixelSize: Style.font.bodySmall
-                font.bold: true
-              }
+          CursorSurface {
+            id: maxWidthCursor
+            readonly property string cursorId: "set-bar-width"
+            function adjust(delta) {
+              page.panel.setMaxBarTextWidthFromSlider(page.panel.maxBarTextWidthSliderValue()
+                + delta * page.panel.barTextWidthSlider.step)
+              page.panel.persistDraftSettings()
+            }
+            width: parent.width
+            height: maxWidthSlider.implicitHeight
+            hasCursor: page.panel.cursorShown("page", cursorId)
+            foreground: page.panel.foreground
+
+            HoverHandler {
+              onHoveredChanged: if (hovered)
+                page.panel.setPanelCursor("page", maxWidthCursor.cursorId)
             }
 
             PanelSlider {
-              width: parent.width
+              id: maxWidthSlider
+              anchors.fill: parent
               bar: page.panel.panelBar
               minimum: page.panel.barTextWidthSlider.min
               maximum: page.panel.barTextWidthSlider.unlimited
               step: page.panel.barTextWidthSlider.step
               tickCount: page.panel.barTextWidthSlider.ticks
               value: page.panel.maxBarTextWidthSliderValue()
-              onMoved: function(value) {
-                page.panel.setMaxBarTextWidthFromSlider(value)
-              }
+              onMoved: function(value) { page.panel.setMaxBarTextWidthFromSlider(value) }
               onReleased: function(value) {
                 page.panel.setMaxBarTextWidthFromSlider(value)
                 page.panel.persistDraftSettings()
               }
             }
-
-            Text {
-              width: parent.width
-              visible: page.panel.barTextWidthUnlimited
-              text: "Very long titles will take space from other bar widgets."
-              color: page.panel.muted
-              font.family: page.panel.fontFamily
-              font.pixelSize: Style.font.bodySmall
-              wrapMode: Text.WordWrap
-            }
           }
 
-          Text {
-            width: parent.width
-            visible: page.panel.draftScrollBarText
-            text: "Long labels scroll and fade at the edges only when they exceed the available bar space."
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
+          SettingNote {
+            visible: page.panel.barTextWidthUnlimited
+            text: "Very long titles will take space from other bar widgets."
           }
         }
+      }
 
-        Column {
+      Section {
+        SectionTitle { text: "Playback" }
+
+        SettingNote {
+          visible: page.service && page.service.usesSoloist
+          text: "Spotify Soloist manages streaming quality and audio normalization."
+        }
+
+        Flow {
           width: parent.width
           spacing: Style.space(6)
+          visible: page.service && !page.service.usesSoloist
 
-          Text {
-            text: "PLAYBACK"
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.caption
-            font.bold: true
-          }
-
-          Button {
-            text: "Audio quality · " + page.panel.audioQualityLabel()
-            visible: page.panel.service && !page.panel.service.usesSoloist
+          SettingButton {
+            panel: page.panel
+            cursorId: "set-audio-quality"
+            width: page.toggleWidth
+            leftAlign: true
+            text: "Audio quality: " + page.panel.audioQualityLabel()
             iconText: "󰎈"
-            foreground: page.panel.foreground
             tooltipText: "Change streaming quality"
             onClicked: page.panel.cycleAudioQuality()
           }
-
-          Button {
-            text: "Normalize volume · "
-              + (page.panel.draftNormalizeVolume ? "On" : "Off")
-            visible: page.panel.service && !page.panel.service.usesSoloist
-            iconText: "󰕾"
-            foreground: page.panel.foreground
-            tooltipText: "Play quiet and loud tracks at a similar level"
+          SettingToggle {
+            panel: page.panel
+            cursorId: "set-normalize"
+            width: page.toggleWidth
+            label: "Normalize volume"
+            description: "Play quiet and loud tracks at a similar level."
+            checked: page.panel.draftNormalizeVolume
             onClicked: page.panel.toggleNormalizeVolume()
           }
-
-          Button {
-            text: "Volume level · " + page.panel.volumeLevelLabel()
-            visible: page.panel.service && !page.panel.service.usesSoloist
+          SettingButton {
+            panel: page.panel
+            cursorId: "set-volume-level"
+            width: page.toggleWidth
+            leftAlign: true
+            text: "Volume level: " + page.panel.volumeLevelLabel()
             iconText: "󰝝"
-            foreground: page.panel.foreground
             enabled: page.panel.draftNormalizeVolume
             tooltipText: "How loud normalized playback aims to be"
             onClicked: page.panel.cycleVolumeLevel()
           }
-          Text {
-            width: parent.width
-            visible: page.panel.service && page.panel.service.usesSoloist
-            text: "Spotify Soloist manages streaming quality and audio normalization."
-            color: page.panel.muted
-            font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.bodySmall
-            wrapMode: Text.WordWrap
-          }
-        }
-
-        Text {
-          width: parent.width
-          text: "This computer stays visible in Spotify Connect while the player is open. After it closes, an empty receiver sleeps at the idle timeout; paused media stays available to resume. Use 0 minutes to keep this computer available even while the player is closed."
-          color: page.panel.muted
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          wrapMode: Text.WordWrap
-        }
-
-        Text {
-          width: parent.width
-          text: page.panel.service && page.panel.service.usesSoloist
-            ? "Changes apply immediately. Device name updates the next time local playback starts."
-            : "Changes apply immediately. Device name and audio quality update the next time local playback starts."
-          color: page.panel.muted
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.bodySmall
-          wrapMode: Text.WordWrap
         }
       }
+
+      Item { width: 1; height: Style.space(4) }
     }
   }
 

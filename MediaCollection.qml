@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
@@ -16,8 +18,7 @@ Item {
   property string sortKey: "default"
   property bool sortDescending: false
   property string contextUri: ""
-  property bool showFilter: true
-  property bool showSort: showFilter
+  property bool showSort: false
   property bool showQueue: true
   property bool showPlaylist: true
   property bool showSave: true
@@ -25,6 +26,10 @@ Item {
   property bool loading: false
   property bool hasMore: false
   property string emptyMessage: "Nothing here yet."
+  property string emptyGlyph: "󰝚"
+  property string emptyActionText: ""
+  readonly property color muted: Api.secondaryTextColor(Commons.Color.foreground,
+    Commons.Color.background)
   property real restoredContentY: 0
   property string stateKey: ""
   property bool restoreReady: true
@@ -35,7 +40,6 @@ Item {
   property string keyboardFilterScanHint: ""
   property string keyboardSortHint: ""
   property string keyboardMoreHint: ""
-  property string keyboardListHint: ""
   property bool keyboardAtList: false
   property bool keyboardAtListPrev: false
   property bool keyboardAtListNext: false
@@ -46,9 +50,17 @@ Item {
   property bool keyboardShiftHeld: false
   property bool keyboardAltHeld: false
   property bool keyboardHintsActive: false
+  // True only when the keyboard is showing the cursor, not when hover moved it.
+  property bool keyboardCursorShown: false
+  property var cursorHost: null
   property string keyboardListId: "list"
+  property string modelKey: ""
+  property bool pointerSeen: false
+  property real pointerX: 0
+  property real pointerY: 0
   readonly property int listCurrentIndex: mediaList.currentIndex
   readonly property int listCount: mediaList.count
+  property alias listContentY: mediaList.contentY
   property bool allowReorder: false
   property bool reorderBusy: false
   property int dragSourceIndex: -1
@@ -61,7 +73,11 @@ Item {
 
   // Whatever this list shows is worth keeping on disk, so a rebuilt row redraws
   // from a local file rather than the CDN.
-  onVisibleItemsChanged: if (root.service) root.service.keepArtwork(visibleItems)
+  onVisibleItemsChanged: {
+    if (root.service) root.service.keepArtwork(visibleItems)
+    applyModel()
+  }
+  onListCurrentIndexChanged: if (cursorHost) cursorHost.scheduleCursorRefresh()
   readonly property bool playbackUsesVisibleOrder: Api.playbackUsesVisibleOrder(
     contextUri, filterText, sortKey)
   readonly property string playbackContextUri: Api.playbackContextForView(
@@ -83,6 +99,7 @@ Item {
     var sourceItems, string contextUri, string playbackContextUri)
   signal reorderRequested(int sourceIndex, int destinationIndex)
   signal loadMoreRequested()
+  signal emptyActionRequested()
   signal viewStateChanged(string filterText, string sortKey, real contentY)
 
   readonly property bool filterScanAvailable: scanner.available
@@ -117,16 +134,50 @@ Item {
     viewStateChanged(filterText, sortKey, mediaList.contentY)
   }
 
+  // A new array resets a ListView to the top, which would throw away your place
+  // whenever a page loads or a row moves. Only a new list or sort starts over.
+  function applyModel() {
+    var key = stateKey + "|" + filterText + "|" + sortKey + "|" + sortDescending
+    var same = key === modelKey
+    var position = mediaList.contentY
+    var index = mediaList.currentIndex
+    modelKey = key
+    mediaList.model = visibleItems
+    if (!same) return
+    if (index >= 0 && index < mediaList.count) mediaList.currentIndex = index
+    mediaList.contentY = Math.max(mediaList.originY, Math.min(position,
+      Math.max(mediaList.originY, mediaList.contentHeight - mediaList.height + mediaList.originY)))
+  }
+
   function focusList() {
     mediaList.forceActiveFocus()
     if (mediaList.currentIndex < 0 && mediaList.count > 0) mediaList.currentIndex = 0
   }
 
+  function moveTo(index) {
+    mediaList.currentIndex = index
+    mediaList.positionViewAtIndex(index, ListView.Contain)
+  }
+
   function moveCurrent(delta) {
     var next = Api.listIndexAfterMove(mediaList.count, mediaList.currentIndex, delta)
     if (next < 0) return false
-    mediaList.currentIndex = next
+    moveTo(next)
     return true
+  }
+
+  // Rows slide under a pointer that is not moving, and that must not take the
+  // cursor away from the keyboard.
+  function notePointer(index, scenePoint) {
+    var moved = pointerSeen && (Math.abs(scenePoint.x - pointerX) > 1
+      || Math.abs(scenePoint.y - pointerY) > 1)
+    pointerSeen = true
+    pointerX = scenePoint.x
+    pointerY = scenePoint.y
+    if (!moved) return
+    mediaList.currentIndex = index
+    if (cursorHost && (!keyboardAtList || keyboardCursorShown))
+      cursorHost.setPanelCursor("page", keyboardListId)
   }
 
   function currentContextAnchor() {
@@ -152,7 +203,7 @@ Item {
 
   function jumpToEdge(toEnd) {
     if (mediaList.count <= 0) return
-    mediaList.currentIndex = toEnd ? mediaList.count - 1 : 0
+    moveTo(toEnd ? mediaList.count - 1 : 0)
   }
 
   function firstVisibleListIndex() {
@@ -291,7 +342,10 @@ Item {
     }
   }
 
-  Component.onCompleted: restoreView()
+  Component.onCompleted: {
+    applyModel()
+    restoreView()
+  }
   onRestoredContentYChanged: resetRestore()
   onStateKeyChanged: resetRestore()
   onRestoreReadyChanged: if (restoreReady) resetRestore()
@@ -316,36 +370,19 @@ Item {
 
   Column {
     anchors.fill: parent
-    spacing: Style.space(7)
+    spacing: Style.space(6)
 
     Row {
       id: tools
       width: parent.width
-      height: visible ? Style.space(38) : 0
-      visible: root.showFilter || root.showSort
+      height: visible ? sortButton.implicitHeight : 0
+      visible: root.showSort
       spacing: Style.space(7)
-
-      TextField {
-        id: filterField
-        visible: root.showFilter
-        width: visible ? Math.max(80, parent.width
-          - (sortButton.visible ? sortButton.width + parent.spacing : 0)
-          - (sortDirectionButton.visible
-            ? sortDirectionButton.width + parent.spacing : 0)
-          - countLabel.width - parent.spacing) : 0
-        foreground: Commons.Color.foreground
-        placeholderText: "Filter this list"
-        text: root.filterText
-        onTextEdited: {
-          root.filterText = text
-          root.viewStateChanged(root.filterText, root.sortKey, mediaList.contentY)
-        }
-        Keys.onDownPressed: root.focusList()
-      }
 
       Button {
         id: sortDirectionButton
-        visible: root.showSort && root.sortKey !== "default"
+        visible: root.sortKey !== "default"
+        anchors.verticalCenter: parent.verticalCenter
         iconText: root.sortDescending ? "󰒽" : "󰒼"
         foreground: Commons.Color.foreground
         tooltipText: root.sortDescending ? "Reverse: showing last first"
@@ -359,7 +396,7 @@ Item {
 
       Button {
         id: sortButton
-        visible: root.showSort
+        anchors.verticalCenter: parent.verticalCenter
         text: root.sortLabel()
         iconText: "󰒺"
         foreground: Commons.Color.foreground
@@ -376,10 +413,11 @@ Item {
       Text {
         id: countLabel
         anchors.verticalCenter: parent.verticalCenter
+        textFormat: Text.PlainText
         text: root.visibleItems.length
           + (root.filterText ? (root.visibleItems.length === 1 ? " match" : " matches")
             : (root.visibleItems.length === 1 ? " item" : " items"))
-        color: Commons.Color.muted
+        color: root.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
       }
@@ -389,18 +427,21 @@ Item {
       id: mediaList
       width: parent.width
       height: Math.max(30, parent.height - tools.height - moreButton.height
-        - emptyLabel.height - filterProgress.height - parent.spacing * 4)
-      model: root.visibleItems
+        - filterProgress.height
+        - parent.spacing * ((tools.visible ? 1 : 0) + (moreButton.visible ? 1 : 0)
+          + (filterProgress.visible ? 1 : 0)))
       clip: true
-      spacing: Style.space(3)
+      spacing: Style.space(2)
       reuseItems: true
       cacheBuffer: Style.space(160)
       interactive: root.dragSourceIndex < 0
       activeFocusOnTab: false
       keyNavigationEnabled: false
-      highlightFollowsCurrentItem: true
+      highlightFollowsCurrentItem: false
       ScrollBar.vertical: ScrollBar { }
       onMovementEnded: root.rememberView()
+      onAtYEndChanged: if (atYEnd && count > 0 && root.hasMore && !root.loading
+          && root.filterText.trim() === "") root.loadMoreRequested()
       onCountChanged: {
         root.restoreView()
         if (root.dragSourceIndex >= count) root.cancelReorder()
@@ -430,6 +471,7 @@ Item {
       }
 
       delegate: MediaRow {
+        id: row
         required property var modelData
         required property int index
         itemData: modelData
@@ -437,7 +479,8 @@ Item {
         foreground: Commons.Color.foreground
         accent: Commons.Color.accent
         fontFamily: Style.font.family
-        selected: ListView.isCurrentItem && root.keyboardAtList
+        hasCursor: ListView.isCurrentItem && root.keyboardAtList && root.keyboardCursorShown
+        hoverPaints: !root.keyboardCursorShown
         browseOnActivate: root.browseContexts && modelData.kind === "context"
         showQueue: root.showQueue
         showPlaylist: root.showPlaylist
@@ -449,27 +492,32 @@ Item {
           ? (index < root.dragSourceIndex ? -1 : 1) : 0
         saved: root.service ? root.service.isSaved(modelData) : false
         artworkEnabled: !root.service || root.service.artworkEnabled
-        ShortcutHint {
-          ctrlHeld: root.keyboardCtrlHeld
-          shiftHeld: root.keyboardShiftHeld
-          altHeld: root.keyboardAltHeld
-          sequences: selected ? ["C"] : []
-          active: root.keyboardHintsActive && (hint !== "" || selected)
-          navHint: hint
-          readonly property string hint: {
-            mediaList.currentIndex
-            mediaList.count
-            mediaList.contentY
-            root.keyboardAtList
-            root.keyboardAtListPrev
-            root.keyboardAtListNext
-            root.keyboardListIsTab
-            root.keyboardListIsBacktab
-            root.keyboardNavModifiers
-            root.keyboardHintsActive
-            return root.rowNavHint(index)
+        Loader {
+          anchors.fill: parent
+          active: root.keyboardHintsActive
+          sourceComponent: ShortcutHint {
+            ctrlHeld: root.keyboardCtrlHeld
+            shiftHeld: root.keyboardShiftHeld
+            altHeld: root.keyboardAltHeld
+            sequences: row.hasCursor ? ["C"] : []
+            active: root.keyboardHintsActive && (hint !== "" || row.hasCursor)
+            navHint: hint
+            readonly property string hint: {
+              mediaList.currentIndex
+              mediaList.count
+              mediaList.contentY
+              root.keyboardAtList
+              root.keyboardAtListPrev
+              root.keyboardAtListNext
+              root.keyboardListIsTab
+              root.keyboardListIsBacktab
+              root.keyboardNavModifiers
+              root.keyboardHintsActive
+              return root.rowNavHint(row.index)
+            }
           }
         }
+        onPointerMoved: function(scenePoint) { root.notePointer(index, scenePoint) }
         onActivated: function(item) {
           root.activated(item, root.visibleItems, root.playbackContextUri)
         }
@@ -492,19 +540,111 @@ Item {
         }
         onReorderDragCanceled: root.cancelReorder()
       }
-    }
 
-    Text {
-      id: emptyLabel
-      width: parent.width
-      height: visible ? contentHeight : 0
-      visible: !root.loading && root.visibleItems.length === 0
-      text: root.emptyMessage
-      color: Commons.Color.muted
-      font.family: Style.font.family
-      font.pixelSize: Style.font.bodySmall
-      horizontalAlignment: Text.AlignHCenter
-      wrapMode: Text.WordWrap
+      Loader {
+        anchors.fill: parent
+        active: root.visibleItems.length === 0
+        sourceComponent: Item {
+          // A quick answer should not flash a placeholder first.
+          Timer {
+            interval: 150
+            running: root.loading && !skeleton.shown
+            onTriggered: skeleton.shown = true
+          }
+
+          Connections {
+            target: root
+            function onLoadingChanged() { if (!root.loading) skeleton.shown = false }
+          }
+
+          Column {
+            id: skeleton
+            property bool shown: false
+            anchors.left: parent.left
+            anchors.right: parent.right
+            spacing: Style.space(2)
+            visible: shown && root.loading
+            clip: true
+            height: parent.height
+
+            Repeater {
+              model: 8
+
+              Item {
+                id: skeletonRow
+                required property int index
+                width: skeleton.width
+                height: Style.space(46)
+
+                Rectangle {
+                  id: skeletonArt
+                  x: Style.space(6)
+                  anchors.verticalCenter: parent.verticalCenter
+                  width: Style.space(32)
+                  height: width
+                  radius: Style.spacing.labelGap
+                  color: Style.normalFillFor(Commons.Color.foreground, Commons.Color.accent)
+                }
+                Rectangle {
+                  x: skeletonArt.x + skeletonArt.width + Style.space(9)
+                  y: Style.space(13)
+                  width: Math.min(parent.width * 0.5, Style.space(190 + (skeletonRow.index * 53) % 130))
+                  height: Style.space(7)
+                  radius: height / 2
+                  color: Style.hoverFillFor(Commons.Color.foreground, Commons.Color.accent)
+                }
+                Rectangle {
+                  x: skeletonArt.x + skeletonArt.width + Style.space(9)
+                  y: Style.space(27)
+                  width: Math.min(parent.width * 0.35, Style.space(110 + (skeletonRow.index * 37) % 90))
+                  height: Style.space(6)
+                  radius: height / 2
+                  color: Style.normalFillFor(Commons.Color.foreground, Commons.Color.accent)
+                }
+              }
+            }
+          }
+
+          Column {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - Style.space(24), Style.space(380))
+            spacing: Style.space(8)
+            visible: !skeleton.visible
+
+            Text {
+              width: parent.width
+              visible: !root.loading
+              horizontalAlignment: Text.AlignHCenter
+              text: root.emptyGlyph
+              textFormat: Text.PlainText
+              color: root.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.display
+            }
+
+            Text {
+              objectName: "media-collection-empty"
+              width: parent.width
+              text: root.emptyMessage
+              textFormat: Text.PlainText
+              color: root.muted
+              font.family: Style.font.family
+              font.pixelSize: Style.font.bodySmall
+              horizontalAlignment: Text.AlignHCenter
+              wrapMode: Text.WordWrap
+            }
+
+            Button {
+              anchors.horizontalCenter: parent.horizontalCenter
+              visible: root.emptyActionText !== "" && !root.loading
+              text: root.emptyActionText
+              bordered: true
+              foreground: Commons.Color.foreground
+              onClicked: root.emptyActionRequested()
+            }
+          }
+        }
+      }
     }
 
     Flow {
@@ -514,8 +654,9 @@ Item {
       visible: root.filterText.trim() !== "" && root.hasMore
       spacing: Style.space(6)
       Text {
+        textFormat: Text.PlainText
         text: "Filtering " + root.sourceItems.length + " loaded items. More remain."
-        color: Commons.Color.muted
+        color: root.muted
         font.family: Style.font.family
         font.pixelSize: Style.font.caption
         width: Math.min(implicitWidth, parent.width)
@@ -535,7 +676,7 @@ Item {
       id: moreButton
       anchors.horizontalCenter: parent.horizontalCenter
       height: visible ? implicitHeight : 0
-      visible: root.loading || root.hasMore
+      visible: root.hasMore || (root.loading && root.visibleItems.length > 0)
       text: root.loading ? "Loading…" : "Load more"
       foreground: Commons.Color.foreground
       enabled: root.hasMore && !root.loading
@@ -574,6 +715,7 @@ Item {
 
         Text {
           width: parent.width
+          textFormat: Text.PlainText
           text: root.dragItem ? String(root.dragItem.name || "Untitled") : ""
           color: Commons.Color.foreground
           font.family: Style.font.family
@@ -584,8 +726,9 @@ Item {
 
         Text {
           width: parent.width
+          textFormat: Text.PlainText
           text: root.dragItem ? String(root.dragItem.subtitle || "") : ""
-          color: Commons.Color.muted
+          color: root.muted
           font.family: Style.font.family
           font.pixelSize: Style.font.caption
           elide: Text.ElideRight

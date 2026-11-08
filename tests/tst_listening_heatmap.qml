@@ -37,7 +37,7 @@ TestCase {
       accent: "#f1dfb4"
       emptyFill: "#33a59d86"
       cellSize: 9
-      spacing: 2
+      cellGap: 2
     }
   }
 
@@ -46,15 +46,17 @@ TestCase {
   }
 
   function test_everyWeekGetsAColumnOfSevenDays() {
-    var columns = 0
-    for (var i = 0; i < heatmap.children.length; i++) {
+    var cells = findChild(heatmap, "heatmap-cells")
+    var columns = cells.children[0].children
+    var weeks = 0
+    for (var i = 0; i < columns.length; i++) {
       var days = 0
-      var squares = heatmap.children[i].children
+      var squares = columns[i].children
       for (var j = 0; j < squares.length; j++)
         if (squares[j].width === heatmap.cellSize) days++
-      if (days === 7) columns++
+      if (days === 7) weeks++
     }
-    compare(columns, 30)
+    compare(weeks, 30)
   }
 
   function test_noDayIsNamedUntilOneIsHovered() {
@@ -63,20 +65,29 @@ TestCase {
   }
 
   function test_hoveringADayNamesItAndItsPlays() {
-    var cell = heatmap.children[0].children[1]
+    var cells = findChild(heatmap, "heatmap-cells")
 
-    mouseMove(cell, cell.width / 2, cell.height / 2)
+    mouseMove(cells, 4, heatmap.pitch + 4)
 
     tryVerify(function() { return heatmap.hoveredDay !== null }, 2000)
     compare(heatmap.hoveredText, "2026-09-02 · 1 play")
   }
 
   function test_aDayWithSeveralPlaysIsPlural() {
-    var cell = heatmap.children[0].children[3]
+    var cells = findChild(heatmap, "heatmap-cells")
 
-    mouseMove(cell, cell.width / 2, cell.height / 2)
+    mouseMove(cells, 4, heatmap.pitch * 3 + 4)
 
     tryVerify(function() { return heatmap.hoveredDay !== null }, 2000)
     compare(heatmap.hoveredText, "2026-09-04 · 3 plays")
+  }
+
+  function test_theLegendShowsEveryShade() {
+    var legend = findChild(heatmap, "heatmap-legend")
+    verify(legend !== null)
+    var shades = 0
+    for (var i = 0; i < legend.children.length; i++)
+      if (legend.children[i].width === heatmap.cellSize) shades++
+    compare(shades, 4)
   }
 }
