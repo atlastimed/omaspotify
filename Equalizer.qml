@@ -1,4 +1,5 @@
 import QtQuick
+import QtQuick.Shapes
 import Quickshell
 import Quickshell.Io
 import qs.Commons
@@ -30,7 +31,7 @@ Item {
   property string mode: "bars"
   property color barColor: Commons.Color.accent
   property color foreground: Commons.Color.foreground
-  property color muted: Commons.Color.muted
+  property color muted: Commons.Color.foreground
   property string fontFamily: Style.font.family
   property real barGap: Style.space(4)
 
@@ -174,10 +175,7 @@ Item {
           }
         }
 
-        Behavior on height {
-          NumberAnimation { duration: 60; easing.type: Easing.OutQuad }
-        }
-        Behavior on opacity { NumberAnimation { duration: 400 } }
+        Behavior on opacity { NumberAnimation { duration: Style.duration(400) } }
       }
     }
   }
@@ -227,7 +225,7 @@ Item {
             y: pixelColumn.height - (index + 1) * (pixelStage.cell + pixelStage.gap)
             radius: Math.min(Style.cornerRadius, 2)
             color: head
-              ? Qt.lighter(root.barColor, 1.25)
+              ? root.foreground
               : (on ? root.barColor
                 : Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.06))
             opacity: on ? (root.idle ? 0.35 : 1) : 1
@@ -237,67 +235,48 @@ Item {
     }
   }
 
-  // Style 3: mirrored oscilloscope trace.
-  Canvas {
+  // Style 3: mirrored oscilloscope trace. A shape, because a canvas this size
+  // rasterises the whole area again on the shell's main thread for every frame.
+  Item {
     id: scopeStage
     anchors.fill: parent
     visible: !root.unavailable && root.mode === "scope"
-    renderStrategy: Canvas.Cooperative
 
-    Connections {
-      target: root
-      function onLevelsChanged() { if (scopeStage.visible) scopeStage.requestPaint() }
-      function onIdleChanged() { if (scopeStage.visible) scopeStage.requestPaint() }
+    readonly property var outline: {
+      if (!visible || root.barCount < 2) return []
+      var points = []
+      var middle = height / 2
+      var step = width / (root.barCount - 1)
+      var i
+      for (i = 0; i < root.barCount; i++)
+        points.push(Qt.point(i * step, middle - Math.max(1.5, root.bandLevel(i) * (middle - 2))))
+      for (i = root.barCount - 1; i >= 0; i--)
+        points.push(Qt.point(i * step, middle + Math.max(1.5, root.bandLevel(i) * (middle - 2))))
+      if (points.length) points.push(points[0])
+      return points
     }
-    onVisibleChanged: if (visible) requestPaint()
-    onWidthChanged: requestPaint()
-    onHeightChanged: requestPaint()
 
-    onPaint: {
-      var ctx = getContext("2d")
-      var w = width, h = height, cy = h / 2
-      ctx.clearRect(0, 0, w, h)
-      var n = root.barCount
-      if (n < 2) return
-      var step = w / (n - 1)
-      var alpha = root.idle ? 0.35 : 1
+    Rectangle {
+      anchors.left: parent.left
+      anchors.right: parent.right
+      anchors.verticalCenter: parent.verticalCenter
+      height: 1
+      color: Qt.rgba(root.foreground.r, root.foreground.g, root.foreground.b, 0.18)
+    }
 
-      // Base line.
-      ctx.strokeStyle = Qt.rgba(root.foreground.r, root.foreground.g,
-        root.foreground.b, 0.18)
-      ctx.lineWidth = 1
-      ctx.beginPath()
-      ctx.moveTo(0, cy)
-      ctx.lineTo(w, cy)
-      ctx.stroke()
+    Shape {
+      anchors.fill: parent
+      preferredRendererType: Shape.CurveRenderer
+      opacity: root.idle ? 0.35 : 1
 
-      // Upper half, then the mirrored lower half, closed into one shape.
-      ctx.beginPath()
-      var amp = function(i) {
-        return Math.max(1.5, root.bandLevel(i) * (cy - 2))
+      ShapePath {
+        strokeColor: root.barColor
+        strokeWidth: 2
+        fillColor: Qt.rgba(root.barColor.r, root.barColor.g, root.barColor.b, 0.22)
+        joinStyle: ShapePath.RoundJoin
+
+        PathPolyline { path: scopeStage.outline }
       }
-      ctx.moveTo(0, cy - amp(0))
-      for (var i = 1; i < n; i++) {
-        var x0 = (i - 1) * step, x1 = i * step
-        var mid = (x0 + x1) / 2
-        ctx.quadraticCurveTo(x0, cy - amp(i - 1), mid, cy - (amp(i - 1) + amp(i)) / 2)
-      }
-      ctx.lineTo(w, cy - amp(n - 1))
-      ctx.lineTo(w, cy + amp(n - 1))
-      for (var j = n - 1; j > 0; j--) {
-        var xa = j * step, xb = (j - 1) * step
-        var m2 = (xa + xb) / 2
-        ctx.quadraticCurveTo(xa, cy + amp(j), m2, cy + (amp(j) + amp(j - 1)) / 2)
-      }
-      ctx.lineTo(0, cy + amp(0))
-      ctx.closePath()
-      ctx.fillStyle = Qt.rgba(root.barColor.r, root.barColor.g, root.barColor.b,
-        0.22 * alpha)
-      ctx.fill()
-      ctx.strokeStyle = Qt.rgba(root.barColor.r, root.barColor.g, root.barColor.b,
-        alpha)
-      ctx.lineWidth = 2
-      ctx.stroke()
     }
   }
 
@@ -361,43 +340,59 @@ Item {
       }
     }
 
+    // Plain text per column with a separate head line. Rich text here cost five
+    // times as much on the shell's main thread, forty times a second.
     Repeater {
       model: matrixStage.visible ? matrixStage.columns : 0
-      Text {
-        required property int index
-        readonly property real level: root.groupedLevel(index, 2)
-        readonly property int lit: Math.round(level * matrixStage.rows)
 
+      Item {
+        id: matrixColumn
+        required property int index
+        readonly property int lit: Math.round(root.groupedLevel(index, 2) * matrixStage.rows)
         x: index * matrixStage.cellWidth
-        anchors.bottom: parent.bottom
         width: matrixStage.cellWidth
-        horizontalAlignment: Text.AlignHCenter
-        lineHeight: matrixStage.lineHeight
-        lineHeightMode: Text.FixedHeight
-        font.family: root.fontFamily
-        font.pixelSize: matrixStage.fontPx
-        font.bold: true
-        color: root.barColor
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
         opacity: root.idle ? 0.35 : 1
-        textFormat: Text.RichText
-        text: {
-          var rows = matrixStage.rows
-          var grid = matrixStage.grid
-          var head = Qt.lighter(root.barColor, 1.35).toString()
-          var out = ""
-          for (var r = 0; r < rows; r++) {
-            // Row 0 is the top line; lit rows fill up from the bottom.
-            var fromBottom = rows - 1 - r
-            var on = fromBottom < lit
-            var glyph = on && grid[r] ? grid[r].charAt(index) : "&nbsp;"
-            if (glyph === "<") glyph = "&lt;"
-            else if (glyph === ">") glyph = "&gt;"
-            else if (glyph === "&") glyph = "&amp;"
-            if (on && fromBottom === lit - 1)
-              glyph = "<font color=\"" + head + "\">" + glyph + "</font>"
-            out += (r ? "<br>" : "") + glyph
+
+        Text {
+          anchors.bottom: parent.bottom
+          width: parent.width
+          horizontalAlignment: Text.AlignHCenter
+          lineHeight: matrixStage.lineHeight
+          lineHeightMode: Text.FixedHeight
+          textFormat: Text.PlainText
+          font.family: root.fontFamily
+          font.pixelSize: matrixStage.fontPx
+          font.bold: true
+          color: root.barColor
+          text: {
+            var rows = matrixStage.rows
+            var grid = matrixStage.grid
+            var out = ""
+            for (var r = rows - matrixColumn.lit + 1; r < rows; r++)
+              out += (out ? "\n" : "") + (grid[r] ? grid[r].charAt(matrixColumn.index) : " ")
+            return out
           }
-          return out
+        }
+
+        Text {
+          anchors.bottom: parent.bottom
+          anchors.bottomMargin: (matrixColumn.lit - 1) * matrixStage.lineHeight
+          width: parent.width
+          visible: matrixColumn.lit > 0
+          horizontalAlignment: Text.AlignHCenter
+          lineHeight: matrixStage.lineHeight
+          lineHeightMode: Text.FixedHeight
+          textFormat: Text.PlainText
+          font.family: root.fontFamily
+          font.pixelSize: matrixStage.fontPx
+          font.bold: true
+          color: root.foreground
+          text: {
+            var row = matrixStage.grid[matrixStage.rows - matrixColumn.lit]
+            return row ? row.charAt(matrixColumn.index) : ""
+          }
         }
       }
     }
@@ -418,7 +413,7 @@ Item {
       badgeTimer.restart()
     }
 
-    Behavior on opacity { NumberAnimation { duration: 350 } }
+    Behavior on opacity { NumberAnimation { duration: Style.duration(350) } }
     Timer { id: badgeTimer; interval: 1600; onTriggered: modeBadge.opacity = 0 }
 
     Rectangle {
@@ -431,7 +426,7 @@ Item {
     Text {
       id: badgeText
       anchors.centerIn: parent
-      text: root.mode.toUpperCase() + " · V"
+      text: root.mode.charAt(0).toUpperCase() + root.mode.slice(1) + " · V"
       color: root.barColor
       font.family: root.fontFamily
       font.pixelSize: Style.font.caption
@@ -453,15 +448,4 @@ Item {
     wrapMode: Text.WordWrap
   }
 
-  Text {
-    anchors.centerIn: parent
-    visible: root.unavailable
-    width: Math.min(parent.width, Style.space(420))
-    text: root.unavailableReason
-    color: root.muted
-    font.family: root.fontFamily
-    font.pixelSize: Style.font.bodySmall
-    horizontalAlignment: Text.AlignHCenter
-    wrapMode: Text.WordWrap
-  }
 }
