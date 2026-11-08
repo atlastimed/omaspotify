@@ -33,6 +33,17 @@ ShellRoot {
       if (!manager.statusPollNeeded) return root.fail("status is not polled while visible")
       manager.uiVisible = false
       manager.keyAvailable = true
+      // Asking again must count even while the helper is busy with something else.
+      manager.setupBusy = true
+      manager.authenticate()
+      manager.setupBusy = false
+      if (manager.terminalFailure) return root.fail("a retry while busy kept the failure")
+      // A status check that started before the retry can still read the old file.
+      manager.terminalFailure = false
+      manager.applyFailureFile('{"code":"soloist_expired","timestamp":1}')
+      if (manager.terminalFailure) return root.fail("a failure from before the retry came back")
+      manager.applyFailureFile('{"code":"soloist_expired","timestamp":' + Math.ceil(Date.now() / 1000 + 5) + '}')
+      if (!manager.terminalFailure) return root.fail("a new failure was ignored")
       manager.authenticate()
       if (manager.terminalFailure) return root.fail("an explicit retry kept the failure")
       if (!manager.statusPollNeeded) return root.fail("pairing does not poll")

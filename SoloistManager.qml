@@ -31,6 +31,7 @@ Item {
   property bool startAfterSave: false
   property int statusGeneration: 0
   property bool helperSynced: false
+  property double failureClearedAt: 0
   // A plugin update can change the backend, which keeps working until repaired.
   property bool backendCurrent: true
   property bool backendChecked: false
@@ -104,11 +105,14 @@ Item {
     // Only the librespot engine reports this one, and the file outlives a switch.
     var message = code === "reconnect_exhausted" ? "" : Api.playbackFailureMessage(code)
     if (!message) return
+    // Removing the file takes a moment, and a status check may already be reading it.
+    if (Number(record.timestamp) < Math.floor(failureClearedAt / 1000)) return
     terminalFailure = true
     lastError = message
     authenticationBusy = false
   }
   function clearFailureFile() {
+    failureClearedAt = Date.now()
     if (failurePath) Quickshell.execDetached(["rm", "-f", "--", failurePath])
   }
   function checkRequirements() { refreshStatus() }
@@ -123,11 +127,12 @@ Item {
     setup.running = true
   }
   function start(explicit) {
-    if (busy || running || !playbackReady || !keyAvailable) return
+    // Asking again counts even if nothing can start this very moment.
     if (explicit === true) {
       terminalFailure = false
       clearFailureFile()
     }
+    if (busy || running || !playbackReady || !keyAvailable) return
     if (terminalFailure) return
     statusGeneration++
     configure.generation = statusGeneration
