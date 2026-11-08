@@ -100,8 +100,8 @@ Item {
 
   function statusText() {
     if (mode === "minutes") {
-      var minutes = Math.floor(remainingSeconds / 60)
-      var seconds = remainingSeconds % 60
+      const minutes = Math.floor(remainingSeconds / 60)
+      const seconds = remainingSeconds % 60
       return "Sleep in " + minutes + ":" + (seconds < 10 ? "0" : "") + seconds
     }
     if (mode === "track") return "Sleep after this item"

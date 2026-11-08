@@ -181,7 +181,7 @@ Item {
   Process {
     id: status
     property int generation: 0
-    stdout: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector { id: statusOutput; waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(code) {
       if (generation !== root.statusGeneration) {
@@ -190,7 +190,7 @@ Item {
       }
       if (code !== 0) return
       var data
-      try { data = JSON.parse(stdout.text) } catch (_) { return }
+      try { data = JSON.parse(statusOutput.text) } catch (_) { return }
       root.applyStatus(generation, data)
     }
   }

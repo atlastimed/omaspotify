@@ -1304,36 +1304,6 @@ TestCase {
       "This playlist has no visible items.")
   }
 
-  function test_responsiveMediaRowsAndSearchColumnsUseMeasuredWidth() {
-    verify(Api.mediaRowShouldCompact(220, 180, 4))
-    verify(!Api.mediaRowShouldCompact(180, 220, 4))
-    verify(!Api.mediaRowShouldCompact(220, 180, 0))
-    compare(Api.responsiveResultColumns(1000, 760), 2)
-    compare(Api.responsiveResultColumns(500, 760), 1)
-  }
-
-  function test_sectionedMediaRows_flattensGroupsForOneVirtualizedView() {
-    var songs = [{ id: "one" }, { id: "two" }, { id: "three" }]
-    var rows = Api.sectionedMediaRows([
-      { id: "songs", heading: "SONGS", items: songs, loading: false, hasMore: true },
-      { id: "albums", heading: "ALBUMS", items: [], loading: false, hasMore: false },
-      { id: "playlists", heading: "PLAYLISTS", items: [], loading: true, hasMore: false }
-    ], 2)
-
-    compare(rows.length, 6)
-    compare(rows[0].kind, "heading")
-    compare(rows[0].sectionId, "songs")
-    compare(rows[1].kind, "items")
-    compare(rows[1].items.length, 2)
-    compare(rows[1].startIndex, 0)
-    compare(rows[2].items.length, 1)
-    compare(rows[2].startIndex, 2)
-    compare(rows[3].kind, "more")
-    compare(rows[4].kind, "heading")
-    compare(rows[4].sectionId, "playlists")
-    compare(rows[5].kind, "more")
-  }
-
   function test_artistSubtitleSuffix_keepsNonArtistAlbumDetails() {
     compare(Api.artistSubtitleSuffix({
       subtitle: "Jimi Hendrix · Album · 1967",

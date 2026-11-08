@@ -102,8 +102,12 @@ Popup {
       activeFocusOnTab: true
       ScrollBar.vertical: ScrollBar { policy: ScrollBar.AsNeeded }
       currentIndex: 0
-      Keys.onReturnPressed: if (currentItem) currentItem.clicked()
-      Keys.onEnterPressed: if (currentItem) currentItem.clicked()
+      function activateCurrent() {
+        const row = currentItem as Button
+        if (row) row.clicked()
+      }
+      Keys.onReturnPressed: activateCurrent()
+      Keys.onEnterPressed: activateCurrent()
 
       FastScrollHandler { parent: playlistPickerList; flickable: playlistPickerList }
 

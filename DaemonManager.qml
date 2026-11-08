@@ -325,10 +325,10 @@ Item {
 
   Process {
     id: unitCheck
-    stdout: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector { id: unitOutput; waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
-      var unit = String(stdout.text || "").trim()
+      var unit = String(unitOutput.text || "").trim()
       root.unitAvailable = exitCode === 0
       root.unitChecked = true
       if (unit) root.unitName = unit

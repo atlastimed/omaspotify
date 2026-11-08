@@ -2208,13 +2208,6 @@ function artistPlaylistSearchText(artistName, term) {
   return query && artist ? query + " " + artist : (query || artist)
 }
 
-function mediaRowShouldCompact(titleWidth, availableWidth, actionCount) {
-  var title = Math.max(0, Number(titleWidth) || 0)
-  var available = Math.max(0, Number(availableWidth) || 0)
-  var actions = Math.max(0, Math.floor(Number(actionCount) || 0))
-  return actions > 0 && title > available
-}
-
 // Artwork comes from Spotify's CDN on every launch. A stable name per URL lets
 // it be kept on disk instead, which is what makes a second launch quick.
 function artworkCacheName(url) {
@@ -2277,52 +2270,6 @@ function evenColumnWidth(total, spacing, count) {
   if (columns < 1) return Math.max(0, Number(total) || 0)
   var gaps = Math.max(0, Number(spacing) || 0) * (columns - 1)
   return Math.max(80, (Math.max(0, Number(total) || 0) - gaps) / columns)
-}
-
-function responsiveResultColumns(width, twoColumnWidth) {
-  var available = Math.max(0, Number(width) || 0)
-  var breakpoint = Math.max(1, Number(twoColumnWidth) || 1)
-  return available >= breakpoint ? 2 : 1
-}
-
-// Flatten grouped search results into rows for one virtualized ListView. Each
-// media row contains at most `columnCount` items, so the view creates only the
-// rows around its viewport instead of every result in several nested grids.
-function sectionedMediaRows(sections, columnCount) {
-  var groups = Array.isArray(sections) ? sections : []
-  var columns = Math.max(1, Math.min(4, Math.floor(Number(columnCount) || 1)))
-  var rows = []
-  for (var sectionIndex = 0; sectionIndex < groups.length; sectionIndex++) {
-    var section = groups[sectionIndex] || {}
-    var items = arrayValues(section.items)
-    var loading = section.loading === true
-    var hasMore = section.hasMore === true
-    if (!items.length && !loading && !hasMore) continue
-
-    var id = String(section.id || sectionIndex)
-    rows.push({
-      kind: "heading",
-      sectionId: id,
-      heading: String(section.heading || "RESULTS"),
-      count: items.length,
-      loading: loading
-    })
-    for (var start = 0; start < items.length; start += columns) {
-      rows.push({
-        kind: "items",
-        sectionId: id,
-        startIndex: start,
-        items: items.slice(start, start + columns)
-      })
-    }
-    if (loading || hasMore) rows.push({
-      kind: "more",
-      sectionId: id,
-      loading: loading,
-      hasMore: hasMore
-    })
-  }
-  return rows
 }
 
 function tracksForArtist(items, artist) {

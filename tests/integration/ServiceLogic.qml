@@ -425,13 +425,13 @@ ShellRoot {
 
     { name: "failed artwork is not marked as kept", run: function(done) {
       top.check(svc.artwork.scanned, "the artwork directory was never scanned")
-      svc.artwork.enabled = true
+      svc.artwork.keeping = true
       var url = "https://127.0.0.1:9/never-downloaded.png"
       svc.keepArtwork([{ imageUrl: url }])
       top.waitUntil(function() { return svc.artwork.failed[url] === true }, 4000, function() {
         top.check(svc.artworkFor(url) === url, "points at a file that does not exist")
         top.check(svc.artwork.failed[url] === true, "the failure was not noticed")
-        svc.artwork.enabled = false
+        svc.artwork.keeping = false
         done()
       })
     } },

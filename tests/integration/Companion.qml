@@ -75,12 +75,12 @@ ShellRoot {
       } else if (stage === 3 && client.devices.length) {
         check(player.deviceRequests === 1, "devices not on demand")
         client.watch("monitor2", false, "")
-        bridge.enabled = false
+        bridge.serving = false
         stage = 4
       } else if (stage === 4 && !client.connected) {
         check(!client.title && !client.playing, "stale state after disconnect")
         // setUiVisible is idempotent in the real service.
-        bridge.enabled = true
+        bridge.serving = true
         player.title = "Reconnected"
         stage = 5
       } else if (stage === 5 && client.connected && client.title === "Reconnected") {

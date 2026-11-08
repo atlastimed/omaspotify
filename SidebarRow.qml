@@ -55,7 +55,7 @@ BorderSurface {
     cursorShape: Qt.PointingHandCursor
     onClicked: function(mouse) {
       if (mouse.button === Qt.RightButton) {
-        var point = row.mapToItem(null, mouse.x, mouse.y)
+        const point = row.mapToItem(null, mouse.x, mouse.y)
         row.contextRequested(point.x, point.y)
       } else row.activated()
     }

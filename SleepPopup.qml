@@ -70,7 +70,7 @@ Popup {
         leftAlign: true
         hasCursor: popup.panel.cursorShown("popup", "sleep-" + modelData)
         onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-" + minutesButton.modelData) }
-        KeyHint { region: "popup"; action: "sleep-" + modelData }
+        KeyHint { region: "popup"; action: "sleep-" + minutesButton.modelData }
         onClicked: {
           if (popup.panel.service) popup.panel.service.setSleepMinutes(modelData)
           popup.close()

@@ -50,10 +50,10 @@ Item {
       searchLoadedTypes = ({})
     }
     if (force === true) {
-      var refreshedGroups = Api.shallowCopy(searchGroups)
+      const refreshedGroups = Api.shallowCopy(searchGroups)
       refreshedGroups[value] = Api.normalizeSearchPage({}, value, 128)
       searchGroups = refreshedGroups
-      var refreshedTypes = Api.shallowCopy(searchLoadedTypes)
+      const refreshedTypes = Api.shallowCopy(searchLoadedTypes)
       refreshedTypes[value] = false
       searchLoadedTypes = refreshedTypes
     }
@@ -79,10 +79,10 @@ Item {
       root.searchPendingType = ""
       if (error) root.searchError = root.safeError(error)
       else {
-        var incoming = ({})
+        const incoming = ({})
         incoming[value] = groups[value]
         root.searchGroups = Api.mergeSearchGroups(root.searchGroups, incoming)
-        var loaded = Api.shallowCopy(root.searchLoadedTypes)
+        const loaded = Api.shallowCopy(root.searchLoadedTypes)
         loaded[value] = true
         root.searchLoadedTypes = loaded
         root.searchError = ""

@@ -165,7 +165,7 @@ BorderSurface {
         return
       }
       if (mouse.button === Qt.RightButton) {
-        var scenePoint = root.mapToItem(null, mouse.x, mouse.y)
+        const scenePoint = root.mapToItem(null, mouse.x, mouse.y)
         root.contextRequested(root.itemData, scenePoint.x, scenePoint.y)
       } else {
         root.triggerPrimary()

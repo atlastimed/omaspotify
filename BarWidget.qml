@@ -84,7 +84,7 @@ BarWidget {
     if (lyricsInstallPromptVisible) return ["prompt-cancel", "prompt-confirm"]
     if (miniShortcutHelpVisible) return ["help-close"]
     if (spotify && !spotify.accountConnected) {
-      var setupActions = ["setup"]
+      const setupActions = ["setup"]
       if (spotify.loginBusy) setupActions.push("setup-cancel")
       setupActions.push("open")
       return setupActions

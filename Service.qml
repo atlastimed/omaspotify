@@ -514,7 +514,6 @@ Item {
   property bool artistAlbumsLoading: false
   property var artistSongs: []
   property var artistLikedSongs: []
-  property var artistRelated: []
   property bool artistLikedSongsLoading: false
   property string artistSongsNext: ""
   property bool artistSongsLoading: false
@@ -543,7 +542,6 @@ Item {
     playlists: artistPlaylists,
     playlistsNext: artistPlaylistsNext,
     thisIs: artistThisIsPlaylist,
-    related: artistRelated,
     likedSongs: artistLikedSongs
   })
   readonly property var playlistSnapshot: ({
@@ -849,7 +847,6 @@ Item {
     artistPlaylists = Array.isArray(snapshot.playlists) ? snapshot.playlists : []
     artistPlaylistsNext = String(snapshot.playlistsNext || "")
     artistThisIsPlaylist = snapshot.thisIs || null
-    artistRelated = [] // The related-artists endpoint is unavailable to this app.
     artistLikedSongs = Array.isArray(snapshot.likedSongs) ? snapshot.likedSongs : []
   }
 
@@ -2926,7 +2923,6 @@ Item {
     artistThisIsLoading = false
     artistLikedSongs = []
     artistLikedSongsLoading = false
-    artistRelated = []
     activeView = "detail"
     checkSavedItems([item])
 
@@ -4600,9 +4596,9 @@ Item {
   }
 
   Connections {
-    target: daemonManager
+    target: root.daemonManager
     function onCredentialsAvailableChanged() {
-      if (daemonManager.credentialsAvailable && root.uiVisible)
+      if (root.daemonManager.credentialsAvailable && root.uiVisible)
         root.ensureVisibleLocalReceiver()
     }
     function onSetupSucceeded() {
@@ -4899,7 +4895,7 @@ Item {
   ArtworkCache {
     id: artworkCache
     directory: root.artworkDir
-    wanted: root.artworkEnabled && root.lazyCachesWanted
+    keeping: root.artworkEnabled && root.lazyCachesWanted
     priorityItems: root.sidebarRawItems
   }
 
@@ -5062,7 +5058,7 @@ Item {
   AuthManager {
     id: authManager
     pluginDir: root.pluginDir
-    customClientId: settings.clientId
+    customClientId: root.settings.clientId
   }
 
   AuthManager {
@@ -5104,7 +5100,7 @@ Item {
 
   BackendClient {
     id: backendClient
-    wanted: daemonManager.running
+    wanted: root.daemonManager.running
     onErrorCodeChanged: if (errorCode === "audio_key_unavailable")
       root.fail(errorMessage || "Spotify could not play this track on this computer")
   }

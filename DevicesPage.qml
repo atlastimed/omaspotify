@@ -80,7 +80,7 @@ Item {
       var action = String(page.panel.panelCursorAction)
       if (action.indexOf("device-") !== 0 || !page.panel.keyboardCursorShown) return
       var row = deviceRows.itemAt(Number(action.substring(7)))
-      var flick = devicesScroll.contentItem
+      var flick = devicesScroll.contentItem as Flickable
       if (!row || !flick) return
       var top = row.mapToItem(devicesContent, 0, 0).y
       if (top < flick.contentY) flick.contentY = top

@@ -458,7 +458,8 @@ Item {
           event.accepted = false
           return
         }
-        if (currentItem) currentItem.triggerPrimary()
+        const row = currentItem as MediaRow
+        if (row) row.triggerPrimary()
         event.accepted = true
       }
       Keys.onEnterPressed: function(event) {
@@ -466,7 +467,8 @@ Item {
           event.accepted = false
           return
         }
-        if (currentItem) currentItem.triggerPrimary()
+        const row = currentItem as MediaRow
+        if (row) row.triggerPrimary()
         event.accepted = true
       }
 

@@ -13,7 +13,7 @@ Item {
   height: 0
 
   property string directory: ""
-  property bool wanted: false
+  property bool keeping: false
   // The rows that always come first once a fetch settles.
   property var priorityItems: []
 
@@ -32,7 +32,7 @@ Item {
     + 'ls -1t | tail -n +"$(($2 + 1))" | while IFS= read -r name; do rm -f -- "$name"; done\n'
     + 'ls -1\n'
 
-  onWantedChanged: if (wanted) keep(priorityItems)
+  onKeepingChanged: if (keeping) keep(priorityItems)
 
   function artworkFor(url) {
     var text = String(url || "")
@@ -73,7 +73,7 @@ Item {
   }
 
   function keep(items) {
-    if (!wanted || !scanned) return
+    if (!keeping || !scanned) return
     lastItems = Array.isArray(items) ? items : []
     var wanted = Api.artworkUrls(lastItems, cached)
     var known = null

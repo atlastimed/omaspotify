@@ -69,7 +69,7 @@ Item {
     function onPanelCursorActionChanged() {
       if (!page.panel.keyboardCursorShown || page.panel.panelCursorRegion !== "page") return
       var target = page.targetFor(page.panel.panelCursorAction)
-      var flick = setupScroll.contentItem
+      var flick = setupScroll.contentItem as Flickable
       if (!target || !flick) return
       var top = target.mapToItem(settingsContent, 0, 0).y
       if (top < flick.contentY) flick.contentY = Math.max(0, top - Style.space(24))
