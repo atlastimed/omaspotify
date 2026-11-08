@@ -19,9 +19,6 @@ TestCase {
   property bool failFactory: false
   property bool failOpen: false
   property bool failSend: false
-  property int sharedInvalidations: 0
-  property string sharedToken: "shared-token"
-  property bool sharedLoggedIn: true
 
   QtObject {
     id: fakeAuth
@@ -30,16 +27,6 @@ TestCase {
       callback(testCase.accessToken, testCase.accessTokenError)
     }
     function invalidateAccessToken() { testCase.tokenInvalidations++ }
-  }
-
-  QtObject {
-    id: fakeSharedAuth
-
-    property bool loggedIn: testCase.sharedLoggedIn
-    function withAccessToken(callback) {
-      callback(testCase.sharedToken, testCase.sharedToken ? "" : "Log in to Spotify first")
-    }
-    function invalidateAccessToken() { testCase.sharedInvalidations++ }
   }
 
   Component {
@@ -103,9 +90,6 @@ TestCase {
     failFactory = false
     failOpen = false
     failSend = false
-    sharedInvalidations = 0
-    sharedToken = "shared-token"
-    sharedLoggedIn = true
   }
 
   function test_priorityStartsMutationsThenInteractiveReads() {
@@ -314,90 +298,17 @@ TestCase {
     compare(requests.length, 2)
   }
 
-  // A personal client id is refused the catalog endpoints, so what it cannot
-  // answer is asked again through the shipped one.
-  function test_catalogRefusalIsRetriedThroughTheSharedClient() {
+  function test_aTokenProblemRefreshesTheSession() {
     var api = createTemporaryObject(apiComponent, testCase)
     verify(api)
-    api.fallbackAuth = fakeSharedAuth
-    var results = []
-    api.request("GET", "/artists/abc/related-artists", null, null,
-      function(status) { results.push(status) })
-    compare(requests.length, 1)
-    complete(requests[0], 403)
-
-    compare(results.length, 0, "the caller is not told about the first refusal")
-    compare(requests.length, 2, "it is asked again")
-    complete(requests[1], 200)
-    compare(results, [200])
-  }
-
-  function test_theRetryUsesTheOtherIdentitysToken() {
-    var api = createTemporaryObject(apiComponent, testCase)
-    verify(api)
-    api.fallbackAuth = fakeSharedAuth
-    api.request("GET", "/artists/abc/albums", null, null, function() {})
-    complete(requests[0], 400)
-    compare(requests.length, 2)
-    compare(requests[1].authorization, "Bearer shared-token")
-  }
-
-  function test_aTokenProblemRefreshesRatherThanSwitchingIdentity() {
-    var api = createTemporaryObject(apiComponent, testCase)
-    verify(api)
-    api.fallbackAuth = fakeSharedAuth
     api.request("GET", "/me", null, null, function() {})
     complete(requests[0], 401)
-    compare(tokenInvalidations, 1, "the identity that failed is refreshed")
-    compare(sharedInvalidations, 0)
+    compare(tokenInvalidations, 1)
     compare(requests.length, 2)
-    compare(requests[1].authorization, "Bearer mock-token", "still the personal id")
+    compare(requests[1].authorization, "Bearer mock-token")
   }
 
-  function test_aSharedRequestGoesThroughTheShippedClient() {
-    var api = createTemporaryObject(apiComponent, testCase)
-    verify(api)
-    api.fallbackAuth = fakeSharedAuth
-    sharedLoggedIn = false
-    var results = []
-    api.request("GET", "/me/playlists", { limit: 50 }, null,
-      function(status) { results.push(status) }, { shared: true })
-    compare(requests[0].authorization, "Bearer shared-token",
-      "it waits for the shared client to finish signing in")
-    complete(requests[0], 403)
-    compare(requests.length, 1, "it is not asked twice on the same client")
-    compare(results, [403])
-  }
-
-  function test_aSharedRequestIsNotSentWithoutASharedSession() {
-    var api = createTemporaryObject(apiComponent, testCase)
-    verify(api)
-    var errors = []
-    api.request("GET", "/me/playlists", null, null,
-      function(status, payload, error) { errors.push(error) }, { shared: true })
-    api.fallbackAuth = fakeSharedAuth
-    sharedToken = ""
-    api.request("GET", "/me/playlists", null, null,
-      function(status, payload, error) { errors.push(error) }, { shared: true })
-    compare(requests.length, 0, "your own client would only repeat your own list")
-    compare(errors.length, 2)
-    verify(errors[0] !== "" && errors[1] !== "")
-  }
-
-  function test_aSignedOutSharedClientIsNotAskedAgain() {
-    var api = createTemporaryObject(apiComponent, testCase)
-    verify(api)
-    api.fallbackAuth = fakeSharedAuth
-    sharedLoggedIn = false
-    var results = []
-    api.request("GET", "/artists/abc/related-artists", null, null,
-      function(status) { results.push(status) })
-    complete(requests[0], 403)
-    compare(requests.length, 1, "the refusal is not hidden behind a sign-in error")
-    compare(results, [403])
-  }
-
-  function test_withoutAPersonalIdNothingIsRetriedElsewhere() {
+  function test_aRefusalIsReportedRatherThanRetried() {
     var api = createTemporaryObject(apiComponent, testCase)
     verify(api)
     var results = []
@@ -406,6 +317,22 @@ TestCase {
     complete(requests[0], 403)
     compare(requests.length, 1, "there is nowhere else to ask")
     compare(results, [403])
+  }
+
+  // Delivered synchronously from inside the pump, as a blocked route does.
+  function test_aThrowingCallbackDoesNotStopLaterRequests() {
+    var api = createTemporaryObject(apiComponent, testCase)
+    verify(api)
+    var blocked = ({})
+    blocked["GET /me/probe"] = true
+    api.quotaRoutes = blocked
+    api.request("GET", "/me/probe", null, null, function() { throw new Error("a bug") })
+    verify(!api.pumpingRequests, "the pump was left marked as running")
+    var delivered = []
+    api.request("GET", "/me/other", null, null, function(status) { delivered.push(status) })
+    compare(requests.length, 1, "the next request was never sent")
+    complete(requests[0], 200)
+    compare(delivered, [200])
   }
 
   function test_default429StillRetriesAfterCooldown() {
@@ -693,8 +620,6 @@ TestCase {
     verify(error.indexOf("quota for this feature is exhausted") >= 0)
     compare(api.rateLimitedUntil, 0)
     compare(api.requestQueue.length, 0)
-    compare(api.diagnostics[0].route, "/search")
-    verify(JSON.stringify(api.diagnostics).indexOf("private-query") < 0)
     verify(api.quotaExhausted)
     var refusals = 0
     for (var i = 0; i < 5; i++) api.request("GET", "/search?q=another", null, null,

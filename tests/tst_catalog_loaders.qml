@@ -73,6 +73,36 @@ TestCase {
     restored.load()
     compare(requests.length, 4, "reopening a fresh feed makes no requests")
   }
+  // Each answer would otherwise re-sort thousands of rows on the desktop's main thread.
+  function test_releaseFeedRebuildsOncePerBatchNotOncePerArtist() {
+    var feed = createTemporaryObject(releasesComponent, test, { batchSize: 3 })
+    feed.artists = [artist("a"), artist("b"), artist("c")]
+    feed.artistsAt = clock
+    var changes = 0
+    feed.itemsChanged.connect(function() { changes++ })
+    feed.load()
+    respond(0, { items: [album("one", "2026-01-01")] })
+    wait(0)
+    respond(1, { items: [album("two", "2026-02-01")] })
+    wait(0)
+    respond(2, { items: [album("three", "2026-03-01")] })
+    tryCompare(feed, "loading", false)
+    compare(changes, 1, "the list was rebuilt per answer")
+    compare(feed.items[0].id, "three")
+    verify(JSON.stringify(feed.records.a.items[0]).indexOf("description") < 0)
+  }
+
+  function test_aClearedFeedIgnoresALateFileRead() {
+    var saved = createTemporaryObject(releasesComponent, test)
+    saved.artists = [artist("a")]
+    saved.artistsAt = clock
+    var text = saved.serialize()
+    var feed = createTemporaryObject(releasesComponent, test)
+    feed.clear()
+    feed.restore(text)
+    compare(feed.artists.length, 0)
+  }
+
   function test_releaseFeedKeepsStaleResultsOnErrorAndRejectsLateAccountResponse() {
     var feed = createTemporaryObject(releasesComponent, test)
     feed.artists = [artist("a")]

@@ -24,7 +24,6 @@ Item {
   property int staleMs: 300000
   // Past this it is not worth drawing at all.
   property int maxAgeMs: 604800000
-  property var running: ({})
   property var now: function() { return Date.now() }
 
   signal changed()
@@ -56,20 +55,7 @@ Item {
   function clear() {
     entries = ({})
     order = []
-    running = ({})
     changed()
-  }
-
-  // Two lists asking for the same page at once should make one request.
-  function beginFetch(key) {
-    var name = String(key || "")
-    if (!name || running[name] === true) return false
-    running[name] = true
-    return true
-  }
-
-  function endFetch(key) {
-    delete running[String(key || "")]
   }
 
   function serialize() {

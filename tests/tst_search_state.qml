@@ -27,6 +27,20 @@ TestCase {
     groups[type] = {items: items || [], next: next || "", total: 1000}
     return groups
   }
+  // Search runs while you type, so what you were halfway through typing is not history.
+  function test_onlyASearchLeftAloneIsRemembered() {
+    var state = createTemporaryObject(controller, testCase)
+    var remembered = []
+    state.rememberSearch.connect(function(term) { remembered.push(term) })
+    state.search("hel", "track")
+    calls[0].callback(result("track"), "")
+    state.search("hello", "track")
+    calls[1].callback(result("track"), "")
+    compare(remembered.length, 0, "remembered before it settled")
+    tryCompare(remembered, "length", 1, 4000)
+    compare(remembered[0], "hello")
+  }
+
   function test_pendingAndEmptyResultsAreReused() {
     var state = createTemporaryObject(controller, testCase)
     state.search("hello", "track")

@@ -343,6 +343,7 @@ Item {
       ? contextSourceUri : String(playbackContextUri || "")
     contextSourceIndex = index === undefined ? -1 : Math.floor(Number(index))
     contextPlaylist = playlistForContext(contextSourceUri)
+    if (service) service.checkSavedItems([item])
     mediaContextMenu.requestedX = Number(sceneX) || 0
     mediaContextMenu.requestedY = Number(sceneY) || 0
     mediaContextMenu.open()
@@ -2276,7 +2277,8 @@ Item {
   }
 
   function openExternal(item) {
-    if (item && item.externalUrl) Qt.openUrlExternally(item.externalUrl)
+    var url = service && item ? service.spotifyWebUrl(item.externalUrl) : ""
+    if (url) Qt.openUrlExternally(url)
   }
 
   function copyExternal(item) {

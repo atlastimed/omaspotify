@@ -21,7 +21,6 @@ Item {
   property bool sessionConnected: false
   property string errorCode: ""
   property string errorMessage: ""
-  property var lastState: null
   property int nextId: 1
   property var pending: ({})
   property int reconnectAttempt: 0
@@ -33,7 +32,10 @@ Item {
   readonly property bool ready: connected
     && (lifecycle === "ready" || lifecycle === "")
 
-  signal stateReceived(var state)
+  // Reads this far apart once the socket has clearly gone away, so a unit that is
+  // up without its socket does not keep the shell busy for ever.
+  readonly property int retryLimit: 40
+  readonly property int slowRetryMs: 15000
 
   function resetPending(reason) {
     var waiters = pending
@@ -78,12 +80,10 @@ Item {
     var message = Api.parseJson(line, null)
     if (!message || typeof message !== "object") return
     if (message.type === "event" && message.state) {
-      lastState = message.state
       lifecycle = String(message.state.lifecycle || "")
       sessionConnected = message.state.session_connected === true
       errorMessage = Api.redact(String(message.state.error || ""))
       errorCode = String(message.state.error_code || "")
-      stateReceived(message.state)
       return
     }
     if (message.type !== "response") return
@@ -110,7 +110,6 @@ Item {
     sessionConnected = false
     errorCode = ""
     errorMessage = ""
-    lastState = null
     reconnectAttempt = 0
     resetPending("Playback on this computer stopped")
   }
@@ -120,7 +119,6 @@ Item {
     else {
       lifecycle = ""
       sessionConnected = false
-      lastState = null
       resetPending("Playback on this computer disconnected")
     }
   }
@@ -151,12 +149,13 @@ Item {
   // Setting connected=true again is a no-op, so each retry creates a new Socket.
   Timer {
     id: reconnectTimer
-    interval: Math.min(1500, 180 + root.reconnectAttempt * 120)
+    interval: root.reconnectAttempt >= root.retryLimit ? root.slowRetryMs
+      : Math.min(1500, 180 + root.reconnectAttempt * 120)
     repeat: true
     triggeredOnStart: true
     running: root.wanted && !root.connected
     onTriggered: {
-      root.reconnectAttempt = Math.min(12, root.reconnectAttempt + 1)
+      root.reconnectAttempt = Math.min(root.retryLimit, root.reconnectAttempt + 1)
       socketLoader.active = false
       socketLoader.active = true
     }

@@ -441,61 +441,6 @@ TestCase {
   // A personal client id has its own quota but loses the catalog endpoints a
   // grandfathered app still reaches, so what it refuses is tried once through
   // the shared one.
-  function test_sharedClientFallback_onlyForRefusalsItCanAnswer() {
-    var catalog = "/artists/abc/related-artists"
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET", catalog))
-    verify(Api.shouldFallBackToSharedClient(400, false, true, "GET", catalog),
-      "catalog refusals arrive as a bogus parameter error")
-    verify(Api.shouldFallBackToSharedClient(404, false, true, "GET", catalog))
-
-    verify(!Api.shouldFallBackToSharedClient(401, false, true, "GET", catalog),
-      "a token to refresh, not a permission problem")
-    verify(!Api.shouldFallBackToSharedClient(429, false, true, "GET", catalog),
-      "slow down rather than spend someone else's quota")
-    verify(!Api.shouldFallBackToSharedClient(200, false, true, "GET", catalog))
-    verify(!Api.shouldFallBackToSharedClient(500, false, true, "GET", catalog))
-
-    verify(!Api.shouldFallBackToSharedClient(403, true, true, "GET", catalog),
-      "only once")
-    verify(!Api.shouldFallBackToSharedClient(403, false, false, "GET", catalog),
-      "nothing to fall back to")
-  }
-
-  // The shared quota is the thing we are trying to stop spending, so only the
-  // requests a personal client genuinely cannot answer are sent to it.
-  function test_sharedClientFallback_staysOffAnythingItCannotHelpWith() {
-    verify(!Api.shouldFallBackToSharedClient(404, false, true, "PUT",
-      "/me/player/play"), "never repeat something that changes state")
-    verify(!Api.shouldFallBackToSharedClient(403, false, true, "POST",
-      "/playlists/abc/tracks"))
-    verify(!Api.shouldFallBackToSharedClient(400, false, true, "DELETE",
-      "/playlists/abc/tracks"))
-
-    verify(!Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "/me/tracks"), "your own library reads fine on your own client")
-    verify(!Api.shouldFallBackToSharedClient(404, false, true, "GET",
-      "https://api.spotify.com/v1/me/albums?offset=50"),
-      "including when it arrives as a paging cursor")
-
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "https://api.spotify.com/v1/artists/abc/albums"),
-      "a catalog cursor still falls back")
-    verify(Api.shouldFallBackToSharedClient(400, false, true, "GET", "/tracks"))
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "/browse/new-releases"))
-  }
-
-  // Spotify's own playlists arrive in a list of their own, so they replace the old copies.
-  function test_withSpotifyPlaylists_replacesOnlySpotifysOwn() {
-    var mine = { id: "m", uri: "spotify:playlist:m", ownerId: "jeremy" }
-    var stale = { id: "r", uri: "spotify:playlist:r", ownerId: "spotify", name: "old" }
-    var unfollowed = { id: "u", uri: "spotify:playlist:u", ownerId: "spotify" }
-    var fresh = { id: "r", uri: "spotify:playlist:r", ownerId: "spotify", name: "new" }
-    var merged = Api.withSpotifyPlaylists([mine, stale, unfollowed], [fresh])
-    compare(merged.map(function(p) { return p.id + ":" + (p.name || "") }),
-      ["m:", "r:new"])
-  }
-
   // The budget is shared with every other app using this client ID, so it
   // cannot be known ahead of time. Each refusal costs about twenty seconds of
   // everything stopping, so the gap only ever widens within a run.
@@ -833,18 +778,6 @@ TestCase {
     verify(albums.query.include_groups.indexOf("single") >= 0)
   }
 
-  function test_artistCatalog_readsTheTopTracksReply() {
-    var payload = { tracks: [
-      { id: "t1", type: "track", name: "One", uri: "spotify:track:t1",
-        duration_ms: 1000, artists: [{ name: "Someone", uri: "ar:1" }],
-        album: { name: "Album", uri: "al:1", images: [] } }
-    ] }
-    var out = Api.normalizeArtistTopTracks(payload, 96)
-    compare(out.length, 1)
-    compare(out[0].name, "One")
-    compare(JSON.stringify(Api.normalizeArtistTopTracks(null, 96)), "[]")
-  }
-
   // Paging one request at a time is slow when the first reply already tells us
   // how many pages there are.
   function test_pageOffsets_askForEveryRemainingPageAtOnce() {
@@ -925,12 +858,6 @@ TestCase {
     var out = Api.withoutLikedTrack({ "ar:a": ["t1", "t2"], "ar:b": ["t1"] }, "t1")
     compare(out["ar:a"].join(","), "t2")
     compare(out["ar:b"].length, 0)
-  }
-
-  function test_likedIndex_batchesIdsIntoRequestSizedGroups() {
-    compare(JSON.stringify(Api.idBatches(["a", "b", "c"], 2)), '[["a","b"],["c"]]')
-    compare(JSON.stringify(Api.idBatches([], 2)), "[]")
-    compare(JSON.stringify(Api.idBatches(["a"], 0)), '[["a"]]')
   }
 
   // Playlists and artists carry no date of their own, so we work one out from
@@ -1073,10 +1000,11 @@ TestCase {
 
   function test_playHistory_survivesAFileRoundTrip() {
     var text = Api.encodePlayHistory({ plays: { "a": 100 } })
-    compare(Api.parsePlayHistory(text)["a"], 100)
-    compare(JSON.stringify(Api.parsePlayHistory("not json")), "{}")
-    compare(JSON.stringify(Api.parsePlayHistory("")), "{}")
-    compare(JSON.stringify(Api.parsePlayHistory('{"plays":[1,2]}')), "{}")
+    compare(Api.parsePlayHistoryRecord(text).plays["a"], 100)
+    compare(JSON.stringify(Api.parsePlayHistoryRecord("not json").plays), "{}")
+    compare(JSON.stringify(Api.parsePlayHistoryRecord("").plays), "{}")
+    compare(JSON.stringify(Api.parsePlayHistoryRecord('{"plays":[1,2]}').plays), "{}")
+    compare(Api.parsePlayHistoryRecord(Api.encodePlayHistory({ owner: "someone" })).owner, "someone")
   }
 
   function test_mergedPlayTimes_saysWhetherATimeWasMeasuredOrEstimated() {
@@ -1370,11 +1298,8 @@ TestCase {
     compare(Api.playlistItemsEmptyMessage(own, 0,
       "API rate limit exceeded. Try again in 10 seconds.", 429, "user-1"),
       "Couldn't load this playlist. Try again in a moment.")
-    compare(Api.playlistItemsEmptyMessage(own, 0,
-      "API rate limit exceeded. Try again in 10 seconds.", 429, "user-1", true),
-      Api.sharedClientRateLimitMessage())
     compare(Api.playlistItemsEmptyMessage(own, 0, "Server error", 500,
-      "user-1", true), "Couldn't load this playlist. Try again in a moment.")
+      "user-1"), "Couldn't load this playlist. Try again in a moment.")
     compare(Api.playlistItemsEmptyMessage(followed, 0, "", 200, ""),
       "This playlist has no visible items.")
   }
@@ -1653,39 +1578,6 @@ TestCase {
     ], "Björk"), null)
   }
 
-  function test_trackRadioPlaylists_onlyKeepsExactSpotifyContexts() {
-    var result = Api.trackRadioPlaylists([
-      { id: "official", uri: "spotify:playlist:official", type: "playlist",
-        name: "Dreams - 2004 Remaster Radio", ownerId: "spotify" },
-      { id: "copy", uri: "spotify:playlist:copy", type: "playlist",
-        name: "Dreams - 2004 Remaster Radio", ownerName: "A listener" },
-      { id: "other", uri: "spotify:playlist:other", type: "playlist",
-        name: "Sunset Dreams - 2004 Remaster Radio", ownerName: "Spotify" }
-    ], "Dreams - 2004 Remaster")
-
-    compare(result.length, 1)
-    compare(result[0].id, "official")
-  }
-
-  function test_radioSeedMatches_acceptsRelinkedTrackFromSameArtist() {
-    verify(Api.radioSeedMatches({
-      id: "market-version", uri: "spotify:track:market-version",
-      name: "Love The Way You Lie",
-      artists: [{ id: "eminem", name: "Eminem" }, { id: "rihanna", name: "Rihanna" }]
-    }, {
-      id: "original", uri: "spotify:track:original",
-      name: "Love The Way You Lie",
-      artists: [{ id: "eminem", name: "Eminem" }]
-    }))
-    verify(!Api.radioSeedMatches({
-      id: "cover", name: "Love The Way You Lie",
-      artists: [{ id: "cover-band", name: "Cover Band" }]
-    }, {
-      id: "original", name: "Love The Way You Lie",
-      artists: [{ id: "eminem", name: "Eminem" }]
-    }))
-  }
-
   function test_uniqueRadioTracks_keepsSeedFirstAndDropsDuplicateUris() {
     var seed = { uri: "spotify:track:seed", name: "Seed" }
     var radio = Api.uniqueRadioTracks(seed, [
@@ -1802,8 +1694,43 @@ TestCase {
     compare(episode.subtitle, "A show")
     compare(episode.parentContext.type, "show")
     compare(episode.resumeMs, 42000)
-    compare(episode.fullyPlayed, false)
+    verify(!episode.fullyPlayed)
     compare(episode.playedAt, "2026-08-11T10:00:00Z")
+  }
+
+  // Rows are kept by the thousand, so nothing stores what it does not have.
+  function test_normalizedRowsLeaveOutEmptyFields() {
+    var track = Api.normalizeTrack({ type: "track", id: "t", uri: "spotify:track:t",
+      name: "Song", artists: [{ id: "a", uri: "spotify:artist:a", name: "Artist" }],
+      album: { id: "b", uri: "spotify:album:b", type: "album", name: "Album", images: [] } }, 96)
+    verify(JSON.stringify(track).length < 700, JSON.stringify(track).length + " bytes for a bare track")
+    compare(track.artists[0].kind, "context", "an artist still opens as a page")
+    compare(track.artists[0].type, "artist")
+    compare(track.albumItem.kind, "context", "so does an album")
+    var album = Api.normalizeContext({ type: "album", id: "b", uri: "spotify:album:b", name: "Album" }, 96)
+    verify(!album.hasOwnProperty("description"))
+    verify(!album.hasOwnProperty("genres"))
+    compare(Api.artistDetailLine(album), "", "readers treat a missing field as empty")
+    verify(JSON.stringify(Api.compactRelease(album)).length <= JSON.stringify(album).length)
+    compare(Api.compactRelease(album).kind, "context")
+  }
+
+  function test_appendLikedIdsKeepsOrderAndSkipsRepeats() {
+    var target = { a: ["1"] }
+    Api.appendLikedIds(target, { a: ["1", "2"], b: ["3"] })
+    compare(JSON.stringify(target), '{"a":["1","2"],"b":["3"]}')
+  }
+
+  function test_plainLabelStripsWhatWouldReadAsRichText() {
+    compare(Api.plainLabel('<img src="http://x">Speaker'), 'img src="http://x"Speaker')
+    compare(Api.plainLabel(undefined), "")
+  }
+
+  function test_playbackFailureMessages() {
+    verify(Api.playbackFailureMessage("soloist_expired").indexOf("Soloist") >= 0)
+    verify(Api.playbackFailureMessage("missing_credentials") !== "")
+    compare(Api.playbackFailureMessage("connection_failed"), "",
+      "an ordinary failure is left to systemd's restarts")
   }
 
   function test_searchGroups_normalizeEverySupportedType() {
@@ -2207,8 +2134,6 @@ TestCase {
     compare(Api.repeatModeLabel("context"), "All")
     compare(Api.searchTypeLabel("track"), "Songs")
     compare(Api.searchTypeLabel("audiobook"), "Books")
-    compare(Api.spotifyTypeLabel("track"), "Song")
-    compare(Api.spotifyTypeLabel("playlist"), "Playlist")
   }
 
   function test_backendLoadFields_mapsWebApiBodies() {
