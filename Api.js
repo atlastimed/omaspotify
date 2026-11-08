@@ -215,6 +215,12 @@ function safeApiUrl(path) {
   return ""
 }
 
+// Text from outside is shown in labels that would read a tag as rich text, and
+// an image tag there fetches its url. Angle brackets are never part of a name.
+function plainLabel(value) {
+  return String(value === undefined || value === null ? "" : value).replace(/[<>]/g, "")
+}
+
 function redact(value) {
   var text = String(value || "")
   text = text.replace(/(authorization\s*:\s*bearer\s+)[^\s]+/ig, "$1<redacted>")
@@ -368,43 +374,6 @@ function apiCooldownMs(now, until) {
   return wait > 0 ? Math.ceil(wait) : 0
 }
 
-// A personal client id gets its own quota, but Spotify stopped giving new apps
-// the catalog endpoints, so it answers 403 for related artists and a bogus
-// "Invalid limit" 400 for an artist's albums. The shipped id predates that
-// change and still reaches them, so what the personal one refuses is tried
-// once through it. 401 is a token to refresh, and 429 means slow down rather
-// than go spend the shared quota instead.
-function shouldFallBackToSharedClient(status, alreadyFellBack, hasFallback,
-    method, path) {
-  if (hasFallback !== true || alreadyFellBack === true) return false
-  // Never repeat something that changes state, and never send your own library
-  // to the shared quota: a personal client reads /me perfectly well, so a
-  // refusal there is a real error rather than a closed endpoint.
-  if (String(method || "GET").toUpperCase() !== "GET") return false
-  if (apiRequestPath(path).indexOf("/me") === 0) return false
-  var code = Number(status) || 0
-  if (code === 401 || code === 429) return false
-  return code >= 400 && code < 500
-}
-
-function isSpotifyPlaylist(playlist) {
-  return !!playlist && String(playlist.ownerId || "") === "spotify"
-}
-
-// Newer apps get a playlist list without Spotify's own, so those are fetched apart and swapped in.
-function withSpotifyPlaylists(playlists, spotifyOwn) {
-  var mine = (Array.isArray(playlists) ? playlists : []).filter(function(playlist) {
-    return !isSpotifyPlaylist(playlist)
-  })
-  return mergeUnique(mine, spotifyOwn)
-}
-
-// Paging cursors come back as absolute urls, so compare the path either way.
-function apiRequestPath(path) {
-  var value = String(path || "")
-  return value.indexOf(API_BASE) === 0 ? value.slice(API_BASE.length) : value
-}
-
 function nextRateLimitedUntil(now, retryAfter, currentUntil, attempt) {
   var proposed = (Number(now) || 0) + rateLimitRetryMs(retryAfter, attempt)
   var existing = Number(currentUntil) || 0
@@ -426,12 +395,7 @@ function playlistItemsHiddenMessage() {
   return "Spotify does not expose the contents of this playlist unless you own or collaborate on it. You can still play it as a Spotify context."
 }
 
-function sharedClientRateLimitMessage() {
-  return "Spotify is rate-limiting the shared app every OmaSpotify install uses. Set your own Spotify Developer app client ID in Settings to get a quota of your own."
-}
-
-function playlistItemsEmptyMessage(playlist, itemCount, error, status, userId,
-    sharedClient) {
+function playlistItemsEmptyMessage(playlist, itemCount, error, status, userId) {
   if (!playlist) return ""
   var count = Number(itemCount) || 0
   var owned = playlistOwnedByUser(playlist, userId)
@@ -440,14 +404,23 @@ function playlistItemsEmptyMessage(playlist, itemCount, error, status, userId,
   if (error) {
     if (playlistItemsHiddenByApi(status, owned, collaborative, knownUser))
       return playlistItemsHiddenMessage()
-    if (Number(status) === 429 && sharedClient === true)
-      return sharedClientRateLimitMessage()
     return "Couldn't load this playlist. Try again in a moment."
   }
   if (count > 0) return ""
   if (playlistItemsHiddenByApi(200, owned, collaborative, knownUser))
     return playlistItemsHiddenMessage()
   return "This playlist has no visible items."
+}
+
+function playbackFailureMessage(code) {
+  var messages = {
+    invalid_configuration: "Playback configuration is invalid. Review Settings, then start this computer again.",
+    missing_credentials: "Authorize playback on this computer in Settings.",
+    reconnect_exhausted: "Playback lost its connection repeatedly. Check the network, then start this computer again.",
+    restart_limit: "Playback stopped after repeated failures. Check your network, Premium account and playback authorization, then start this computer again.",
+    soloist_expired: "This Soloist build expired and could not be renewed. Check the network, then choose Install / repair Soloist in Settings."
+  }
+  return messages[String(code || "")] || ""
 }
 
 function localSocketFallbackMessage() {
@@ -664,6 +637,18 @@ function mergeLikedIndex(stored, fresh, limit) {
   return out
 }
 
+// In place, because a crawl pass calls this once per page of a large library.
+function appendLikedIds(target, fresh) {
+  for (var artist in fresh) {
+    if (!fresh.hasOwnProperty(artist)) continue
+    var ids = target[artist] || (target[artist] = [])
+    var incoming = fresh[artist]
+    for (var i = 0; i < incoming.length; i++)
+      if (ids.indexOf(incoming[i]) < 0) ids.push(incoming[i])
+  }
+  return target
+}
+
 function withoutLikedTrack(index, trackId) {
   var id = String(trackId || "")
   var out = {}
@@ -672,14 +657,6 @@ function withoutLikedTrack(index, trackId) {
     var ids = Array.isArray(index[k]) ? index[k] : []
     out[k] = ids.filter(function(value) { return String(value) !== id })
   }
-  return out
-}
-
-function idBatches(ids, size) {
-  var list = Array.isArray(ids) ? ids : []
-  var step = Math.max(1, Number(size) || 50)
-  var out = []
-  for (var i = 0; i < list.length; i += step) out.push(list.slice(i, i + step))
   return out
 }
 
@@ -811,6 +788,7 @@ function encodePlayHistory(record) {
   var value = record || ({})
   return JSON.stringify({
     version: PLAY_RECORD_VERSION,
+    owner: String(value.owner || ""),
     plays: value.plays || ({}),
     touched: value.touched || ({}),
     playlistEdits: value.playlistEdits || ({}),
@@ -835,6 +813,7 @@ function parsePlayHistoryRecord(raw) {
   // its watermark is dropped and the next crawl reads everything again.
   var current = Number(record.version) === PLAY_RECORD_VERSION
   return {
+    owner: String(record.owner || ""),
     plays: mergePlayHistory(plainObject(record.plays), null),
     touched: mergeTouchDates(plainObject(record.touched), null),
     playlistEdits: plainObject(record.playlistEdits),
@@ -986,10 +965,6 @@ function parseLibraryCache(raw) {
   }
 }
 
-function parsePlayHistory(raw) {
-  return parsePlayHistoryRecord(raw).plays
-}
-
 // A play time is either a real timestamp we read from the history, or a guess
 // from the top lists. Each entry keeps which one it was so the sort can say so.
 function playTimeOf(entry) {
@@ -1025,14 +1000,6 @@ function mergedPlayTimes(exact, touched, estimated) {
 function twoDigits(value) {
   return (value < 10 ? "0" : "") + value
 }
-
-function shortDate(ms) {
-  var d = new Date(Number(ms) || 0)
-  return d.getFullYear() + "-" + twoDigits(d.getMonth() + 1) + "-" + twoDigits(d.getDate())
-    + " " + twoDigits(d.getHours()) + ":" + twoDigits(d.getMinutes())
-    + ":" + twoDigits(d.getSeconds())
-}
-
 
 function librarySortModes() {
   return LIBRARY_SORT_MODES.slice()
@@ -1297,10 +1264,6 @@ function typeLabel(type, plural) {
 
 function searchTypeLabel(type) {
   return typeLabel(type, true)
-}
-
-function spotifyTypeLabel(type) {
-  return typeLabel(type, false)
 }
 
 var MUTE_THRESHOLD = 0.001
@@ -2297,16 +2260,6 @@ function artistAlbumsRequest(artist) {
   }
 }
 
-function normalizeArtistTopTracks(payload, imageWidth) {
-  var rows = payload && Array.isArray(payload.tracks) ? payload.tracks : []
-  var out = []
-  for (var i = 0; i < rows.length; i++) {
-    var track = normalizeTrack(rows[i], imageWidth || 96)
-    if (track) out.push(track)
-  }
-  return out
-}
-
 // The first reply carries the total, so every remaining page can be asked for
 // at once instead of one after another.
 function pageOffsets(total, limit, loaded) {
@@ -2423,56 +2376,6 @@ function findThisIsPlaylist(items, artistName) {
     }
   }
   return best
-}
-
-function trackRadioPlaylists(items, trackName) {
-  var expected = comparablePlaylistTitle(String(trackName || "") + " Radio")
-  if (!expected || !String(trackName || "").trim()) return []
-  var rows = Array.isArray(items) ? items : []
-  var result = []
-  var seen = ({})
-  for (var i = 0; i < rows.length; i++) {
-    var item = rows[i]
-    if (!item || item.type !== "playlist" || !item.id || !item.uri
-        || comparablePlaylistTitle(item.name) !== expected) continue
-    var ownerId = String(item.ownerId || "").toLowerCase()
-    var ownerName = String(item.ownerName || "").toLowerCase()
-    var key = String(item.uri || item.id)
-    if ((ownerId !== "spotify" && ownerName !== "spotify") || seen[key]) continue
-    seen[key] = true
-    result.push(item)
-  }
-  return result
-}
-
-function radioSeedMatches(candidate, seed) {
-  var item = candidate || {}
-  var target = seed || {}
-  var itemId = String(item.id || "")
-  var targetId = String(target.id || "")
-  var itemUri = String(item.uri || "")
-  var targetUri = String(target.uri || "")
-  if ((itemId && targetId && itemId === targetId)
-      || (itemUri && targetUri && itemUri === targetUri)) return true
-  if (comparablePlaylistTitle(item.name) !== comparablePlaylistTitle(target.name))
-    return false
-
-  var itemArtists = arrayValues(item.artists)
-  var targetArtists = arrayValues(target.artists)
-  for (var i = 0; i < itemArtists.length; i++) {
-    var itemArtist = itemArtists[i] || {}
-    var itemArtistId = String(itemArtist.id || "")
-    var itemArtistName = comparablePlaylistTitle(itemArtist.name)
-    for (var j = 0; j < targetArtists.length; j++) {
-      var targetArtist = targetArtists[j] || {}
-      var targetArtistId = String(targetArtist.id || "")
-      var targetArtistName = comparablePlaylistTitle(targetArtist.name)
-      if ((itemArtistId && targetArtistId && itemArtistId === targetArtistId)
-          || (itemArtistName && targetArtistName && itemArtistName === targetArtistName))
-        return true
-    }
-  }
-  return false
 }
 
 function discoveryPlaylistRank(item) {
@@ -2706,20 +2609,24 @@ function normalizeTrack(value, imageWidth, parentContext) {
   if ((type === "episode" || type === "chapter") && parentItem)
     subtitle = String(parentItem.name || subtitle)
   var resume = item.resume_point || {}
-  return {
+  // Rows are kept by the thousand, in memory and on disk, and most of these
+  // fields are empty on any given row. Every reader treats missing as empty.
+  var row = {
     kind: "item",
     type: type,
     id: String(item.id || ""),
     uri: String(item.uri || ""),
     name: String(item.name || "Untitled"),
     subtitle: subtitle,
-    album: String(album.name || (albumItem && albumItem.name) || ""),
     artists: normalizedArtists(item.artists, imageWidth || 96),
-    albumItem: albumItem,
-    parentContext: parentItem,
+    durationMs: Number(item.duration_ms) || 0
+  }
+  return withoutEmpty(row, {
+    album: String(album.name || (albumItem && albumItem.name) || ""),
     imageUrl: imageFor(images, imageWidth || 96)
       || String((parentContext && parentContext.imageUrl) || ""),
-    durationMs: Number(item.duration_ms) || 0,
+    albumItem: albumItem,
+    parentContext: parentItem,
     trackNumber: Number(item.track_number || item.chapter_number) || 0,
     discNumber: Number(item.disc_number) || 0,
     releaseDate: String(item.release_date || album.release_date || ""),
@@ -2730,7 +2637,40 @@ function normalizeTrack(value, imageWidth, parentContext) {
     explicit: item.explicit === true,
     externalUrl: item.external_urls && item.external_urls.spotify
       ? String(item.external_urls.spotify) : ""
+  })
+}
+
+function withoutEmpty(row, optional) {
+  for (var key in optional) {
+    var value = optional[key]
+    if (value === "" || value === 0 || value === false || value === null
+        || value === undefined || (Array.isArray(value) && value.length === 0)) continue
+    row[key] = value
   }
+  return row
+}
+
+// A release row needs only what a row draws and what opening it reads.
+function compactRelease(item) {
+  if (!item || typeof item !== "object") return item
+  return withoutEmpty({
+    kind: item.kind,
+    type: item.type,
+    id: item.id,
+    uri: item.uri,
+    name: item.name,
+    subtitle: item.subtitle
+  }, {
+    imageUrl: item.imageUrl,
+    artists: arrayValues(item.artists).map(function(artist) {
+      return { kind: "context", type: "artist", id: artist.id, uri: artist.uri,
+        name: artist.name, subtitle: "Artist" }
+    }),
+    total: item.total,
+    releaseType: item.releaseType,
+    releaseDate: item.releaseDate,
+    externalUrl: item.externalUrl
+  })
 }
 
 function normalizeContext(value, imageWidth) {
@@ -2761,16 +2701,17 @@ function normalizeContext(value, imageWidth) {
   var total = Number(item.total_tracks || item.total_episodes || item.total_chapters) || 0
   if (type === "playlist") total = Number((item.items && item.items.total)
     || (item.tracks && item.tracks.total)) || 0
-  return {
+  return withoutEmpty({
     kind: "context",
     type: type,
     id: String(item.id || ""),
     uri: String(item.uri || ""),
     name: String(item.name || "Untitled"),
-    subtitle: subtitle,
+    subtitle: subtitle
+  }, {
+    imageUrl: imageFor(item.images, imageWidth || 128),
     description: String(item.description || ""),
     artists: normalizedArtists(item.artists, imageWidth || 128),
-    imageUrl: imageFor(item.images, imageWidth || 128),
     total: total,
     releaseType: type === "album" ? String(item.album_type || item.album_group || "") : "",
     releaseDate: String(item.release_date || ""),
@@ -2785,7 +2726,7 @@ function normalizeContext(value, imageWidth) {
     addedAt: String(source.added_at || ""),
     externalUrl: item.external_urls && item.external_urls.spotify
       ? String(item.external_urls.spotify) : ""
-  }
+  })
 }
 
 function normalizePlaylist(value, imageWidth) {

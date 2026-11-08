@@ -12,23 +12,26 @@ Item {
   property int serial: 0
   property var handle: null
   property var tracks: ({})
-  property var order: []
+  property int trackCount: 0
+  readonly property int trackLimit: 2000
   property var now: function() { return Date.now() }
 
+  // Called for every page of the liked-song crawl, so it must not copy the whole
+  // map. Objects keep insertion order, so the first key is the oldest.
   function remember(rows) {
-    var next = Api.shallowCopy(tracks)
-    var names = order.slice()
     for (var i = 0; i < rows.length; i++) {
       var item = rows[i]
       if (!item || item.type !== "track" || !item.id) continue
       var id = String(item.id)
-      names = names.filter(function(key) { return key !== id })
-      names.push(id)
-      next[id] = { item: item, at: now() }
+      if (tracks[id]) delete tracks[id]
+      else trackCount++
+      tracks[id] = { item: item, at: now() }
     }
-    while (names.length > 2000) delete next[names.shift()]
-    tracks = next
-    order = names
+    for (var oldest in tracks) {
+      if (trackCount <= trackLimit) break
+      delete tracks[oldest]
+      trackCount--
+    }
   }
 
   function cancel() {
@@ -42,7 +45,7 @@ Item {
     cancel()
     items = []
     tracks = ({})
-    order = []
+    trackCount = 0
     error = ""
   }
 
