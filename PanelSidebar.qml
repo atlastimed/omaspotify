@@ -14,7 +14,7 @@ Item {
   // has to follow whichever one is on screen.
   readonly property var libraryView: part.panel && part.panel.libraryViewIsGrid
     ? playlistGrid : playlistList
-  readonly property bool titleRowShown: brandRow.visible
+  readonly property bool titleRowShown: !part.panel.compactHeight
 
   readonly property real compactRowHeight: Style.space(30)
 
@@ -40,7 +40,7 @@ Item {
 
   Row {
     id: brandRow
-    visible: !part.panel.compactHeight
+    visible: part.titleRowShown
     anchors.left: parent.left
     anchors.right: parent.right
     anchors.top: parent.top
@@ -412,7 +412,8 @@ Item {
   // layouts where that row is gone.
   Button {
     id: setupNavButton
-    visible: !brandSettingsButton.visible || !brandRow.visible
+    // Reads the layout, because the cog's visibility also changes as the panel appears.
+    visible: part.panel.compactWidth || !part.titleRowShown
     height: visible ? (part.panel.compactWidth ? part.compactRowHeight : implicitHeight) : 0
     anchors.left: parent.left
     anchors.right: parent.right

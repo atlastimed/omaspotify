@@ -2168,9 +2168,10 @@ Item {
       if (token) {
         root.loadPlaybackState()
         root.loadProfile()
+        // The page you are looking at first, so background work joins it, not the reverse.
+        root.openView(root.activeView, false)
         root.loadSidebarPlaylists()
         root.verifyRadioPlaybackContext()
-        root.openView(root.activeView, false)
         root.ensureSavedTracksCrawl()
       }
       else if (error && error !== "Log in to Spotify first") root.fail(error)
@@ -4307,8 +4308,8 @@ Item {
     succeed("Connected to Spotify")
     loadPlaybackState()
     loadProfile()
-    loadSidebarPlaylists()
     openView(activeView, true)
+    loadSidebarPlaylists()
   }
 
   function logout() {

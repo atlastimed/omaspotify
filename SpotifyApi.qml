@@ -81,7 +81,9 @@ Item {
     var startedAt = job.startedAt !== undefined ? job.startedAt : queuedAt
     var authedAt = job.authedAt !== undefined ? job.authedAt : startedAt
     var elapsed = Math.max(0, ended - queuedAt)
-    if (error || elapsed >= slowRequestMs)
+    // Background work waits its turn on purpose, so only its wire time can be slow.
+    var counted = job.priority === "background" ? Math.max(0, ended - authedAt) : elapsed
+    if (error || counted >= slowRequestMs)
       console.warn("Spotify API " + Api.requestTimingLine(job.method, job.path, {
         queuedMs: Math.max(0, startedAt - queuedAt),
         authMs: Math.max(0, authedAt - startedAt),

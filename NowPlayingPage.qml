@@ -30,8 +30,11 @@ Item {
     anchors.margins: Style.space(10)
 
     readonly property bool equalizerUseful: !equalizer.unavailable
-    readonly property real artSize: Math.max(Style.space(120), Math.min(
-      height * (equalizerUseful ? 0.62 : 1), width * 0.44, Style.space(460)))
+    // Without an equalizer the artwork carries the whole page, centred in it.
+    readonly property real artSize: Math.max(Style.space(120), equalizerUseful
+      ? Math.min(height * 0.62, width * 0.44, Style.space(460))
+      : Math.min(height * 0.8, width * 0.5))
+    readonly property real heroTop: equalizerUseful ? 0 : Math.max(0, (height - artSize) / 2)
 
     Button {
       id: closeButton
@@ -53,6 +56,7 @@ Item {
       visible: width > 0
       anchors.left: parent.left
       anchors.top: parent.top
+      anchors.topMargin: stage.heroTop
       radius: Style.cornerRadius
       color: Style.normalFillFor(page.panel.foreground, page.panel.accent)
       borderSpec: Border.none()
