@@ -1,3 +1,76 @@
+## 2.3.0 — Full review
+
+A complete review of the plugin, backend, install scripts and CI, with fixes
+verified against tests and an isolated preview. Not yet exercised against a real
+Spotify session.
+
+**Interface**
+
+- Calmer song rows: actions appear on hover or under the keyboard cursor, and saved
+  songs show their heart.
+- Secondary text is readable on every stock theme. It used a decorative colour that
+  fell below 3:1 contrast on most of them.
+- A clearer player bar, a single search header with the current scope inside it,
+  loading skeletons, real empty states, and messages that do not shift the page.
+- Now Playing sizes itself from the window and shows what is up next. Your listening
+  shows up to a year, with month labels.
+- Settings uses real switches and works from the keyboard, as do Devices, library
+  sorting and the sidebar. `C` works on sidebar items, and pinning has a keyboard path.
+- Logging out and other destructive actions now ask first.
+- Fix lists jumping to the top on load more or reorder, search types that did nothing
+  when clicked, invisible search errors, dead buttons on Your listening, and artwork
+  being downloaded with artwork turned off.
+
+**Performance**
+
+- Song rows have 60% fewer objects and build about six times faster.
+- The mini-player is built when first opened, not on every monitor at startup.
+- Hovering a control costs about a seventeenth of what it did, and a keyboard move
+  with hints showing about a nineteenth.
+- The backend makes no wakeups at all while paused, down from about eight a second,
+  and its binary is a third smaller.
+- Large state files are read on first use, followed releases are no longer re-sorted
+  on every response, and the idle poll that started Python every minute is gone.
+- Animations stop when hidden and honour Hyprland's animation setting.
+
+**Reliability**
+
+- Your library stays complete: opening a page or saving an album no longer cut the
+  sidebar down to 50 rows, and a failed refresh no longer counts as fresh.
+- The library now refreshes in a long-running shell.
+- A brief network failure no longer signs you out, and librespot keeps retrying
+  through an outage rather than giving up permanently after 25 seconds.
+- The backend now shuts down cleanly when stopped, so Spotify no longer keeps a
+  ghost device. It also fixes a lost second toggle, restarted songs when a duration
+  was unknown, and pairing being forgotten on a brief logout.
+- Renewing Soloist no longer delays playback, and a corrupt download keeps the build
+  that still works. Plugin updates now reach the installed helper and service units.
+- An expired Soloist build or missing key is now explained rather than retried.
+- Playback startup errors were being read from the wrong directory and never shown.
+
+**Security**
+
+- Signing in with a different account keeps each account's listening record apart.
+- Sign-out now removes searches, pins and artwork as well.
+- Discovery rejects receiver paths with query strings and the cloud metadata address,
+  and a slow receiver can no longer hang the player.
+- Device names and errors can no longer render as rich text, which could trigger
+  remote image requests. Forged sign-in callbacks no longer end a sign-in or put text
+  on screen.
+- State files stay private even if their directory is recreated, service units are
+  more restricted, and crash dumps are off so they cannot capture the Soloist key.
+- Dependencies are updated, clearing six of nine advisories. The other three are in
+  librespot-only code with no available fix, recorded with reasons.
+
+**Development**
+
+- One CI job runs one test script on the target platform, plus locked release builds
+  for both architectures. Linting, secret scanning and advisory scanning now run there.
+- QML lint warnings went from about 1,500 to none, and any new one fails the build.
+- Ten negative test assertions that could never fail now can, and every provenance
+  check now has a failure test.
+- `scripts/ui-preview.sh` screenshots any page in any theme with made-up data.
+
 ## 2.2.0 — Developer-app compatibility review
 
 - Replace the unavailable New releases tab with a cached, on-demand followed-artist feed.

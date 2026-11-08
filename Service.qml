@@ -360,8 +360,7 @@ Item {
     var id = Api.spotifyTrackId(currentUri)
     if (id) return id
 
-    // The engine exposes the recording as an MPRIS object path such as
-    // /spotify/track/<id>, but does not currently publish xesam:url.
+    // A player that sets no xesam:url still names the recording in its object path.
     id = Api.spotifyTrackId(metadataString("mpris:trackid"))
     if (id) return id
 

@@ -28,8 +28,14 @@ both names are ignored by git.
 
 ## Checks
 
-- `./scripts/test.sh` is the whole suite, and CI runs exactly that script.
-- `./scripts/ui-preview.sh` screenshots every page without touching the desktop.
+- `./scripts/test.sh` is the whole suite, and CI runs exactly that script. It never
+  opens a window on the live desktop.
+- `./scripts/lint-qml.sh` runs qmllint against the real Omarchy controls, and any
+  warning fails it.
+- `tests/integration/PagesSmoke.qml` walks the keyboard cursor over every real page,
+  and any QML warning fails it.
+- `./scripts/ui-preview.sh` screenshots every page, in any theme and size, without
+  touching the desktop or a real account. Look at them when changing the interface.
 
 ## Dependencies
 

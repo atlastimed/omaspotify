@@ -136,7 +136,7 @@ ShellRoot {
   }
 
   readonly property var steps: [
-    { shot: "home", tab: "home", run: function() { panel.homeType = "recent" } },
+    { shot: "home", tab: "home", wait: 4000, run: function() { panel.homeType = "recent" } },
     { shot: "home-artists", tab: "home", run: function() { panel.homeType = "artists" } },
     { shot: "library", tab: "library", run: function() { panel.libraryType = "tracks" } },
     { shot: "library-albums", tab: "library", run: function() {
@@ -158,7 +158,9 @@ ShellRoot {
     } },
     { shot: "queue", tab: "queue" },
     { shot: "stats", tab: "stats" },
-    { shot: "devices", tab: "devices", wait: 2500 },
+    { shot: "devices", tab: "devices", wait: 5000 },
+    // Once the background library crawl has filled the sidebar.
+    { shot: "home-settled", tab: "home", run: function() { panel.homeType = "recent" } },
     { shot: "settings", tab: "setup" },
     { shot: "discover", tab: "discover" },
     { shot: "nowplaying", tab: "home", run: function() {
