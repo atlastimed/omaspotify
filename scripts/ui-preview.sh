@@ -46,6 +46,7 @@ cp -r "$theme_dir" "$home/.local/state/omarchy/current/theme"
 cp "$source_root/"*.qml "$source_root/"*.js "$work/app/plugin/"
 cp -r "$omarchy_path/shell/Commons" "$omarchy_path/shell/Ui" "$work/app/"
 cp "$source_root/tests/ui/Preview.qml" "$work/app/shell.qml"
+cp "$source_root/tests/ui/FixtureApi.js" "$work/app/"
 
 colors=(1f6f8b 8b1f5e 2d8b1f 8b6d1f 4a1f8b 1f8b7a 8b2d1f 3d5a80 a44a3f 6a994e 7b2cbf 386641)
 for i in "${!colors[@]}"; do
