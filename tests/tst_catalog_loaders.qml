@@ -92,6 +92,27 @@ TestCase {
     verify(JSON.stringify(feed.records.a.items[0]).indexOf("description") < 0)
   }
 
+  function test_aFeedWaitsForItsCacheBeforeAskingSpotify() {
+    var feed = createTemporaryObject(releasesComponent, test, { cacheReady: false })
+    feed.load()
+    compare(requests.length, 0, "asked Spotify before reading what it already knew")
+    feed.restore(JSON.stringify({ version: 1, artists: [artist("a")], artistsAt: clock,
+      records: { a: { at: clock, items: [{ kind: "context", type: "album", id: "x",
+        uri: "spotify:album:x", name: "x", releaseDate: "2026-01-01" }] } } }))
+    compare(feed.artists.length, 1, "the file read was refused")
+    feed.cacheReady = true
+    compare(requests.length, 0, "a fresh cache was fetched again")
+    compare(feed.items[0].id, "x")
+  }
+
+  function test_cancellingAWaitingFeedAsksForNothingLater() {
+    var feed = createTemporaryObject(releasesComponent, test, { cacheReady: false })
+    feed.load()
+    feed.cancel()
+    feed.cacheReady = true
+    compare(requests.length, 0)
+  }
+
   function test_aClearedFeedIgnoresALateFileRead() {
     var saved = createTemporaryObject(releasesComponent, test)
     saved.artists = [artist("a")]

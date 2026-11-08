@@ -19,6 +19,11 @@ Item {
   property var handle: null
   property int batchSize: 25
   property var now: function() { return Date.now() }
+  // The file is only read when a panel first opens, and that same moment can start a
+  // load. Going ahead without it would refuse the file and fetch everything again.
+  property bool cacheReady: true
+  property bool loadWanted: false
+  onCacheReadyChanged: if (cacheReady && loadWanted) load()
   // Set once the account's data has been wiped, so a late file read cannot undo it.
   property bool cleared: false
   readonly property var releaseDatePattern: /^\d{4}(-\d{2}){0,2}$/
@@ -29,6 +34,7 @@ Item {
   signal changed()
 
   function cancel() {
+    loadWanted = false
     serial++
     api.abortRequest(handle)
     handle = null
@@ -115,6 +121,10 @@ Item {
   }
 
   function load() {
+    if (!cacheReady) {
+      loadWanted = true
+      return
+    }
     if (loading) return
     cancel()
     cleared = false

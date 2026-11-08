@@ -4783,6 +4783,7 @@ Item {
   FollowedReleases {
     id: followedReleases
     api: spotifyApi
+    cacheReady: root.releaseCacheReady
     onChanged: releaseCacheFile.markDirty()
   }
 
