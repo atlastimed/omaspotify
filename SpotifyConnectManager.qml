@@ -20,13 +20,11 @@ Item {
   property string activatingDeviceId: ""
   property string activationInput: ""
   property string discoveryResult: ""
-  property string activationResult: ""
   property bool controlling: false
   property string controllingDeviceId: ""
   property string controlAction: ""
   property string controlValue: ""
   property string controlInput: ""
-  property string controlResult: ""
   property string lastError: ""
 
   // Commands that arrive while the helper is busy wait here and run in order.
@@ -45,13 +43,15 @@ Item {
     return Api.isSpotifyConnectDeviceId(value)
   }
 
+  // False when nothing was started, so nobody waits for an answer.
   function refresh() {
-    if (loading || discoveryCommand.running || !pluginDir) return
+    if (loading || discoveryCommand.running || !pluginDir) return false
     loading = true
     lastError = ""
     discoveryResult = ""
     discoveryCommand.command = [pluginDir + "/scripts/spotify-connect-device.py", "discover"]
     discoveryCommand.running = true
+    return true
   }
 
   function activate(deviceId, accessToken, userId) {
@@ -66,7 +66,6 @@ Item {
     // Both values cross the process boundary only through stdin. In
     // particular, never expose the short-lived streaming token in argv.
     activationInput = requested + "\n" + token + "\n" + user
-    activationResult = ""
     lastError = ""
     activationCommand.command = [pluginDir + "/scripts/spotify-connect-device.py", "activate"]
     activationCommand.running = true
@@ -89,7 +88,6 @@ Item {
     controlAction = command
     controlValue = argument
     controlInput = requested + "\n" + command + "\n" + argument
-    controlResult = ""
     lastError = ""
     controlCommand.command = [pluginDir + "/scripts/spotify-connect-device.py", "control"]
     controlCommand.running = true
@@ -192,7 +190,6 @@ Item {
     activating = false
     activatingDeviceId = ""
     activationInput = ""
-    activationResult = ""
     if (exitCode === 0) {
       lastError = ""
       activated(requested)
@@ -214,7 +211,6 @@ Item {
     controlAction = ""
     controlValue = ""
     controlInput = ""
-    controlResult = ""
     if (exitCode === 0) {
       lastError = ""
       controlled(requested, action, value)
@@ -276,7 +272,6 @@ Item {
     stdinEnabled: true
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.activationResult = String(text || "")
     }
     stderr: StdioCollector { waitForEnd: true }
     onStarted: {
@@ -295,7 +290,6 @@ Item {
     stdinEnabled: true
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.controlResult = String(text || "")
     }
     stderr: StdioCollector { waitForEnd: true }
     onStarted: {

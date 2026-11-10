@@ -251,6 +251,7 @@ Item {
     }
     job.startedAt = now()
     job.activeDeadlineAt = job.startedAt + activeTimeoutMs
+    watchDeadlines()
     var url = Api.safeApiUrl(job.path)
     if (!url) {
       finishJob(job, 0, null, "Something went wrong while contacting Spotify", null)
@@ -270,6 +271,7 @@ Item {
       }
       job.sentAt = now()
       job.activeDeadlineAt = job.sentAt + activeTimeoutMs
+      watchDeadlines()
       var xhr = null
       try {
         xhr = xhrFactory()
@@ -370,6 +372,7 @@ Item {
     }
     handle.job = job
     timedJobs = timedJobs.concat([job])
+    if (job.deadlineAt) watchDeadlines()
     return enqueueJob(job)
   }
 
@@ -435,10 +438,28 @@ Item {
     onTriggered: root.pumpRequests()
   }
 
+  // Runs only while some request has a deadline to miss. A queue waiting out a
+  // long rate limit has none, and must not wake the shell four times a second.
+  function deadlinePending() {
+    for (var i = 0; i < timedJobs.length; i++) {
+      var job = timedJobs[i]
+      if (job && job.finished !== true && (job.deadlineAt || job.activeDeadlineAt)) return true
+    }
+    return false
+  }
+
+  function watchDeadlines() {
+    if (!deadlineTimer.running) deadlineTimer.start()
+  }
+
   Timer {
+    id: deadlineTimer
+    objectName: "deadlineTimer"
     interval: 250
     repeat: true
-    running: root.timedJobs.length > 0
-    onTriggered: root.expireTimedOutRequests(root.now())
+    onTriggered: {
+      root.expireTimedOutRequests(root.now())
+      if (!root.deadlinePending()) stop()
+    }
   }
 }

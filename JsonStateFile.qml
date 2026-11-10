@@ -127,6 +127,8 @@ Item {
     path: root.active ? root.path : ""
     watchChanges: false
     atomicWrites: true
+    // Megabyte files, written with a sync: never on the thread that draws the bar.
+    blockWrites: false
     printErrors: false
     onLoaded: root.finishRead(text())
     onLoadFailed: root.finishRead("")

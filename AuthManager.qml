@@ -27,14 +27,9 @@ Item {
     ? (customClientId ? customClientId.toLowerCase() : clientId) : ""
   property bool initialized: false
   property bool switchingIdentity: false
-  // An identity whose client id never changes has nothing to trigger a session
-  // restore, because that only happens when the id changes. The primary one
-  // gets that for free when settings arrive and a personal id appears.
-  property bool restoreOnStart: false
   Component.onCompleted: {
     initialized = true
     if (!validClientId) changeIdentity()
-    else if (restoreOnStart) restoreSession()
   }
   onResolvedClientIdChanged: if (initialized) changeIdentity()
   property int oauthPort: 8989
@@ -99,6 +94,8 @@ Item {
       stop()
       root.switchingIdentity = false
       if (root.validClientId) root.restoreSession()
+      // With no client ID there is no session to look for, and nothing to wait on.
+      else root.sessionChecked = true
     }
   }
 
@@ -185,7 +182,8 @@ Item {
     if (!token) {
       resetMemorySession()
       sessionChecked = true
-      if (purpose === "request") finishWaiters("", "Log in to Spotify first")
+      // Requests that joined this lookup are waiting on it whatever started it.
+      finishWaiters("", "Log in to Spotify first")
       return
     }
     refreshWithToken(token, purpose)

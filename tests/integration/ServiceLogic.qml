@@ -651,6 +651,53 @@ ShellRoot {
       })
     } },
 
+    { name: "a surface saving its state keeps the pins", run: function(done) {
+      svc.persistSession({})
+      svc.togglePinnedItem({ uri: "spotify:album:pinned" })
+      top.check(svc.pinnedUris.length === 1, "the pin was not kept")
+      // What the full player saves every time it closes.
+      svc.mergeSession({ tab: "home", searchText: "", equalizerMode: "bars" })
+      top.check(svc.pinnedUris.length === 1 && svc.pinnedUris[0] === "spotify:album:pinned",
+        "closing the player dropped the pin")
+      top.check(svc.sessionState.tab === "home", "the surface's own state was not saved")
+      svc.persistSession({})
+      done()
+    } },
+
+    { name: "top lists that failed are asked for again", run: function(done) {
+      svc.recentListeningLoaded = false
+      top.handler = function(x) {
+        if (x.url.indexOf("/me/top/") >= 0) top.reply(x, 500, { error: { message: "down" } })
+        else top.reply(x, 200, { items: [] })
+      }
+      svc.loadRecentListening()
+      top.waitUntil(function() { return !svc.recentListeningLoading }, 4000, function() {
+        top.check(!svc.recentListeningLoaded, "a failed load was marked as loaded")
+        var before = top.requestsTo("/me/top/tracks")
+        top.handler = function(x) { top.reply(x, 200, { items: [] }) }
+        svc.loadRecentListening()
+        top.waitUntil(function() { return svc.recentListeningLoaded }, 4000, function() {
+          top.check(top.requestsTo("/me/top/tracks") > before, "the top songs were not asked for again")
+          top.check(svc.recentListeningLoaded, "a good load was not marked as loaded")
+          done()
+        })
+      })
+    } },
+
+    { name: "a poll with nothing new leaves the lists alone", run: function(done) {
+      var playing = { is_playing: true, device: { id: "d", name: "Speaker", is_active: true,
+        type: "Speaker" }, item: { type: "track", id: "t", uri: "spotify:track:t", name: "x",
+        artists: [{ id: "a", uri: "spotify:artist:a", name: "A" }], album: {} } }
+      svc.applyPlaybackState(playing)
+      var devices = svc.devices
+      var artists = svc.currentArtists
+      top.check(artists.length === 1, "the artists were not read")
+      svc.applyPlaybackState(JSON.parse(JSON.stringify(playing)))
+      top.check(svc.devices === devices, "the device list was rebuilt for the same devices")
+      top.check(svc.currentArtists === artists, "the artist list was rebuilt for the same artists")
+      done()
+    } },
+
     { name: "a playback failure from before does not undo a newer click", run: function(done) {
       svc.pendingPlaybackBody = null
       svc.radioSerial = 5

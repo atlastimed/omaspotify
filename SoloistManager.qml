@@ -26,6 +26,8 @@ Item {
   property bool credentialsClearBusy: false
   property bool terminalFailure: false
   property string lastError: ""
+  readonly property string statusUnknownText:
+    "Local playback could not be checked. It is checked again shortly."
   property string version: ""
   property int daysRemaining: 0
   property bool startAfterSave: false
@@ -76,6 +78,7 @@ Item {
     if (generation !== statusGeneration || !data || typeof data !== "object") return false
     credentialsChecked = true
     requirementsChecked = true
+    if (lastError === statusUnknownText) lastError = ""
     binaryAvailable = data.installed === true
     unitAvailable = data.unit === true
     if (typeof data.key === "boolean") keyAvailable = data.key
@@ -91,6 +94,12 @@ Item {
     if (serviceActive) terminalFailure = false
     else if (failurePath) failureFile.reload()
     return true
+  }
+  // A check that could not run must not leave sign-in waiting on it for ever.
+  function statusUnknown() {
+    credentialsChecked = true
+    requirementsChecked = true
+    if (!lastError) lastError = statusUnknownText
   }
   // A plugin update replaces this file's helper, not the copy the service runs.
   function syncInstalledHelper() {
@@ -202,10 +211,11 @@ Item {
         Qt.callLater(root.refreshStatus)
         return
       }
-      if (code !== 0) return
-      var data
-      try { data = JSON.parse(statusOutput.text) } catch (_) { return }
-      root.applyStatus(generation, data)
+      var data = null
+      if (code === 0) {
+        try { data = JSON.parse(statusOutput.text) } catch (_) { data = null }
+      }
+      if (!root.applyStatus(generation, data)) root.statusUnknown()
     }
   }
   Process {

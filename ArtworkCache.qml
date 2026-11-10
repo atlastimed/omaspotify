@@ -26,10 +26,13 @@ Item {
   property var failed: ({})
   readonly property int fileLimit: 3000
 
-  // A zero-byte file is a download that never finished.
+  // A zero-byte file is a download that never finished. What is on show is
+  // touched first, so the oldest files removed are the ones nothing is using.
   readonly property string scanScript: 'mkdir -p "$1" && chmod 700 "$1" && cd "$1" || exit 0\n'
+    + 'limit=$2; shift 2\n'
     + 'find . -maxdepth 1 -type f -size 0 -delete\n'
-    + 'ls -1t | tail -n +"$(($2 + 1))" | while IFS= read -r name; do rm -f -- "$name"; done\n'
+    + 'if [ "$#" -gt 0 ]; then touch -c -- "$@"; fi\n'
+    + 'ls -1t | tail -n +"$((limit + 1))" | while IFS= read -r name; do rm -f -- "$name"; done\n'
     + 'ls -1\n'
 
   onKeepingChanged: if (keeping) keep(priorityItems)
@@ -40,9 +43,28 @@ Item {
     return cached[text] ? "file://" + directory + "/" + Api.artworkCacheName(text) : text
   }
 
+  // File names of what is in use, the rows that always matter first.
+  function namesInUse() {
+    var names = []
+    var seen = ({})
+    var lists = [priorityItems, lastItems]
+    for (var l = 0; l < lists.length; l++) {
+      var rows = Array.isArray(lists[l]) ? lists[l] : []
+      for (var i = 0; i < rows.length && names.length < fileLimit; i++) {
+        var url = rows[i] && rows[i].imageUrl ? String(rows[i].imageUrl) : ""
+        var name = url.indexOf("https://") === 0 ? Api.artworkCacheName(url) : ""
+        if (!name || seen[name]) continue
+        seen[name] = true
+        names.push(name)
+      }
+    }
+    return names
+  }
+
   function scan() {
     if (!directory || scanProcess.running) return
-    scanProcess.command = ["/usr/bin/sh", "-c", scanScript, "sh", directory, String(fileLimit)]
+    scanProcess.command = ["/usr/bin/sh", "-c", scanScript, "sh", directory,
+      String(fileLimit)].concat(namesInUse())
     scanProcess.running = true
   }
 

@@ -571,7 +571,7 @@ Item {
     var selected = service.selectedPlaylist || restoredPlaylist
     var selectedItemCount = service.selectedPlaylist
       ? service.playlistRememberedItemCount : restoredPlaylistItemCount
-    service.persistSession({
+    service.mergeSession({
       tab: currentTab === "login" ? "home" : currentTab,
       searchText: searchText,
       searchType: searchType,

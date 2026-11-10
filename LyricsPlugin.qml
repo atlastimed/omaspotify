@@ -267,6 +267,13 @@ Item {
     command: []
     stdout: StdioCollector { id: setupStdout; waitForEnd: true }
     stderr: StdioCollector { id: setupStderr; waitForEnd: true }
+    // A command that cannot start never exits, and must not stay busy for ever.
+    onRunningChanged: if (!running) Qt.callLater(function() {
+      if (lyrics && lyrics.busy && !setupProcess.running) {
+        lyrics.busy = false
+        if (!lyrics.error) lyrics.error = "Omasing could not be installed."
+      }
+    })
     onExited: function(exitCode) {
       lyrics.busy = false
       if (Number(exitCode) === 0) {
