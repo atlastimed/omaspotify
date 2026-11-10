@@ -213,6 +213,64 @@ class SoloistRuntimeTests(unittest.TestCase):
             with patch.object(runtime, "run", return_value=result):
                 self.assertEqual(runtime.clear_key(), cleared)
 
+    def test_an_unreachable_keyring_is_not_a_missing_key(self):
+        runtime.RUNTIME.mkdir()
+        (runtime.RUNTIME / "soloist").write_bytes(b"old")
+        (runtime.RUNTIME / "soloist-build.json").write_text(
+            json.dumps({"built_at": int(time.time()) - 86400})
+        )
+        unreachable = subprocess.CompletedProcess([], 1, "", "Error calling StartServiceByName")
+        with patch.object(runtime, "run", return_value=unreachable):
+            # Not the exit that tells systemd to stop trying.
+            with self.assertRaises(ValueError) as failure:
+                runtime.start_receiver()
+            self.assertNotIsInstance(failure.exception, runtime.StartFailure)
+            with patch.object(runtime.sys, "argv", ["runtime", "status"]):
+                self.assertIsNone(runtime.status()["key"])
+        absent = subprocess.CompletedProcess([], 1, "", "")
+        with patch.object(runtime, "run", return_value=absent):
+            self.assertEqual(runtime.key(), "")
+        slow = subprocess.TimeoutExpired(["secret-tool"], 15)
+        with patch.object(runtime, "run", side_effect=slow):
+            with patch.object(runtime.sys, "argv", ["runtime", "status"]):
+                self.assertIsNone(runtime.status()["key"])
+
+    def test_a_wait_for_the_lock_comes_out_of_the_download_time(self):
+        runtime.RUNTIME.mkdir()
+        deadlines = []
+
+        def held(_lock, end):
+            deadlines.append(end)
+
+        def too_slow(_url, _destination, end):
+            deadlines.append(end)
+            raise ValueError("Soloist download took too long")
+
+        with (
+            patch.object(runtime, "lock_for", side_effect=held),
+            patch.object(runtime, "download_archive", side_effect=too_slow),
+            self.assertRaises(ValueError),
+        ):
+            runtime.update(force=True, deadline=75)
+        self.assertEqual(len(deadlines), 2)
+        self.assertEqual(deadlines[0], deadlines[1])
+
+    def test_a_build_checked_today_is_not_downloaded_again(self):
+        runtime.RUNTIME.mkdir()
+        (runtime.RUNTIME / "soloist").write_bytes(b"old")
+        record = runtime.RUNTIME / "soloist-build.json"
+        aged = int(time.time()) - 80 * 86400
+        record.write_text(json.dumps({"built_at": aged, "checked_at": int(time.time()) - 3600}))
+        with patch.object(runtime, "download_archive", side_effect=AssertionError("downloaded")):
+            runtime.update()
+        # A day later it is worth asking again.
+        record.write_text(json.dumps({"built_at": aged, "checked_at": int(time.time()) - 86400}))
+        with (
+            patch.object(runtime, "download_archive", side_effect=ValueError("asked")),
+            self.assertRaisesRegex(ValueError, "asked"),
+        ):
+            runtime.update()
+
     def test_empty_or_relative_xdg_paths_fall_back_to_home(self):
         for value in ("", "relative/path"):
             with patch.dict(runtime.os.environ, {"XDG_STATE_HOME": value}):

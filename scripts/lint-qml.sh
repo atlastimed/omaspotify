@@ -16,10 +16,17 @@ ln -s "$omarchy_path/shell/Commons" "$imports/qs/Commons"
 
 cd "$source_root"
 # Style groups its tokens in plain objects qmllint cannot see into.
-report=$("$qmllint" -I "$imports" ./*.js ./*.qml 2>&1 \
-  | rg -v 'not found on type "QObject"' || true)
+lint_status=0
+raw=$("$qmllint" -I "$imports" ./*.js ./*.qml 2>&1) || lint_status=$?
+report=$(rg -v 'not found on type "QObject"' <<<"$raw" || true)
 if rg -q '^Warning:' <<<"$report"; then
   rg -A3 '^Warning:' <<<"$report"
   echo "lint-qml.sh: fix the warnings above" >&2
+  exit 1
+fi
+# A linter that could not run must not pass for a clean one.
+if (( lint_status != 0 )) && ! rg -q '^Warning:' <<<"$raw"; then
+  printf '%s\n' "$raw" >&2
+  echo "lint-qml.sh: qmllint failed to run (exit $lint_status)" >&2
   exit 1
 fi

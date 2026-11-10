@@ -38,6 +38,7 @@ from typing import Any
 MAX_RESPONSE_BYTES = 65_536
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,160}$")
 RECEIVER_PATH_RE = re.compile(r"^/[A-Za-z0-9/_.~-]*$")
+RECEIVER_QUERY_RE = re.compile(r"^[A-Za-z0-9_.~%+=&-]{1,256}$")
 # Cloud instance metadata lives here on every major provider.
 METADATA_ADDRESS = "169.254.169.254"
 # A receiver that drips bytes must not hold the whole helper open.
@@ -152,6 +153,8 @@ def avahi_unescape(value: str) -> str:
 
 def safe_address(value: str) -> str:
     address = ipaddress.ip_address(value)
+    # An IPv4 address dressed as IPv6 is judged as the address it really is.
+    address = getattr(address, "ipv4_mapped", None) or address
     if address.is_unspecified or address.is_multicast or address.is_loopback \
             or str(address) == METADATA_ADDRESS:
         raise ConnectError("unsafe receiver address")
@@ -175,7 +178,11 @@ def request_json(
     fields: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     address = safe_address(address)
-    path = endpoint_path(path)
+    # Callers add their own encoded query to a receiver path checked on its own.
+    base, mark, query = path.partition("?")
+    if mark and not RECEIVER_QUERY_RE.fullmatch(query):
+        raise ConnectError("invalid receiver request")
+    path = endpoint_path(base) + mark + query
     body: bytes | None = None
     headers = {"Connection": "close", "Accept": "application/json"}
     if fields is not None:

@@ -136,6 +136,22 @@ class ServingEndToEnd(unittest.TestCase):
         self.assertEqual(result, [0])
         self.assertEqual(stdout.getvalue(), "GET /callback?code=abc&state=xyz HTTP/1.1\n")
 
+    def test_a_browser_sized_request_gets_its_page_and_a_clean_close(self):
+        response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
+        stdout = io.StringIO()
+        port, thread, result = self.serve_on_free_port(stdin_for(response), stdout)
+
+        headers = b"".join(b"X-Header-%d: %s\r\n" % (n, b"v" * 80) for n in range(30))
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+            client.sendall(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\n" + headers + b"\r\n")
+            received = b""
+            # A reset here is what a browser shows as a failed page.
+            while chunk := client.recv(4096):
+                received += chunk
+        thread.join(5)
+        self.assertEqual(received, response)
+        self.assertEqual(result, [0])
+
     def test_a_forged_redirect_does_not_end_the_sign_in(self):
         response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
         stdout = io.StringIO()

@@ -15,7 +15,9 @@ export QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1
 cp "$source_root/"{AuthManager.qml,Api.js,OAuth.js} "$test_root/"
 sed 's|import "../.." as Plugin|import "." as Plugin|' \
   "$source_root/tests/integration/AuthIdentity.qml" > "$test_root/shell.qml"
+# Its own session bus, so a refused sign-in clears nothing in the real keyring.
 env -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen timeout 15s \
+  dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- \
   qs --no-color -p "$test_root" > "$test_root/output" 2>&1 || {
   cat "$test_root/output"
   exit 1

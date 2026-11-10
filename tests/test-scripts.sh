@@ -604,6 +604,31 @@ if XDG_CACHE_HOME="$runtime_cache" XDG_STATE_HOME="$runtime_state" \
   exit 1
 fi
 
+# ~/.cache/spotifyd is also where a spotifyd of the user's own keeps its login
+# and audio. With one installed, signing out and uninstalling leave it alone.
+mkdir -p "$runtime_config/spotifyd" "$runtime_cache/spotifyd/oauth" "$runtime_state/omaspotify/oauth"
+printf '%s\n' '{"mock":"their-spotifyd"}' >"$runtime_cache/spotifyd/oauth/credentials.json"
+printf '%s\n' '{"mock":"credential"}' >"$runtime_state/omaspotify/oauth/credentials.json"
+PATH="$mock_bin:$PATH" \
+XDG_CONFIG_HOME="$runtime_config" \
+XDG_CACHE_HOME="$runtime_cache" \
+XDG_STATE_HOME="$runtime_state" \
+  "$source_root/scripts/playback-logout.sh"
+[[ ! -e $runtime_state/omaspotify/oauth/credentials.json ]]
+[[ -s $runtime_cache/spotifyd/oauth/credentials.json ]]
+PATH="$mock_bin:$PATH" \
+HOME="$runtime_home" \
+XDG_CONFIG_HOME="$runtime_config" \
+XDG_CACHE_HOME="$runtime_cache" \
+XDG_STATE_HOME="$runtime_state" \
+XDG_RUNTIME_DIR="$runtime_session" \
+OMASPOTIFY_RUNTIME_DIR="$runtime_backend" \
+TEST_SECRET_LOG="$secret_log" \
+TEST_SYSTEMCTL_LOG="$systemctl_log" \
+  "$source_root/scripts/remove-runtime.sh" --purge >/dev/null
+[[ -s $runtime_cache/spotifyd/oauth/credentials.json ]]
+rm -rf -- "$runtime_config/spotifyd" "$runtime_cache/spotifyd"
+
 set +e
 PATH="$mock_bin:$PATH" \
 XDG_CACHE_HOME="relative-cache" \

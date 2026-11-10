@@ -38,6 +38,8 @@ MAX_ARCHIVE = 80 * 1024 * 1024
 MAX_BINARY = 160 * 1024 * 1024
 BUILD_LIFETIME = 90 * 86400
 RENEW_AFTER = 75 * 86400
+# How long an answer of "nothing newer yet" stands before asking again.
+RECHECK_AFTER = 20 * 3600
 # Must stay under the backend's startup deadline, or a slow download is killed
 # part way and starts again from nothing on every restart.
 START_DOWNLOAD_SECONDS = 75
@@ -72,7 +74,20 @@ def run(args, **kwargs):
 
 
 def key():
-    return run(["secret-tool", "lookup", *KEY]).stdout.strip()
+    result = run(["secret-tool", "lookup", *KEY])
+    # Exit 1 with nothing said means no such key. Anything else is a keyring
+    # that could not be asked, and the key may well be there.
+    if result.returncode not in (0, 1) or (result.returncode and result.stderr.strip()):
+        raise ValueError("The keyring could not be reached")
+    return result.stdout.strip()
+
+
+def key_known():
+    """True or False when the keyring answers, None when it cannot be asked."""
+    try:
+        return bool(key())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 def build_timestamp(output):
@@ -98,9 +113,8 @@ def build_time():
     return built_at if isinstance(built_at, int) and not isinstance(built_at, bool) else 0
 
 
-def lock_for(lock, seconds):
+def lock_for(lock, deadline):
     """Wait for the install lock, so a stalled renewal cannot block playback forever."""
-    deadline = time.monotonic() + seconds
     while True:
         try:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -117,7 +131,8 @@ def download_archive(url, destination, deadline):
         if not response.url.startswith("https://soloist-builds.spotifycdn.com/"):
             raise ValueError("Unexpected Soloist download destination")
         size = 0
-        while chunk := response.read(65536):
+        # read1 returns what has arrived, so a slow trickle still meets the deadline check.
+        while chunk := response.read1(65536):
             size += len(chunk)
             if size > MAX_ARCHIVE:
                 raise ValueError("Soloist archive exceeds the download limit")
@@ -152,15 +167,23 @@ def sweep_interrupted_downloads():
 
 def update(force=False, deadline=INSTALL_DOWNLOAD_SECONDS):
     RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # One budget for the wait and the download together.
+    end = time.monotonic() + deadline
     with (RUNTIME / ".soloist-install.lock").open("a") as lock:
-        lock_for(lock, deadline)
+        lock_for(lock, end)
         old_built_at = build_time()
-        if (
-            not force
-            and (RUNTIME / "soloist").is_file()
-            and old_built_at + RENEW_AFTER > time.time()
-        ):
-            return
+        now = time.time()
+        if not force and (RUNTIME / "soloist").is_file():
+            if old_built_at + RENEW_AFTER > now:
+                return
+            # Spotify had nothing newer a few hours ago, and this one still runs.
+            checked_at = installed_metadata().get("checked_at")
+            if (
+                isinstance(checked_at, int)
+                and checked_at + RECHECK_AFTER > now >= checked_at
+                and old_built_at + BUILD_LIFETIME > now
+            ):
+                return
         sweep_interrupted_downloads()
         arch = {"x86_64": "x86_64", "aarch64": "arm64", "armv7l": "arm32"}.get(
             platform.machine()
@@ -173,7 +196,7 @@ def update(force=False, deadline=INSTALL_DOWNLOAD_SECONDS):
             archive = directory / "download.tar.gz"
             candidate = directory / "soloist"
             try:
-                download_archive(url, archive, time.monotonic() + deadline)
+                download_archive(url, archive, end)
                 extract_executable(archive, candidate)
             except DOWNLOAD_FAILURES as error:
                 raise ValueError("Soloist download was invalid") from error
@@ -188,6 +211,7 @@ def update(force=False, deadline=INSTALL_DOWNLOAD_SECONDS):
                 raise ValueError("Refusing to replace Soloist with an older build")
             metadata = {
                 "built_at": built_at,
+                "checked_at": int(time.time()),
                 "source": url,
                 "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
                 "version": version.stdout.strip()[:256],
@@ -329,16 +353,22 @@ def backend_current():
     return result.returncode == 0 and result.stdout.strip() == recorded
 
 
+def unit_running():
+    try:
+        return run(["systemctl", "--user", "is-active", "--quiet", UNIT]).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def status():
     info = installed_metadata()
     built_at = build_time()
     result = {
         "installed": (RUNTIME / "soloist").is_file(),
         "unit": (CONFIG / "systemd/user" / UNIT).is_file(),
-        "key": None if "--no-key" in sys.argv else bool(key()),
+        "key": None if "--no-key" in sys.argv else key_known(),
         "paired": (STATE / "paired").is_file(),
-        "running": run(["systemctl", "--user", "is-active", "--quiet", UNIT]).returncode
-        == 0,
+        "running": unit_running(),
         "daysRemaining": max(0, int((built_at + BUILD_LIFETIME - time.time()) / 86400)),
         "version": info.get("version", ""),
     }

@@ -53,10 +53,42 @@ class ConnectHelperTests(unittest.TestCase):
         self.assertEqual(helper.endpoint_path("/zc/0"), "/zc/0")
         self.assertEqual(helper.endpoint_path(""), "/")
 
+    def test_requests_reach_the_receiver_with_their_query(self) -> None:
+        # Faked below request_json, so its own path check is part of the test.
+        seen: list[tuple[str, str]] = []
+
+        class FakeConnection:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def request(self, method: str, path: str, **_kwargs: object) -> None:
+                seen.append((method, path))
+
+            def getresponse(self) -> FakeResponse:
+                return FakeResponse({"status": 101, "deviceID": "a" * 40, "remoteName": "Speaker"})
+
+            def close(self) -> None:
+                pass
+
+        record = {"address": "192.168.1.9", "port": 5353, "cpath": "/zc", "version": "2.9.0",
+                  "serviceName": "Speaker"}
+        with mock.patch.object(helper.http.client, "HTTPConnection", FakeConnection):
+            device = helper.probe_receiver(record, False)
+        self.assertEqual(seen, [("GET", "/zc?action=getInfo&version=2.9.0")])
+        self.assertIsNotNone(device)
+        self.assertEqual(device["id"], "a" * 40)
+
+    def test_a_request_query_is_only_ever_plain_encoded_fields(self) -> None:
+        for bad in ("/zc?a=1#frag", "/zc?a=1 b", "/zc?a=/../etc", "/zc?", "/zc?a=1?b=2"):
+            with self.assertRaises(helper.ConnectError, msg=bad):
+                helper.request_json("192.168.1.9", 5353, bad)
+
     def test_cloud_metadata_address_is_not_a_receiver(self) -> None:
         with self.assertRaises(helper.ConnectError):
             helper.safe_address("169.254.169.254")
         self.assertEqual(helper.safe_address("169.254.10.20"), "169.254.10.20")
+        with self.assertRaises(helper.ConnectError):
+            helper.safe_address("::ffff:169.254.169.254")
 
     def test_discovery_probes_each_receiver_once(self) -> None:
         browse = "\n".join(

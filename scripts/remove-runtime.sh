@@ -68,11 +68,16 @@ if [[ -d $config_dir ]]; then
 fi
 
 if (( purge )); then
-  # Releases before 1.0.3 cached playback credentials and audio here.
+  # Releases before 1.0.3 cached playback credentials and audio here, which is
+  # also where a spotifyd of the user's own keeps its login and audio.
   if [[ -d $legacy_cache_dir ]]; then
     [[ $legacy_cache_dir == "$cache_root/spotifyd" ]] || exit 3
-    rm -rf -- "$legacy_cache_dir"
-    echo "Removed cached credentials and audio."
+    if [[ -e $config_root/spotifyd ]] || command -v spotifyd >/dev/null 2>&1; then
+      echo "Left $legacy_cache_dir alone: spotifyd is installed and this is its cache."
+    else
+      rm -rf -- "$legacy_cache_dir"
+      echo "Removed cached credentials and audio."
+    fi
   fi
   if [[ -d $build_cache_dir ]]; then
     [[ $build_cache_dir == "$cache_root/omaspotify" ]] || exit 3

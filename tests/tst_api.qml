@@ -165,6 +165,59 @@ TestCase {
     compare(Api.touchBoundedOrder(order, "", 3), "")
   }
 
+  function test_normalizeTrack_dropsRowsSpotifyReturnsEmpty() {
+    // A removed or unavailable song arrives as a wrapper around nothing.
+    compare(Api.normalizeTrack({ added_at: "2026-01-01T00:00:00Z", track: null }), null)
+    compare(Api.normalizeTrack({ item: null }), null)
+    compare(Api.normalizeTrack(null), null)
+    compare(Api.normalizeTrack({}), null)
+    verify(Api.normalizeTrack({ track: { name: "Kept", uri: "spotify:track:1", type: "track" } }))
+    // A local file has a name but no id, and still belongs in the list.
+    verify(Api.normalizeTrack({ track: { name: "Mine", uri: "spotify:local:a:b:c:1", type: "track" } }))
+  }
+
+  function test_localFilesAreNeverSentToSpotifyAsUris() {
+    var local = { kind: "item", type: "track", uri: "spotify:local:a:b:c:1", name: "Mine" }
+    var first = { kind: "item", type: "track", uri: "spotify:track:1", name: "One" }
+    var second = { kind: "item", type: "track", uri: "spotify:track:2", name: "Two" }
+    compare(Api.playlistItemUris([first, local, second]),
+      ["spotify:track:1", "spotify:track:2"])
+    compare(Api.playbackBody(first, [first, local, second], "").uris,
+      ["spotify:track:1", "spotify:track:2"])
+  }
+
+  function test_filteredSorted_sortsRowsWithMissingFieldsAsEmpty() {
+    var rows = [
+      { name: "b", subtitle: "Zed" },
+      { name: "a" },
+      { name: "c", subtitle: "Abba" }
+    ]
+    // No artist sorts first, as an empty name would, not under "undefined".
+    compare(Api.filteredSorted(rows, "", "artist", false).map(function(row) { return row.name }),
+      ["a", "c", "b"])
+  }
+
+  function test_compactCount_neverShowsAThousandOfAUnit() {
+    compare(Api.compactCount(999949), "999.9K")
+    compare(Api.compactCount(999950), "1.0M")
+    compare(Api.compactCount(999999), "1.0M")
+    compare(Api.compactCount(999950000), "1.0B")
+    compare(Api.compactCount(12345), "12.3K")
+    compare(Api.compactCount(1500000), "1.5M")
+  }
+
+  function test_parseStringList_keepsWordsThatNameBuiltIns() {
+    compare(Api.parseStringList(["constructor", "hasOwnProperty", "toString", "abc", "abc"]),
+      ["constructor", "hasOwnProperty", "toString", "abc"])
+  }
+
+  function test_redact_coversBareTokensAndOtherSeparators() {
+    verify(Api.redact("error=x;refresh_token=abc123").indexOf("abc123") < 0)
+    verify(Api.redact("failed, access_token=abc123").indexOf("abc123") < 0)
+    verify(Api.redact("sent Bearer abc123.def to the server").indexOf("abc123") < 0)
+    compare(Api.redact("the bearer of bad news"), "the bearer of bad news")
+  }
+
   function test_filteredSorted_reusesTheUnchangedDefaultList() {
     var rows = [{ name: "One" }, { name: "Two" }]
     verify(Api.filteredSorted(rows, "", "default") === rows)

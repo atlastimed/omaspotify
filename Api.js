@@ -225,7 +225,9 @@ function plainLabel(value) {
 function redact(value) {
   var text = String(value || "")
   text = text.replace(/(authorization\s*:\s*bearer\s+)[^\s]+/ig, "$1<redacted>")
-  text = text.replace(/(^|[?&\s])((?:code|access_token|refresh_token|code_verifier|client_secret|password)=)[^&#\s]+/ig, "$1$2<redacted>")
+  // A token is long and has no spaces, which ordinary words after "bearer" are not.
+  text = text.replace(/(\bbearer\s+)[A-Za-z0-9._~+\/=-]{6,}/ig, "$1<redacted>")
+  text = text.replace(/(^|[?&;,\s])((?:code|access_token|refresh_token|code_verifier|client_secret|password)=)[^&#\s]+/ig, "$1$2<redacted>")
   text = text.replace(/("(?:access_token|refresh_token|code|code_verifier|client_secret|password)"\s*:\s*")[^"]+/ig, "$1<redacted>")
   return text
 }
@@ -2341,12 +2343,18 @@ function albumKind(item) {
   return type === "album" ? "Album" : "Release"
 }
 
+// A local file has a URI Spotify shows but will not play or add over the Web API.
+function isRemoteUri(uri) {
+  var value = String(uri || "")
+  return value !== "" && value.indexOf("spotify:local:") !== 0
+}
+
 function playlistItemUris(items) {
   var rows = Array.isArray(items) ? items : []
   var uris = []
   for (var i = 0; i < rows.length; i++) {
     var item = rows[i] || {}
-    if (item.uri && ["track", "episode"].indexOf(String(item.type || "")) >= 0)
+    if (isRemoteUri(item.uri) && ["track", "episode"].indexOf(String(item.type || "")) >= 0)
       uris.push(String(item.uri))
   }
   return uris
@@ -2487,6 +2495,8 @@ function normalizeTrack(value, imageWidth, parentContext) {
   var album = item.album || {}
   var type = String(item.type || "track")
   if (["track", "episode", "chapter"].indexOf(type) === -1) return null
+  // A removed song comes back as a wrapper around nothing; it is not a row.
+  if (!item.uri && !item.id && !item.name) return null
   var subtitle = type === "episode"
     ? String((item.show && item.show.name) || item.description || "Podcast")
     : (type === "chapter"
@@ -2758,6 +2768,16 @@ function normalizeCursorPage(container, mapper) {
   }
 }
 
+// What a row is ordered by, worked out once per row rather than per comparison.
+function sortValueFor(item, key) {
+  if (key === "default") return 0
+  if (key === "duration") return Number(item.durationMs) || 0
+  if (key === "date" || key === "date-asc")
+    return String(item.addedAt || item.playedAt || item.releaseDate || "")
+  var text = key === "artist" ? item.subtitle : (key === "album" ? item.album : item.name)
+  return String(text || "").toLowerCase()
+}
+
 function filteredSorted(items, filterText, sortKey, descending) {
   var source = Array.isArray(items) ? items : []
   var term = String(filterText || "").trim().toLowerCase()
@@ -2782,7 +2802,7 @@ function filteredSorted(items, filterText, sortKey, descending) {
         item.releaseDate, item.addedAt].join(" ").toLowerCase()
       if (haystack.indexOf(term) < 0) continue
     }
-    rows.push({ item: item, index: i })
+    rows.push({ item: item, index: i, sortBy: sortValueFor(item, key) })
   }
   if (key !== "default") {
     // Dates read newest first by default; every other column reads A to Z.
@@ -2791,22 +2811,12 @@ function filteredSorted(items, filterText, sortKey, descending) {
     if (key === "date-asc") flip = !flip
     var direction = dateKey ? (flip ? 1 : -1) : (flip ? -1 : 1)
     rows.sort(function(a, b) {
-      var left
-      var right
-      if (key === "duration") {
-        left = Number(a.item.durationMs) || 0
-        right = Number(b.item.durationMs) || 0
-      } else if (dateKey) {
-        left = String(a.item.addedAt || a.item.playedAt || a.item.releaseDate || "")
-        right = String(b.item.addedAt || b.item.playedAt || b.item.releaseDate || "")
-        // Unknown dates stay at the end whichever way the column reads.
+      var left = a.sortBy
+      var right = b.sortBy
+      // Unknown dates stay at the end whichever way the column reads.
+      if (dateKey) {
         if (!left && right) return 1
         if (left && !right) return -1
-      } else {
-        left = String(key === "artist" ? a.item.subtitle
-          : (key === "album" ? a.item.album : a.item.name) || "").toLowerCase()
-        right = String(key === "artist" ? b.item.subtitle
-          : (key === "album" ? b.item.album : b.item.name) || "").toLowerCase()
       }
       if (left < right) return -direction
       if (left > right) return direction
@@ -2827,7 +2837,7 @@ function parseStringList(value, maximum) {
   var seen = ({})
   for (var i = 0; i < source.length && result.length < limit; i++) {
     var entry = String(source[i] || "").trim()
-    if (!entry || seen[entry]) continue
+    if (!entry || Object.prototype.hasOwnProperty.call(seen, entry)) continue
     seen[entry] = true
     result.push(entry)
   }
@@ -2956,8 +2966,9 @@ function filterLibraryType(items, filter) {
 // Big numbers read better shortened; small ones read better in full.
 function compactCount(value) {
   var n = Math.max(0, Math.floor(Number(value) || 0))
-  if (n >= 1000000000) return (n / 1000000000).toFixed(1) + "B"
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M"
+  // The cut-offs sit where rounding to one decimal would reach the next unit.
+  if (n >= 999950000) return (n / 1000000000).toFixed(1) + "B"
+  if (n >= 999950) return (n / 1000000).toFixed(1) + "M"
   if (n >= 10000) return (n / 1000).toFixed(1) + "K"
   return groupedDigits(String(n))
 }
@@ -3144,7 +3155,7 @@ function playbackBody(item, sourceItems, contextUri) {
     var candidate = values[(start + step) % values.length]
     if (!candidate || candidate.kind !== "item") continue
     var uri = String(candidate.uri || "")
-    if (!uri) continue
+    if (!isRemoteUri(uri)) continue
     uris.push(uri)
   }
   var body = { uris: uris.length ? uris : [itemUri] }

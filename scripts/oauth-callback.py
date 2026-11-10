@@ -34,6 +34,8 @@ import urllib.parse
 # A browser redirect is a couple of hundred bytes. This is room to spare, and
 # far too small to be worth flooding.
 MAX_REQUEST_BYTES = 4096
+# The rest of a request is read and thrown away, up to this much.
+MAX_DRAIN_BYTES = 65536
 # The caller's response is about a kilobyte before encoding.
 MAX_RESPONSE_BYTES = 64 * 1024
 # The state pkce.sh generates is a few dozen hex characters.
@@ -172,16 +174,27 @@ def serve(port, path, timeout, stdin=None, stdout=None, ready=None):
                 stdout.flush()
                 response = read_response(stdin)
                 if response:
-                    _send(connection, response)
+                    # Only the real redirect is worth waiting on.
+                    _send(connection, response, linger=0.5)
                 return 0
     finally:
         listener.close()
     return 1
 
 
-def _send(connection, payload):
+def _send(connection, payload, linger=0.05):
     try:
         connection.sendall(payload)
+        # Closing with the browser's headers still unread resets the connection,
+        # and the browser shows an error instead of the page just sent.
+        connection.shutdown(socket.SHUT_WR)
+        connection.settimeout(linger)
+        unread = MAX_DRAIN_BYTES
+        while unread > 0:
+            chunk = connection.recv(min(4096, unread))
+            if not chunk:
+                break
+            unread -= len(chunk)
     except OSError:
         pass
 
