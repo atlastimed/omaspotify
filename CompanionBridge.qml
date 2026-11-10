@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import Quickshell
 import Quickshell.Io
@@ -6,7 +8,7 @@ import "Companion.js" as Protocol
 Item {
   id: root
   required property var service
-  property bool enabled: true
+  property bool serving: true
   property string socketPath: Quickshell.env("XDG_RUNTIME_DIR")
     + "/atlastimed-omaspotify-" + Qt.md5(Quickshell.env("WAYLAND_DISPLAY")).slice(0, 12) + ".sock"
   property var clients: []
@@ -23,8 +25,8 @@ Item {
     var message = Protocol.command(line)
     if (!message) { client.connected = false; return }
     if (message.action === "watch") {
-      var wasVisible = client.watching
-      var oldSection = client.section
+      const wasVisible = client.watching
+      const oldSection = client.section
       client.watching = message.visible
       client.section = message.visible ? message.section : ""
       if (wasVisible !== client.watching) service.setUiVisible(client.surfaceKey, client.watching)
@@ -76,7 +78,7 @@ Item {
     function onCurrentTrackItemUriChanged() { queueRefresh.restart() }
   }
   SocketServer {
-    active: root.enabled && Quickshell.env("XDG_RUNTIME_DIR") !== ""
+    active: root.serving && Quickshell.env("XDG_RUNTIME_DIR") !== ""
     path: root.socketPath
     handler: Socket {
       id: client

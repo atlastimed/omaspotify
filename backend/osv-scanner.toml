@@ -1,0 +1,14 @@
+# Advisories with no available fix, kept visible here with the reason they are
+# accepted. Soloist mode reaches neither crate: both are librespot only.
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2023-0071"
+reason = "rsa has no fixed release. librespot only verifies public-key signatures; the attack targets private-key operations."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0194"
+reason = "quick-xml 0.41 needs a newer librespot rev. Only parses ProductInfo from Spotify's TLS access point."
+
+[[IgnoredVulns]]
+id = "RUSTSEC-2026-0195"
+reason = "quick-xml 0.41 needs a newer librespot rev. Only parses ProductInfo from Spotify's TLS access point."

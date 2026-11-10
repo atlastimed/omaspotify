@@ -1,18 +1,15 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Popup {
   id: popup
 
   property var panel: null
 
-  component KeyHint: PanelKeyHint {
-    panel: popup.panel
-  }
   parent: popup.panel.windowContentItem
   x: Math.max(Style.space(8), popup.panel.windowWidth - width - Style.space(24))
   y: Math.max(Style.space(8), popup.panel.windowHeight - height - Style.space(130))
@@ -50,6 +47,7 @@ Popup {
     Text {
       width: parent.width
       text: popup.panel.service ? popup.panel.service.sleepStatusText() : "Sleep timer"
+      textFormat: Text.PlainText
       color: popup.panel.foreground
       font.family: popup.panel.fontFamily
       font.pixelSize: Style.font.body
@@ -60,6 +58,7 @@ Popup {
     Repeater {
       model: [15, 30, 60, 120]
       Button {
+        id: minutesButton
         required property int modelData
         width: sleepContent.width
         text: modelData + " minutes"
@@ -67,7 +66,7 @@ Popup {
         foreground: popup.panel.foreground
         leftAlign: true
         hasCursor: popup.panel.cursorShown("popup", "sleep-" + modelData)
-        KeyHint { region: "popup"; action: "sleep-" + modelData }
+        onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-" + minutesButton.modelData) }
         onClicked: {
           if (popup.panel.service) popup.panel.service.setSleepMinutes(modelData)
           popup.close()
@@ -81,7 +80,7 @@ Popup {
       foreground: popup.panel.foreground
       leftAlign: true
       hasCursor: popup.panel.cursorShown("popup", "sleep-track")
-      KeyHint { region: "popup"; action: "sleep-track" }
+      onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-track") }
       onClicked: {
         if (popup.panel.service) popup.panel.service.sleepAfterTrack()
         popup.close()
@@ -94,7 +93,7 @@ Popup {
       foreground: popup.panel.foreground
       leftAlign: true
       hasCursor: popup.panel.cursorShown("popup", "sleep-context")
-      KeyHint { region: "popup"; action: "sleep-context" }
+      onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-context") }
       onClicked: {
         if (popup.panel.service) popup.panel.service.sleepAfterContext()
         popup.close()
@@ -108,7 +107,7 @@ Popup {
       foreground: popup.panel.foreground
       leftAlign: true
       hasCursor: popup.panel.cursorShown("popup", "sleep-cancel")
-      KeyHint { region: "popup"; action: "sleep-cancel" }
+      onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-cancel") }
       onClicked: {
         popup.panel.service.cancelSleepTimer(true)
         popup.close()

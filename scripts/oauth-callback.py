@@ -7,10 +7,15 @@ and stream a request line that never ends, and the reader on the other side
 buffered all of it before anyone looked at what it was.
 
 So this reads a request line into a fixed budget and gives up the moment it is
-exceeded, holds a deadline over the whole wait, ignores anything that is not a
-GET for the expected path, and prints exactly one line: the request line it
-accepted. The caller checks the OAuth state and sends back the response to
-write, base64 on a single line, because the response itself has newlines in it.
+exceeded, holds a deadline over the whole wait and over each client, ignores
+anything that is not a GET for the expected path carrying the expected OAuth
+state, and prints exactly one line: the request line it accepted. Any web page
+can fire a request at loopback, so a forged redirect is answered and forgotten
+rather than ending the sign-in.
+
+The caller sends the expected state as the first line of stdin, never on the
+command line, and then the response to write: base64 on a single line, because
+the response itself has newlines in it.
 """
 
 from __future__ import annotations
@@ -19,26 +24,32 @@ import argparse
 import base64
 import binascii
 import errno
+import hmac
 import signal
 import socket
 import sys
 import time
+import urllib.parse
 
 # A browser redirect is a couple of hundred bytes. This is room to spare, and
 # far too small to be worth flooding.
 MAX_REQUEST_BYTES = 4096
+# The rest of a request is read and thrown away, up to this much.
+MAX_DRAIN_BYTES = 65536
 # The caller's response is about a kilobyte before encoding.
 MAX_RESPONSE_BYTES = 64 * 1024
-# Junk connections get an answer and a close; this bounds how many we entertain.
-MAX_CONNECTIONS = 8
-# One client gets this long to send its request line.
-PER_CONNECTION_TIMEOUT = 5.0
+# The state pkce.sh generates is a few dozen hex characters.
+MAX_STATE_BYTES = 256
+LISTEN_BACKLOG = 8
+# One client gets this long in total, however slowly it keeps sending.
+PER_CONNECTION_TIMEOUT = 2.0
 
 TOO_LONG = (
     b"HTTP/1.1 431 Request Header Fields Too Large\r\n"
     b"Content-Length: 0\r\nConnection: close\r\n\r\n"
 )
 NOT_FOUND = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+BAD_STATE = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
 
 
 class Overflow(Exception):
@@ -60,7 +71,7 @@ def read_request_line(connection, limit=MAX_REQUEST_BYTES, deadline=None):
             connection.settimeout(min(remaining, PER_CONNECTION_TIMEOUT))
         try:
             chunk = connection.recv(1024)
-        except (TimeoutError, socket.timeout):
+        except TimeoutError:
             return None
         except OSError as error:
             if error.errno == errno.EINTR:
@@ -91,6 +102,14 @@ def request_line_targets(line, expected_path):
     return path == str(expected_path or "/callback")
 
 
+def request_line_state(line):
+    """The OAuth state a request line carries, or an empty string."""
+    parts = str(line or "").split(" ")
+    query = parts[1].partition("?")[2] if len(parts) == 3 else ""
+    values = urllib.parse.parse_qs(query, keep_blank_values=True)
+    return (values.get("state") or [""])[0]
+
+
 def read_response(stream, limit=MAX_RESPONSE_BYTES):
     """One base64 line from the caller, decoded. None if it never arrives."""
     line = stream.readline(limit + 1)
@@ -106,30 +125,38 @@ def serve(port, path, timeout, stdin=None, stdout=None, ready=None):
     """Wait for the redirect. Returns 0 once a response has been written."""
     stdin = stdin if stdin is not None else sys.stdin
     stdout = stdout if stdout is not None else sys.stdout
+    expected_state = stdin.readline(MAX_STATE_BYTES + 1).strip()
+    if not expected_state or len(expected_state) > MAX_STATE_BYTES:
+        return 2
     deadline = time.monotonic() + timeout
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
         listener.bind(("127.0.0.1", port))
-        listener.listen(MAX_CONNECTIONS)
+        listener.listen(LISTEN_BACKLOG)
         if ready is not None:
             ready(listener.getsockname()[1])
 
-        for _ in range(MAX_CONNECTIONS):
+        # Bounded by the deadline alone: counting connections would let a web page
+        # end the sign-in just by sending enough of them.
+        while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 break
             listener.settimeout(remaining)
             try:
                 connection, _ = listener.accept()
-            except (TimeoutError, socket.timeout):
+            except TimeoutError:
                 break
             except OSError:
                 break
             with connection:
                 try:
-                    line = read_request_line(connection, deadline=deadline)
+                    line = read_request_line(
+                        connection,
+                        deadline=min(deadline, time.monotonic() + PER_CONNECTION_TIMEOUT),
+                    )
                 except Overflow:
                     _send(connection, TOO_LONG)
                     continue
@@ -138,20 +165,36 @@ def serve(port, path, timeout, stdin=None, stdout=None, ready=None):
                 if not request_line_targets(line, path):
                     _send(connection, NOT_FOUND)
                     continue
+                if not hmac.compare_digest(
+                    request_line_state(line).encode(), expected_state.encode()
+                ):
+                    _send(connection, BAD_STATE)
+                    continue
                 stdout.write(line + "\n")
                 stdout.flush()
                 response = read_response(stdin)
                 if response:
-                    _send(connection, response)
+                    # Only the real redirect is worth waiting on.
+                    _send(connection, response, linger=0.5)
                 return 0
     finally:
         listener.close()
     return 1
 
 
-def _send(connection, payload):
+def _send(connection, payload, linger=0.05):
     try:
         connection.sendall(payload)
+        # Closing with the browser's headers still unread resets the connection,
+        # and the browser shows an error instead of the page just sent.
+        connection.shutdown(socket.SHUT_WR)
+        connection.settimeout(linger)
+        unread = MAX_DRAIN_BYTES
+        while unread > 0:
+            chunk = connection.recv(min(4096, unread))
+            if not chunk:
+                break
+            unread -= len(chunk)
     except OSError:
         pass
 

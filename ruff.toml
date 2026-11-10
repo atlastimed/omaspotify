@@ -1,0 +1,7 @@
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+# Long lines hold test fixtures and protocol strings.
+ignore = ["E501", "SIM105", "SIM117"]

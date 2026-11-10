@@ -15,10 +15,6 @@ Item {
   height: 0
 
   required property var auth
-  // The shipped client id, kept for what a personal one is refused or not shown. Null
-  // when there is no personal id, in which case `auth` is already the shipped
-  // one and there is nothing to fall back to.
-  property var fallbackAuth: null
 
   property var searchRequest: null
   property int searchSerial: 0
@@ -33,9 +29,8 @@ Item {
   property int backgroundRefusals: 0
   readonly property int backgroundSpacingMs:
     Api.backgroundSpacingForRefusals(backgroundRefusals)
-  // Every request is logged while we are still tuning this; raise it to see
-  // only the slow ones.
-  property int slowRequestMs: 0
+  // Failures are always logged; this is how slow a success has to be.
+  property int slowRequestMs: 2000
   property double rateLimitedUntil: 0
   property var quotaRoutes: ({})
   readonly property bool quotaExhausted: Object.keys(quotaRoutes).length > 0
@@ -45,7 +40,6 @@ Item {
   property bool cancellingAll: false
   property bool pumpAgain: false
   property var timedJobs: []
-  property var diagnostics: []
   property int activeTimeoutMs: 15000
   property var xhrFactory: function() { return new XMLHttpRequest() }
   property var now: function() { return Date.now() }
@@ -87,7 +81,9 @@ Item {
     var startedAt = job.startedAt !== undefined ? job.startedAt : queuedAt
     var authedAt = job.authedAt !== undefined ? job.authedAt : startedAt
     var elapsed = Math.max(0, ended - queuedAt)
-    if (error || elapsed >= slowRequestMs)
+    // Background work waits its turn on purpose, so only its wire time can be slow.
+    var counted = job.priority === "background" ? Math.max(0, ended - authedAt) : elapsed
+    if (error || counted >= slowRequestMs)
       console.warn("Spotify API " + Api.requestTimingLine(job.method, job.path, {
         queuedMs: Math.max(0, startedAt - queuedAt),
         authMs: Math.max(0, authedAt - startedAt),
@@ -98,18 +94,6 @@ Item {
         queued: requestQueue.length,
         priority: job.priority
       }) + (error ? ": " + Api.redact(error) : ""))
-    var entry = {
-      route: String(job.path || "").split("?")[0].replace(/^https:\/\/api.spotify.com\/v1/, "")
-        .replace(/\/(users|artists|albums|tracks|playlists|shows|episodes|audiobooks)\/[^/]+/g, "/$1/:id"),
-      method: String(job.method || "GET"), status: status,
-      durationMs: elapsed,
-      queueMs: Math.max(0, (job.startedAt || now()) - job.queuedAt),
-      tokenMs: job.sentAt ? Math.max(0, job.sentAt - job.startedAt) : 0,
-      httpMs: job.sentAt ? Math.max(0, now() - job.sentAt) : 0,
-      retries: job.rateLimitRetries + (job.retried ? 1 : 0),
-      outcome: error ? (status ? "http-error" : "transport-error") : "success"
-    }
-    diagnostics = diagnostics.concat([entry]).slice(-100)
     releaseRequestSlot(job.handle)
     if (job.handle && job.handle.job === job) job.handle.job = null
     callbackIfCurrent(job, status, payload, error, xhr)
@@ -211,6 +195,8 @@ Item {
     }
     pumpingRequests = true
     pumpAgain = false
+    // One stray exception must not leave every later request waiting for ever.
+    try {
     while (requestsInFlight < Api.apiInFlightLimit(restrictInFlight)) {
       var limit = Api.apiInFlightLimit(restrictInFlight)
       var cooldown = Api.apiCooldownMs(now(), rateLimitedUntil)
@@ -251,7 +237,9 @@ Item {
       requestsInFlight += 1
       startJob(job)
     }
-    pumpingRequests = false
+    } finally {
+      pumpingRequests = false
+    }
     if (pumpAgain) pumpRequests()
   }
 
@@ -263,6 +251,7 @@ Item {
     }
     job.startedAt = now()
     job.activeDeadlineAt = job.startedAt + activeTimeoutMs
+    watchDeadlines()
     var url = Api.safeApiUrl(job.path)
     if (!url) {
       finishJob(job, 0, null, "Something went wrong while contacting Spotify", null)
@@ -270,14 +259,7 @@ Item {
     }
     url = Api.appendQuery(url, job.query)
 
-    // Your own client would only repeat your own list, so a shared request has nowhere else to go.
-    if (job.shared === true && !fallbackAuth) {
-      finishJob(job, 0, null, "Not logged in", null)
-      return
-    }
-    if (job.shared === true) job.fellBack = true
-    var identity = job.fellBack === true && fallbackAuth ? fallbackAuth : auth
-    identity.withAccessToken(function(token, tokenError) {
+    auth.withAccessToken(function(token, tokenError) {
       job.authedAt = now()
       if (handle.aborted) {
         releaseRequestSlot(handle)
@@ -289,6 +271,7 @@ Item {
       }
       job.sentAt = now()
       job.activeDeadlineAt = job.sentAt + activeTimeoutMs
+      watchDeadlines()
       var xhr = null
       try {
         xhr = xhrFactory()
@@ -299,7 +282,7 @@ Item {
           if (handle.aborted || job.finished === true) return
           var payload = Api.parseJson(xhr.responseText, null)
           if (xhr.status === 401 && job.retried !== true) {
-            identity.invalidateAccessToken()
+            auth.invalidateAccessToken()
             job.activeDeadlineAt = 0
             job.retried = true
             requestQueue = Api.enqueueApiJob(requestQueue, job)
@@ -333,17 +316,6 @@ Item {
             blocked[quotaRoute(job.method, job.path)] = true
             quotaRoutes = blocked
           }
-          // Refused by the personal client: try the shipped one, which still
-          // reaches the catalog endpoints Spotify closed to new apps.
-          // Without a session of its own, the retry would hide the refusal behind "Not logged in".
-          if (Api.shouldFallBackToSharedClient(xhr.status, job.fellBack,
-              !!fallbackAuth && fallbackAuth.loggedIn === true, job.method, job.path)) {
-            job.fellBack = true
-            job.activeDeadlineAt = 0
-            requestQueue = Api.enqueueApiJob(requestQueue, job)
-            releaseRequestSlot(handle)
-            return
-          }
           var ok = xhr.status >= 200 && xhr.status < 300
           var error = ok ? "" : root.requestError(xhr.status, payload, xhr,
             "Spotify could not complete this request")
@@ -369,8 +341,12 @@ Item {
   }
 
   function callbackIfCurrent(job, status, payload, error, xhr) {
-    if (typeof job.callback === "function")
+    if (typeof job.callback !== "function") return
+    try {
       job.callback(status, payload, error, xhr)
+    } catch (failure) {
+      console.warn("Spotify API callback failed: " + Api.redact(failure))
+    }
   }
 
   function request(method, path, query, body, callback, options) {
@@ -385,8 +361,6 @@ Item {
       body: body,
       callback: callback,
       retried: false,
-      fellBack: false,
-      shared: settings.shared === true,
       rateLimitRetries: 0,
       retryRateLimit: settings.retryRateLimit !== false,
       priority: String(settings.priority || ""),
@@ -398,6 +372,7 @@ Item {
     }
     handle.job = job
     timedJobs = timedJobs.concat([job])
+    if (job.deadlineAt) watchDeadlines()
     return enqueueJob(job)
   }
 
@@ -463,10 +438,28 @@ Item {
     onTriggered: root.pumpRequests()
   }
 
+  // Runs only while some request has a deadline to miss. A queue waiting out a
+  // long rate limit has none, and must not wake the shell four times a second.
+  function deadlinePending() {
+    for (var i = 0; i < timedJobs.length; i++) {
+      var job = timedJobs[i]
+      if (job && job.finished !== true && (job.deadlineAt || job.activeDeadlineAt)) return true
+    }
+    return false
+  }
+
+  function watchDeadlines() {
+    if (!deadlineTimer.running) deadlineTimer.start()
+  }
+
   Timer {
+    id: deadlineTimer
+    objectName: "deadlineTimer"
     interval: 250
     repeat: true
-    running: root.timedJobs.length > 0
-    onTriggered: root.expireTimedOutRequests(root.now())
+    onTriggered: {
+      root.expireTimedOutRequests(root.now())
+      if (!root.deadlinePending()) stop()
+    }
   }
 }

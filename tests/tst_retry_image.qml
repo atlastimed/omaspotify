@@ -35,6 +35,22 @@ TestCase {
       "file:///tmp/cover.png")
   }
 
+  SignalSpy {
+    id: missing
+    target: artwork
+    signalName: "localSourceMissing"
+  }
+
+  function test_aKeptCopyThatHasGoneIsReported() {
+    missing.clear()
+    // Nothing loads while hidden, and a test item is never shown.
+    artwork.active = true
+    artwork.requestedSource = "file:///nonexistent/omaspotify-test/cover.img"
+    tryCompare(missing, "count", 1, 2000)
+    // A remote failure is retried instead, and is nobody else's business.
+    compare(artwork.retryAttempt, 0)
+  }
+
   function test_backoffIsBounded() {
     artwork.retryAttempt = 1
     compare(artwork.retryDelayMs, 750)

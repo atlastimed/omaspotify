@@ -1,3 +1,125 @@
+## 2.3.0 — Full review
+
+A complete review of the plugin, backend, install scripts and CI, with fixes
+verified against tests and an isolated preview, then run on a real desktop with a
+real account, three monitors and Tunemarchy in the bar.
+
+**Found by running it for real**
+
+- A long title in the bar no longer runs under the clock or the next section. The
+  bar lays its sections out without looking at each other, so the entry now measures
+  the room left and shortens its label to fit, ending in an ellipsis.
+- One Spotify icon, not two. With Tunemarchy in the bar and connected, this plugin's
+  own entry steps aside.
+- Shortcut hints no longer switch on at any modifier and stay on. Hold Ctrl, Shift or
+  Alt and a small keycap appears beside each control; let go and they leave. Nothing
+  is washed in colour, no keycap sits on top of an icon, and the arrows on
+  neighbouring rows are gone. `Ctrl+H` and the header's Hide hints button went with
+  them.
+- The mini-player shortcut works again. It returned "unavailable" on Omarchy 4.5,
+  which gives plugins no way to open a bar popup; it now opens its own, or
+  Tunemarchy's when that is the bar player.
+- Nearby speakers are found again. Every lookup built a URL with a query, and the
+  request function refused any path containing one, so discovery, activation and
+  Sonos control could never succeed.
+- Pinned items survive closing the player. Every close saved the player's own state
+  over the whole session.
+- Covers come back by themselves if the kept copies on disk go missing, instead of
+  showing placeholders until a restart.
+- An open playlist shows how many songs it has now, not how many it had when the
+  library was last read.
+- The sign-in page no longer shows a connection error after a successful sign-in.
+- A fresh install with no client ID no longer shows a disabled "Working" button.
+- Running the tests no longer empties the real player's artwork: four fixtures ran
+  the real service against the real cache directory.
+
+**Interface**
+
+- Calmer song rows: actions appear on hover or under the keyboard cursor, and saved
+  songs show their heart.
+- Secondary text is readable on every stock theme. It used a decorative colour that
+  fell below 3:1 contrast on most of them.
+- A clearer player bar, a single search header with the current scope inside it,
+  loading skeletons, real empty states, and messages that do not shift the page.
+- Now Playing sizes itself from the window and shows what is up next. Your listening
+  shows up to a year, with month labels.
+- Settings uses real switches and works from the keyboard, as do Devices, library
+  sorting and the sidebar. `C` works on sidebar items, and pinning has a keyboard path.
+- Logging out and other destructive actions now ask first.
+- Fix lists jumping to the top on load more or reorder, search types that did nothing
+  when clicked, invisible search errors, dead buttons on Your listening, and artwork
+  being downloaded with artwork turned off.
+
+**Performance**
+
+- Song rows have 60% fewer objects and build about six times faster.
+- The mini-player is built when first opened, not on every monitor at startup.
+- Hovering a control costs about a seventeenth of what it did, and a keyboard move
+  with hints showing about a nineteenth.
+- The backend makes no wakeups at all while paused, down from about eight a second,
+  and its binary is a third smaller.
+- Large state files are read on first use, followed releases are no longer re-sorted
+  on every response, and the idle poll that started Python every minute is gone.
+- Animations stop when hidden and honour Hyprland's animation setting.
+
+**Reliability**
+
+- Your library stays complete: opening a page or saving an album no longer cut the
+  sidebar down to 50 rows, and a failed refresh no longer counts as fresh.
+- The library now refreshes in a long-running shell.
+- A brief network failure no longer signs you out, and librespot keeps retrying
+  through an outage rather than giving up permanently after 25 seconds.
+- The backend now shuts down cleanly when stopped, so Spotify no longer keeps a
+  ghost device. It also fixes a lost second toggle, restarted songs when a duration
+  was unknown, and pairing being forgotten on a brief logout.
+- Renewing Soloist no longer delays playback, and a corrupt download keeps the build
+  that still works. Plugin updates now reach the installed helper and service units.
+- An expired Soloist build or missing key is now explained rather than retried.
+- Playback startup errors were being read from the wrong directory and never shown.
+
+- A request the backend cannot read is refused under its own id, so the player no
+  longer waits for ever on it. One unanswered command no longer ends playback. Every
+  way out of the backend stops Soloist cleanly first, and a second backend can no
+  longer remove a running one's files.
+- Playlists made or converted here are still there after a restart. Top lists that
+  failed to load are asked for again, and a playlist that has changed moves in
+  Recents without waiting for a restart.
+- An unreachable keyring is no longer taken for a missing Soloist key, a build in its
+  renewal window is no longer downloaded again on every start, and a wait for the
+  install lock comes out of the download's time.
+- Removed songs no longer appear as "Untitled" rows, and local files are no longer
+  sent to Spotify.
+- Less idle work: a queue waiting out a rate limit no longer wakes the shell four
+  times a second, a poll with nothing new no longer rebuilds the device and artist
+  lists, and artwork is first listed when something wants it.
+
+**Security**
+
+- Signing in with a different account keeps each account's listening record apart,
+  including when the new account's data arrives before its profile.
+- Signing out and uninstalling no longer delete the cache of a spotifyd you installed
+  yourself.
+- Soloist's own error text is logged with anything shaped like a key left out.
+- Sign-out now removes searches, pins and artwork as well.
+- Discovery rejects receiver paths with query strings and the cloud metadata address,
+  and a slow receiver can no longer hang the player.
+- Device names and errors can no longer render as rich text, which could trigger
+  remote image requests. Forged sign-in callbacks no longer end a sign-in or put text
+  on screen.
+- State files stay private even if their directory is recreated, service units are
+  more restricted, and crash dumps are off so they cannot capture the Soloist key.
+- Dependencies are updated, clearing six of nine advisories. The other three are in
+  librespot-only code with no available fix, recorded with reasons.
+
+**Development**
+
+- One CI job runs one test script on the target platform, plus locked release builds
+  for both architectures. Linting, secret scanning and advisory scanning now run there.
+- QML lint warnings went from about 1,500 to none, and any new one fails the build.
+- Ten negative test assertions that could never fail now can, and every provenance
+  check now has a failure test.
+- `scripts/ui-preview.sh` screenshots any page in any theme with made-up data.
+
 ## 2.2.0 — Developer-app compatibility review
 
 - Replace the unavailable New releases tab with a cached, on-demand followed-artist feed.

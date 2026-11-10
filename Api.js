@@ -37,6 +37,7 @@ var DISCOVERY_SEARCHES = [
 // matching the gentler taper used by common desktop audio mixers.
 // Zero remains a true mute in both directions.
 var ENGINE_CUBIC_FLOOR = 0.1
+var SECONDARY_TEXT_CONTRAST = 5.4
 
 function clampUnit(value) {
   return Math.max(0, Math.min(1, Number(value) || 0))
@@ -215,10 +216,18 @@ function safeApiUrl(path) {
   return ""
 }
 
+// Text from outside is shown in labels that would read a tag as rich text, and
+// an image tag there fetches its url. Angle brackets are never part of a name.
+function plainLabel(value) {
+  return String(value === undefined || value === null ? "" : value).replace(/[<>]/g, "")
+}
+
 function redact(value) {
   var text = String(value || "")
   text = text.replace(/(authorization\s*:\s*bearer\s+)[^\s]+/ig, "$1<redacted>")
-  text = text.replace(/(^|[?&\s])((?:code|access_token|refresh_token|code_verifier|client_secret|password)=)[^&#\s]+/ig, "$1$2<redacted>")
+  // A token is long and has no spaces, which ordinary words after "bearer" are not.
+  text = text.replace(/(\bbearer\s+)[A-Za-z0-9._~+\/=-]{6,}/ig, "$1<redacted>")
+  text = text.replace(/(^|[?&;,\s])((?:code|access_token|refresh_token|code_verifier|client_secret|password)=)[^&#\s]+/ig, "$1$2<redacted>")
   text = text.replace(/("(?:access_token|refresh_token|code|code_verifier|client_secret|password)"\s*:\s*")[^"]+/ig, "$1<redacted>")
   return text
 }
@@ -368,43 +377,6 @@ function apiCooldownMs(now, until) {
   return wait > 0 ? Math.ceil(wait) : 0
 }
 
-// A personal client id gets its own quota, but Spotify stopped giving new apps
-// the catalog endpoints, so it answers 403 for related artists and a bogus
-// "Invalid limit" 400 for an artist's albums. The shipped id predates that
-// change and still reaches them, so what the personal one refuses is tried
-// once through it. 401 is a token to refresh, and 429 means slow down rather
-// than go spend the shared quota instead.
-function shouldFallBackToSharedClient(status, alreadyFellBack, hasFallback,
-    method, path) {
-  if (hasFallback !== true || alreadyFellBack === true) return false
-  // Never repeat something that changes state, and never send your own library
-  // to the shared quota: a personal client reads /me perfectly well, so a
-  // refusal there is a real error rather than a closed endpoint.
-  if (String(method || "GET").toUpperCase() !== "GET") return false
-  if (apiRequestPath(path).indexOf("/me") === 0) return false
-  var code = Number(status) || 0
-  if (code === 401 || code === 429) return false
-  return code >= 400 && code < 500
-}
-
-function isSpotifyPlaylist(playlist) {
-  return !!playlist && String(playlist.ownerId || "") === "spotify"
-}
-
-// Newer apps get a playlist list without Spotify's own, so those are fetched apart and swapped in.
-function withSpotifyPlaylists(playlists, spotifyOwn) {
-  var mine = (Array.isArray(playlists) ? playlists : []).filter(function(playlist) {
-    return !isSpotifyPlaylist(playlist)
-  })
-  return mergeUnique(mine, spotifyOwn)
-}
-
-// Paging cursors come back as absolute urls, so compare the path either way.
-function apiRequestPath(path) {
-  var value = String(path || "")
-  return value.indexOf(API_BASE) === 0 ? value.slice(API_BASE.length) : value
-}
-
 function nextRateLimitedUntil(now, retryAfter, currentUntil, attempt) {
   var proposed = (Number(now) || 0) + rateLimitRetryMs(retryAfter, attempt)
   var existing = Number(currentUntil) || 0
@@ -426,12 +398,7 @@ function playlistItemsHiddenMessage() {
   return "Spotify does not expose the contents of this playlist unless you own or collaborate on it. You can still play it as a Spotify context."
 }
 
-function sharedClientRateLimitMessage() {
-  return "Spotify is rate-limiting the shared app every OmaSpotify install uses. Set your own Spotify Developer app client ID in Settings to get a quota of your own."
-}
-
-function playlistItemsEmptyMessage(playlist, itemCount, error, status, userId,
-    sharedClient) {
+function playlistItemsEmptyMessage(playlist, itemCount, error, status, userId) {
   if (!playlist) return ""
   var count = Number(itemCount) || 0
   var owned = playlistOwnedByUser(playlist, userId)
@@ -440,14 +407,23 @@ function playlistItemsEmptyMessage(playlist, itemCount, error, status, userId,
   if (error) {
     if (playlistItemsHiddenByApi(status, owned, collaborative, knownUser))
       return playlistItemsHiddenMessage()
-    if (Number(status) === 429 && sharedClient === true)
-      return sharedClientRateLimitMessage()
     return "Couldn't load this playlist. Try again in a moment."
   }
   if (count > 0) return ""
   if (playlistItemsHiddenByApi(200, owned, collaborative, knownUser))
     return playlistItemsHiddenMessage()
   return "This playlist has no visible items."
+}
+
+function playbackFailureMessage(code) {
+  var messages = {
+    invalid_configuration: "Playback configuration is invalid. Review Settings, then start this computer again.",
+    missing_credentials: "Authorize playback on this computer in Settings.",
+    reconnect_exhausted: "Playback lost its connection repeatedly. Check the network, then start this computer again.",
+    restart_limit: "Playback stopped after repeated failures. Check your network, Premium account and playback authorization, then start this computer again.",
+    soloist_expired: "This Soloist build expired and could not be renewed. Check the network, then choose Install / repair Soloist in Settings."
+  }
+  return messages[String(code || "")] || ""
 }
 
 function localSocketFallbackMessage() {
@@ -664,6 +640,18 @@ function mergeLikedIndex(stored, fresh, limit) {
   return out
 }
 
+// In place, because a crawl pass calls this once per page of a large library.
+function appendLikedIds(target, fresh) {
+  for (var artist in fresh) {
+    if (!fresh.hasOwnProperty(artist)) continue
+    var ids = target[artist] || (target[artist] = [])
+    var incoming = fresh[artist]
+    for (var i = 0; i < incoming.length; i++)
+      if (ids.indexOf(incoming[i]) < 0) ids.push(incoming[i])
+  }
+  return target
+}
+
 function withoutLikedTrack(index, trackId) {
   var id = String(trackId || "")
   var out = {}
@@ -672,14 +660,6 @@ function withoutLikedTrack(index, trackId) {
     var ids = Array.isArray(index[k]) ? index[k] : []
     out[k] = ids.filter(function(value) { return String(value) !== id })
   }
-  return out
-}
-
-function idBatches(ids, size) {
-  var list = Array.isArray(ids) ? ids : []
-  var step = Math.max(1, Number(size) || 50)
-  var out = []
-  for (var i = 0; i < list.length; i += step) out.push(list.slice(i, i + step))
   return out
 }
 
@@ -811,6 +791,7 @@ function encodePlayHistory(record) {
   var value = record || ({})
   return JSON.stringify({
     version: PLAY_RECORD_VERSION,
+    owner: String(value.owner || ""),
     plays: value.plays || ({}),
     touched: value.touched || ({}),
     playlistEdits: value.playlistEdits || ({}),
@@ -835,6 +816,7 @@ function parsePlayHistoryRecord(raw) {
   // its watermark is dropped and the next crawl reads everything again.
   var current = Number(record.version) === PLAY_RECORD_VERSION
   return {
+    owner: String(record.owner || ""),
     plays: mergePlayHistory(plainObject(record.plays), null),
     touched: mergeTouchDates(plainObject(record.touched), null),
     playlistEdits: plainObject(record.playlistEdits),
@@ -986,10 +968,6 @@ function parseLibraryCache(raw) {
   }
 }
 
-function parsePlayHistory(raw) {
-  return parsePlayHistoryRecord(raw).plays
-}
-
 // A play time is either a real timestamp we read from the history, or a guess
 // from the top lists. Each entry keeps which one it was so the sort can say so.
 function playTimeOf(entry) {
@@ -1025,14 +1003,6 @@ function mergedPlayTimes(exact, touched, estimated) {
 function twoDigits(value) {
   return (value < 10 ? "0" : "") + value
 }
-
-function shortDate(ms) {
-  var d = new Date(Number(ms) || 0)
-  return d.getFullYear() + "-" + twoDigits(d.getMonth() + 1) + "-" + twoDigits(d.getDate())
-    + " " + twoDigits(d.getHours()) + ":" + twoDigits(d.getMinutes())
-    + ":" + twoDigits(d.getSeconds())
-}
-
 
 function librarySortModes() {
   return LIBRARY_SORT_MODES.slice()
@@ -1212,16 +1182,16 @@ function shortcutModifiersMatch(sequence, held) {
   return parsed.ctrl === ctrl && parsed.shift === shift && parsed.alt === alt
 }
 
-function shortcutModifierFlagsAfterEvent(reportedFlags, pressed, previousFlags,
-    changedModifierFlag) {
-  var reported = Number(reportedFlags) || 0
+// Which hint modifiers are down. Only a modifier key seen going down counts, so
+// a chord sent without one, or a release that never arrived, cannot leave hints
+// stuck on. Flags are Qt's keyboard modifier bits.
+function heldHintModifiers(previousFlags, reportedFlags, pressed, changedModifierFlag) {
   var previous = Number(previousFlags) || 0
   var changed = Number(changedModifierFlag) || 0
-  if (changed !== 0)
-    return pressed === true ? (reported | changed) : (reported & ~changed)
-  // Some Qt key-release events omit modifiers that are still physically held.
-  // A non-modifier release cannot change that state, so retain the last value.
-  return pressed === true ? reported : previous
+  if (changed !== 0) return pressed === true ? (previous | changed) : (previous & ~changed)
+  // Some key releases leave out modifiers that are still held, so only a press
+  // is trusted to say one has gone.
+  return pressed === true ? (previous & (Number(reportedFlags) || 0)) : previous
 }
 
 // Keys that move the keyboard cursor or press what it is on.
@@ -1263,15 +1233,6 @@ function shortcutHintCaption(sequences, held, active) {
   return labels.join(" ")
 }
 
-function shortcutOverlayLabel(sequences, held, active, navHint) {
-  if (active === false) return ""
-  var nav = String(navHint || "")
-  var chord = shortcutHintCaption(sequences, held, true)
-  if (nav && chord && nav !== chord) return nav + " " + chord
-  if (nav) return nav
-  return chord
-}
-
 function repeatModeLabel(mode) {
   var value = String(mode || "off")
   if (value === "track") return "This song"
@@ -1297,10 +1258,6 @@ function typeLabel(type, plural) {
 
 function searchTypeLabel(type) {
   return typeLabel(type, true)
-}
-
-function spotifyTypeLabel(type) {
-  return typeLabel(type, false)
 }
 
 var MUTE_THRESHOLD = 0.001
@@ -1425,6 +1382,14 @@ function backendLoadFields(body, trackUri) {
 // panel's own content with no compositor blur of their own. Glass themes set
 // the popup colour to a low alpha meant for separate blurred windows, which
 // leaves these unreadable. Keep the hue, floor the alpha.
+// share of the way from one colour to the other, fully opaque.
+function mixColors(first, second, share) {
+  var t = Math.max(0, Math.min(1, Number(share) || 0))
+  return Qt.rgba(first.r + (second.r - first.r) * t,
+    first.g + (second.g - first.g) * t,
+    first.b + (second.b - first.b) * t, 1)
+}
+
 function opaqueSurface(color, minimumAlpha) {
   var floor = Math.max(0, Math.min(1, Number(minimumAlpha) || 0))
   if (!color || color.a === undefined) return color
@@ -1434,13 +1399,36 @@ function opaqueSurface(color, minimumAlpha) {
 // Width of the bar slot for a label that measures `fitted` px. A cap trims
 // long titles; a fixed slot also pads short ones so the widget, and everything
 // laid out after it, keeps its place when the song changes.
-function barSlotWidth(fixed, cap, fitted, minimum) {
+// room is what the bar has left for the slot before it reaches the next
+// section. Unmeasured, it is no limit.
+function barSlotWidth(fixed, cap, fitted, minimum, room) {
   var capped = Number(cap) || 0
   var natural = Math.max(0, Number(fitted) || 0)
   var width = capped > 0
     ? (fixed === true ? capped : Math.min(capped, natural))
     : natural
+  var limit = Number(room)
+  if (isFinite(limit)) width = Math.min(width, Math.max(0, limit))
   return Math.max(Number(minimum) || 0, width)
+}
+
+// A label squeezed to a few letters says less than the icon alone.
+function barLabelFits(room, chrome, minimumText) {
+  var limit = Number(room)
+  if (!isFinite(limit)) return true
+  return limit >= (Number(chrome) || 0) + (Number(minimumText) || 0)
+}
+
+function barLayoutHasWidget(layout, id) {
+  var wanted = String(id || "")
+  if (!wanted || !layout || typeof layout !== "object") return false
+  for (var section in layout) {
+    var entries = layout[section]
+    if (!Array.isArray(entries)) continue
+    for (var i = 0; i < entries.length; i++)
+      if (entries[i] && entries[i].id === wanted) return true
+  }
+  return false
 }
 
 // The desktop app keeps the last play loaded in its footer, so Play always has
@@ -1947,43 +1935,6 @@ function moveCursorAction(actions, current, delta) {
   return list[(index + step + list.length) % list.length]
 }
 
-function cursorNavHint(query) {
-  var spec = query && typeof query === "object" ? query : {}
-  var region = String(spec.region || "")
-  var action = String(spec.action || "")
-  if (!region || !action) return ""
-  if (region === String(spec.tabRegion || "")
-      && action === String(spec.tabAction || ""))
-    return "Tab"
-  if (region === String(spec.backtabRegion || "")
-      && action === String(spec.backtabAction || ""))
-    return "⇧Tab"
-  if (spec.cursorActive === false) return ""
-  if (spec.modifiersHeld === true) return ""
-  var currentRegion = String(spec.currentRegion || "")
-  var current = String(spec.currentAction || "")
-  var listAction = String(spec.listAction || "")
-  var listIndex = Math.floor(Number(spec.listIndex))
-  var listCount = Math.max(0, Math.floor(Number(spec.listCount) || 0))
-  var atList = listAction !== "" && current === listAction
-  if (region === currentRegion && action === current) {
-    if (atList) return ""
-    return "↵"
-  }
-  if (region === currentRegion) {
-    var neighbors = cursorActionList(spec.regionActions)
-    if (action === moveCursorAction(neighbors, current, -1)) {
-      if (atList && listIndex > 0) return ""
-      return "↑"
-    }
-    if (action === moveCursorAction(neighbors, current, 1)) {
-      if (atList && listIndex >= 0 && listIndex < listCount - 1) return ""
-      return "↓"
-    }
-  }
-  return ""
-}
-
 function isCursorListAction(action) {
   var value = String(action || "")
   return value === "list" || value.indexOf("list-") === 0
@@ -2100,30 +2051,6 @@ function tabCursorDestination(query) {
       pageLanding: spec.pageLanding
     })
   }
-}
-
-function cursorListRowHint(query) {
-  var spec = query && typeof query === "object" ? query : {}
-  var row = Math.floor(Number(spec.rowIndex))
-  var count = Math.max(0, Math.floor(Number(spec.count) || 0))
-  var current = Math.floor(Number(spec.currentIndex))
-  if (count <= 0 || row < 0 || row >= count) return ""
-  if (!(current >= 0 && current < count)) current = 0
-  var tabRow = listHintRowIndex(count, spec.tabRowIndex)
-  if (spec.atList !== true) {
-    if (spec.tabIsList === true && row === tabRow) return "Tab"
-    if (spec.backtabIsList === true && row === tabRow) return "⇧Tab"
-  }
-  if (spec.modifiersHeld === true) return ""
-  if (spec.atList === true) {
-    if (row === current) return "↵"
-    if (row === current - 1) return "↑"
-    if (row === current + 1) return "↓"
-    return ""
-  }
-  if (spec.previousIsCurrent === true && row === 0) return "↓"
-  if (spec.nextIsCurrent === true && row === count - 1) return "↑"
-  return ""
 }
 
 function listIndexAfterMove(count, current, delta) {
@@ -2244,13 +2171,6 @@ function artistPlaylistSearchText(artistName, term) {
   return query && artist ? query + " " + artist : (query || artist)
 }
 
-function mediaRowShouldCompact(titleWidth, availableWidth, actionCount) {
-  var title = Math.max(0, Number(titleWidth) || 0)
-  var available = Math.max(0, Number(availableWidth) || 0)
-  var actions = Math.max(0, Math.floor(Number(actionCount) || 0))
-  return actions > 0 && title > available
-}
-
 // Artwork comes from Spotify's CDN on every launch. A stable name per URL lets
 // it be kept on disk instead, which is what makes a second launch quick.
 function artworkCacheName(url) {
@@ -2297,16 +2217,6 @@ function artistAlbumsRequest(artist) {
   }
 }
 
-function normalizeArtistTopTracks(payload, imageWidth) {
-  var rows = payload && Array.isArray(payload.tracks) ? payload.tracks : []
-  var out = []
-  for (var i = 0; i < rows.length; i++) {
-    var track = normalizeTrack(rows[i], imageWidth || 96)
-    if (track) out.push(track)
-  }
-  return out
-}
-
 // The first reply carries the total, so every remaining page can be asked for
 // at once instead of one after another.
 function pageOffsets(total, limit, loaded) {
@@ -2323,52 +2233,6 @@ function evenColumnWidth(total, spacing, count) {
   if (columns < 1) return Math.max(0, Number(total) || 0)
   var gaps = Math.max(0, Number(spacing) || 0) * (columns - 1)
   return Math.max(80, (Math.max(0, Number(total) || 0) - gaps) / columns)
-}
-
-function responsiveResultColumns(width, twoColumnWidth) {
-  var available = Math.max(0, Number(width) || 0)
-  var breakpoint = Math.max(1, Number(twoColumnWidth) || 1)
-  return available >= breakpoint ? 2 : 1
-}
-
-// Flatten grouped search results into rows for one virtualized ListView. Each
-// media row contains at most `columnCount` items, so the view creates only the
-// rows around its viewport instead of every result in several nested grids.
-function sectionedMediaRows(sections, columnCount) {
-  var groups = Array.isArray(sections) ? sections : []
-  var columns = Math.max(1, Math.min(4, Math.floor(Number(columnCount) || 1)))
-  var rows = []
-  for (var sectionIndex = 0; sectionIndex < groups.length; sectionIndex++) {
-    var section = groups[sectionIndex] || {}
-    var items = arrayValues(section.items)
-    var loading = section.loading === true
-    var hasMore = section.hasMore === true
-    if (!items.length && !loading && !hasMore) continue
-
-    var id = String(section.id || sectionIndex)
-    rows.push({
-      kind: "heading",
-      sectionId: id,
-      heading: String(section.heading || "RESULTS"),
-      count: items.length,
-      loading: loading
-    })
-    for (var start = 0; start < items.length; start += columns) {
-      rows.push({
-        kind: "items",
-        sectionId: id,
-        startIndex: start,
-        items: items.slice(start, start + columns)
-      })
-    }
-    if (loading || hasMore) rows.push({
-      kind: "more",
-      sectionId: id,
-      loading: loading,
-      hasMore: hasMore
-    })
-  }
-  return rows
 }
 
 function tracksForArtist(items, artist) {
@@ -2425,56 +2289,6 @@ function findThisIsPlaylist(items, artistName) {
   return best
 }
 
-function trackRadioPlaylists(items, trackName) {
-  var expected = comparablePlaylistTitle(String(trackName || "") + " Radio")
-  if (!expected || !String(trackName || "").trim()) return []
-  var rows = Array.isArray(items) ? items : []
-  var result = []
-  var seen = ({})
-  for (var i = 0; i < rows.length; i++) {
-    var item = rows[i]
-    if (!item || item.type !== "playlist" || !item.id || !item.uri
-        || comparablePlaylistTitle(item.name) !== expected) continue
-    var ownerId = String(item.ownerId || "").toLowerCase()
-    var ownerName = String(item.ownerName || "").toLowerCase()
-    var key = String(item.uri || item.id)
-    if ((ownerId !== "spotify" && ownerName !== "spotify") || seen[key]) continue
-    seen[key] = true
-    result.push(item)
-  }
-  return result
-}
-
-function radioSeedMatches(candidate, seed) {
-  var item = candidate || {}
-  var target = seed || {}
-  var itemId = String(item.id || "")
-  var targetId = String(target.id || "")
-  var itemUri = String(item.uri || "")
-  var targetUri = String(target.uri || "")
-  if ((itemId && targetId && itemId === targetId)
-      || (itemUri && targetUri && itemUri === targetUri)) return true
-  if (comparablePlaylistTitle(item.name) !== comparablePlaylistTitle(target.name))
-    return false
-
-  var itemArtists = arrayValues(item.artists)
-  var targetArtists = arrayValues(target.artists)
-  for (var i = 0; i < itemArtists.length; i++) {
-    var itemArtist = itemArtists[i] || {}
-    var itemArtistId = String(itemArtist.id || "")
-    var itemArtistName = comparablePlaylistTitle(itemArtist.name)
-    for (var j = 0; j < targetArtists.length; j++) {
-      var targetArtist = targetArtists[j] || {}
-      var targetArtistId = String(targetArtist.id || "")
-      var targetArtistName = comparablePlaylistTitle(targetArtist.name)
-      if ((itemArtistId && targetArtistId && itemArtistId === targetArtistId)
-          || (itemArtistName && targetArtistName && itemArtistName === targetArtistName))
-        return true
-    }
-  }
-  return false
-}
-
 function discoveryPlaylistRank(item) {
   if (!item || item.type !== "playlist" || !item.id) return -1
   var ownerId = String(item.ownerId || "").toLowerCase()
@@ -2529,12 +2343,18 @@ function albumKind(item) {
   return type === "album" ? "Album" : "Release"
 }
 
+// A local file has a URI Spotify shows but will not play or add over the Web API.
+function isRemoteUri(uri) {
+  var value = String(uri || "")
+  return value !== "" && value.indexOf("spotify:local:") !== 0
+}
+
 function playlistItemUris(items) {
   var rows = Array.isArray(items) ? items : []
   var uris = []
   for (var i = 0; i < rows.length; i++) {
     var item = rows[i] || {}
-    if (item.uri && ["track", "episode"].indexOf(String(item.type || "")) >= 0)
+    if (isRemoteUri(item.uri) && ["track", "episode"].indexOf(String(item.type || "")) >= 0)
       uris.push(String(item.uri))
   }
   return uris
@@ -2675,6 +2495,8 @@ function normalizeTrack(value, imageWidth, parentContext) {
   var album = item.album || {}
   var type = String(item.type || "track")
   if (["track", "episode", "chapter"].indexOf(type) === -1) return null
+  // A removed song comes back as a wrapper around nothing; it is not a row.
+  if (!item.uri && !item.id && !item.name) return null
   var subtitle = type === "episode"
     ? String((item.show && item.show.name) || item.description || "Podcast")
     : (type === "chapter"
@@ -2706,20 +2528,24 @@ function normalizeTrack(value, imageWidth, parentContext) {
   if ((type === "episode" || type === "chapter") && parentItem)
     subtitle = String(parentItem.name || subtitle)
   var resume = item.resume_point || {}
-  return {
+  // Rows are kept by the thousand, in memory and on disk, and most of these
+  // fields are empty on any given row. Every reader treats missing as empty.
+  var row = {
     kind: "item",
     type: type,
     id: String(item.id || ""),
     uri: String(item.uri || ""),
     name: String(item.name || "Untitled"),
     subtitle: subtitle,
-    album: String(album.name || (albumItem && albumItem.name) || ""),
     artists: normalizedArtists(item.artists, imageWidth || 96),
-    albumItem: albumItem,
-    parentContext: parentItem,
+    durationMs: Number(item.duration_ms) || 0
+  }
+  return withoutEmpty(row, {
+    album: String(album.name || (albumItem && albumItem.name) || ""),
     imageUrl: imageFor(images, imageWidth || 96)
       || String((parentContext && parentContext.imageUrl) || ""),
-    durationMs: Number(item.duration_ms) || 0,
+    albumItem: albumItem,
+    parentContext: parentItem,
     trackNumber: Number(item.track_number || item.chapter_number) || 0,
     discNumber: Number(item.disc_number) || 0,
     releaseDate: String(item.release_date || album.release_date || ""),
@@ -2730,7 +2556,40 @@ function normalizeTrack(value, imageWidth, parentContext) {
     explicit: item.explicit === true,
     externalUrl: item.external_urls && item.external_urls.spotify
       ? String(item.external_urls.spotify) : ""
+  })
+}
+
+function withoutEmpty(row, optional) {
+  for (var key in optional) {
+    var value = optional[key]
+    if (value === "" || value === 0 || value === false || value === null
+        || value === undefined || (Array.isArray(value) && value.length === 0)) continue
+    row[key] = value
   }
+  return row
+}
+
+// A release row needs only what a row draws and what opening it reads.
+function compactRelease(item) {
+  if (!item || typeof item !== "object") return item
+  return withoutEmpty({
+    kind: item.kind,
+    type: item.type,
+    id: item.id,
+    uri: item.uri,
+    name: item.name,
+    subtitle: item.subtitle
+  }, {
+    imageUrl: item.imageUrl,
+    artists: arrayValues(item.artists).map(function(artist) {
+      return { kind: "context", type: "artist", id: artist.id, uri: artist.uri,
+        name: artist.name, subtitle: "Artist" }
+    }),
+    total: item.total,
+    releaseType: item.releaseType,
+    releaseDate: item.releaseDate,
+    externalUrl: item.externalUrl
+  })
 }
 
 function normalizeContext(value, imageWidth) {
@@ -2761,16 +2620,17 @@ function normalizeContext(value, imageWidth) {
   var total = Number(item.total_tracks || item.total_episodes || item.total_chapters) || 0
   if (type === "playlist") total = Number((item.items && item.items.total)
     || (item.tracks && item.tracks.total)) || 0
-  return {
+  return withoutEmpty({
     kind: "context",
     type: type,
     id: String(item.id || ""),
     uri: String(item.uri || ""),
     name: String(item.name || "Untitled"),
-    subtitle: subtitle,
+    subtitle: subtitle
+  }, {
+    imageUrl: imageFor(item.images, imageWidth || 128),
     description: String(item.description || ""),
     artists: normalizedArtists(item.artists, imageWidth || 128),
-    imageUrl: imageFor(item.images, imageWidth || 128),
     total: total,
     releaseType: type === "album" ? String(item.album_type || item.album_group || "") : "",
     releaseDate: String(item.release_date || ""),
@@ -2785,7 +2645,7 @@ function normalizeContext(value, imageWidth) {
     addedAt: String(source.added_at || ""),
     externalUrl: item.external_urls && item.external_urls.spotify
       ? String(item.external_urls.spotify) : ""
-  }
+  })
 }
 
 function normalizePlaylist(value, imageWidth) {
@@ -2908,6 +2768,16 @@ function normalizeCursorPage(container, mapper) {
   }
 }
 
+// What a row is ordered by, worked out once per row rather than per comparison.
+function sortValueFor(item, key) {
+  if (key === "default") return 0
+  if (key === "duration") return Number(item.durationMs) || 0
+  if (key === "date" || key === "date-asc")
+    return String(item.addedAt || item.playedAt || item.releaseDate || "")
+  var text = key === "artist" ? item.subtitle : (key === "album" ? item.album : item.name)
+  return String(text || "").toLowerCase()
+}
+
 function filteredSorted(items, filterText, sortKey, descending) {
   var source = Array.isArray(items) ? items : []
   var term = String(filterText || "").trim().toLowerCase()
@@ -2932,7 +2802,7 @@ function filteredSorted(items, filterText, sortKey, descending) {
         item.releaseDate, item.addedAt].join(" ").toLowerCase()
       if (haystack.indexOf(term) < 0) continue
     }
-    rows.push({ item: item, index: i })
+    rows.push({ item: item, index: i, sortBy: sortValueFor(item, key) })
   }
   if (key !== "default") {
     // Dates read newest first by default; every other column reads A to Z.
@@ -2941,22 +2811,12 @@ function filteredSorted(items, filterText, sortKey, descending) {
     if (key === "date-asc") flip = !flip
     var direction = dateKey ? (flip ? 1 : -1) : (flip ? -1 : 1)
     rows.sort(function(a, b) {
-      var left
-      var right
-      if (key === "duration") {
-        left = Number(a.item.durationMs) || 0
-        right = Number(b.item.durationMs) || 0
-      } else if (dateKey) {
-        left = String(a.item.addedAt || a.item.playedAt || a.item.releaseDate || "")
-        right = String(b.item.addedAt || b.item.playedAt || b.item.releaseDate || "")
-        // Unknown dates stay at the end whichever way the column reads.
+      var left = a.sortBy
+      var right = b.sortBy
+      // Unknown dates stay at the end whichever way the column reads.
+      if (dateKey) {
         if (!left && right) return 1
         if (left && !right) return -1
-      } else {
-        left = String(key === "artist" ? a.item.subtitle
-          : (key === "album" ? a.item.album : a.item.name) || "").toLowerCase()
-        right = String(key === "artist" ? b.item.subtitle
-          : (key === "album" ? b.item.album : b.item.name) || "").toLowerCase()
       }
       if (left < right) return -direction
       if (left > right) return direction
@@ -2977,7 +2837,7 @@ function parseStringList(value, maximum) {
   var seen = ({})
   for (var i = 0; i < source.length && result.length < limit; i++) {
     var entry = String(source[i] || "").trim()
-    if (!entry || seen[entry]) continue
+    if (!entry || Object.prototype.hasOwnProperty.call(seen, entry)) continue
     seen[entry] = true
     result.push(entry)
   }
@@ -3071,7 +2931,8 @@ function requestTimingLine(method, path, timings, context) {
   var queued = Math.max(0, Number(t.queuedMs) || 0)
   var auth = Math.max(0, Number(t.authMs) || 0)
   var wire = Math.max(0, Number(t.wireMs) || 0)
-  return String(method || "GET") + " " + redact(String(path || ""))
+  // Paging cursors carry whatever was searched for, which stays out of the journal.
+  return String(method || "GET") + " " + redact(String(path || "").split("?")[0])
     + " " + (queued + auth + wire) + " ms"
     + " (queue " + queued + ", auth " + auth + ", wire " + wire + ")"
     + " in-flight " + (Number(c.inFlight) || 0)
@@ -3105,8 +2966,9 @@ function filterLibraryType(items, filter) {
 // Big numbers read better shortened; small ones read better in full.
 function compactCount(value) {
   var n = Math.max(0, Math.floor(Number(value) || 0))
-  if (n >= 1000000000) return (n / 1000000000).toFixed(1) + "B"
-  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M"
+  // The cut-offs sit where rounding to one decimal would reach the next unit.
+  if (n >= 999950000) return (n / 1000000000).toFixed(1) + "B"
+  if (n >= 999950) return (n / 1000000).toFixed(1) + "M"
   if (n >= 10000) return (n / 1000).toFixed(1) + "K"
   return groupedDigits(String(n))
 }
@@ -3293,7 +3155,7 @@ function playbackBody(item, sourceItems, contextUri) {
     var candidate = values[(start + step) % values.length]
     if (!candidate || candidate.kind !== "item") continue
     var uri = String(candidate.uri || "")
-    if (!uri) continue
+    if (!isRemoteUri(uri)) continue
     uris.push(uri)
   }
   var body = { uris: uris.length ? uris : [itemUri] }
@@ -3342,4 +3204,58 @@ function mergeUnique(existing, incoming) {
     result.push(values[i])
   }
   return result
+}
+
+function contrastChannel(value) {
+  return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)
+}
+
+function colorLuminance(color) {
+  return 0.2126 * contrastChannel(color.r) + 0.7152 * contrastChannel(color.g)
+    + 0.0722 * contrastChannel(color.b)
+}
+
+function contrastRatio(first, second) {
+  var a = colorLuminance(first), b = colorLuminance(second)
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05)
+}
+
+// Quieter text for subtitles and durations. The palette's own muted colour is
+// decorative and falls under 3:1 on most themes, so this blends the foreground
+// toward the background only as far as it stays comfortably readable, with room
+// for the hover fill a row can sit on.
+function secondaryTextColor(foreground, background) {
+  if (!foreground || !background || foreground.r === undefined
+      || background.r === undefined) return foreground
+  var share = 0.7
+  while (share < 1) {
+    var blended = Qt.rgba(
+      foreground.r * share + background.r * (1 - share),
+      foreground.g * share + background.g * (1 - share),
+      foreground.b * share + background.b * (1 - share), 1)
+    if (contrastRatio(blended, background) >= SECONDARY_TEXT_CONTRAST) return blended
+    share += 0.02
+  }
+  return foreground
+}
+
+// Where to print a month name above a heatmap: the first week starting in it.
+function heatmapMonthLabels(grid) {
+  var labels = []
+  var names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+    "Nov", "Dec"]
+  var weeks = Array.isArray(grid) ? grid : []
+  var previous = ""
+  for (var w = 0; w < weeks.length; w++) {
+    var key = weeks[w] && weeks[w][0] ? String(weeks[w][0].key || "") : ""
+    var month = key.slice(5, 7)
+    if (month && month !== previous) {
+      // A name squeezed against the next one reads as noise, so a partial first
+      // month goes without.
+      if (w > 0 || (weeks.length > 2 && String(weeks[2][0].key).slice(5, 7) === month))
+        labels.push({ week: w, text: names[Number(month) - 1] || "" })
+      previous = month
+    }
+  }
+  return labels
 }

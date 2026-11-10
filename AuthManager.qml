@@ -27,14 +27,9 @@ Item {
     ? (customClientId ? customClientId.toLowerCase() : clientId) : ""
   property bool initialized: false
   property bool switchingIdentity: false
-  // An identity whose client id never changes has nothing to trigger a session
-  // restore, because that only happens when the id changes. The primary one
-  // gets that for free when settings arrive and a personal id appears.
-  property bool restoreOnStart: false
   Component.onCompleted: {
     initialized = true
     if (!validClientId) changeIdentity()
-    else if (restoreOnStart) restoreSession()
   }
   onResolvedClientIdChanged: if (initialized) changeIdentity()
   property int oauthPort: 8989
@@ -66,6 +61,9 @@ Item {
   property var xhrFactory: function() { return new XMLHttpRequest() }
   property int tokenRequestSerial: 0
   property bool logoutPendingClear: false
+  // During an outage every queued request would otherwise start its own refresh.
+  property double refreshRetryAt: 0
+  readonly property int refreshRetryDelayMs: 5000
 
   signal loginSucceeded()
   signal loggedOut()
@@ -96,6 +94,8 @@ Item {
       stop()
       root.switchingIdentity = false
       if (root.validClientId) root.restoreSession()
+      // With no client ID there is no session to look for, and nothing to wait on.
+      else root.sessionChecked = true
     }
   }
 
@@ -135,6 +135,10 @@ Item {
     }
     if (tokenIsFresh()) {
       callback(accessToken, "")
+      return
+    }
+    if (!refreshBusy && !secretLookup.running && Date.now() < refreshRetryAt) {
+      callback("", lastError || "Spotify could not be reached. Try again.")
       return
     }
 
@@ -178,7 +182,8 @@ Item {
     if (!token) {
       resetMemorySession()
       sessionChecked = true
-      if (purpose === "request") finishWaiters("", "Log in to Spotify first")
+      // Requests that joined this lookup are waiting on it whatever started it.
+      finishWaiters("", "Log in to Spotify first")
       return
     }
     refreshWithToken(token, purpose)
@@ -215,13 +220,20 @@ Item {
       root.refreshBusy = false
       root.sessionChecked = true
       if (!result.ok) {
-        root.resetMemorySession()
+        // The stored session outlives a failed refresh unless Spotify says it
+        // is over; signing the UI out would also stop the polling that recovers.
+        if (result.transient) {
+          root.invalidateAccessToken()
+          root.loggedIn = true
+          root.refreshRetryAt = Date.now() + root.refreshRetryDelayMs
+        } else root.resetMemorySession()
         root.lastError = root.safeError(result.error)
         if (result.invalidGrant) root.clearStoredToken()
-        if (purpose === "request") root.finishWaiters("", root.lastError)
-        else root.sessionUnavailable(root.lastError)
+        root.finishWaiters("", root.lastError)
+        if (purpose !== "request") root.sessionUnavailable(root.lastError)
         return
       }
+      root.refreshRetryAt = 0
       root.acceptToken(result)
       root.finishWaiters(root.accessToken, "")
     })
@@ -325,9 +337,11 @@ Item {
     if (!callback.ok || callback.state !== oauthState) {
       callbackListener.write(Qt.btoa(OAuth.failureResponse()) + "\n")
       callbackStopTimer.restart()
-      failLogin(callback.ok
-        ? "Spotify sign-in could not be verified. Please try again"
-        : callback.error, true)
+      // Anything local can send this request, so its words only count once its
+      // state proves it came back from Spotify.
+      failLogin(callback.state === oauthState && callback.error
+        ? callback.error
+        : "Spotify sign-in could not be verified. Please try again", true)
       return
     }
     callbackListener.write(Qt.btoa(OAuth.successResponse()) + "\n")
@@ -337,6 +351,8 @@ Item {
 
   function exchangeAuthorizationCode(code) {
     exchangingCode = true
+    // A refresh still in flight loses its callback to the new request's serial.
+    refreshBusy = false
     var verifier = pkceVerifier
     var requestBody = Api.formBody({
       client_id: resolvedClientId,
@@ -418,6 +434,7 @@ Item {
     interval: 15000
     onTriggered: {
       root.cancelLogin()
+      root.sessionChecked = true
       root.lastError = "Spotify authorization took too long. Try again."
       root.finishWaiters("", root.lastError)
       root.sessionUnavailable(root.lastError)
@@ -452,6 +469,11 @@ Item {
       if (root.loginBusy && root.pkceVerifier === "" && exitCode !== 0)
         root.failLogin("Could not start a secure Spotify sign-in. Please try again")
     }
+    // A command that cannot start never reports an exit.
+    onRunningChanged: if (!running) Qt.callLater(function() {
+      if (root && root.loginBusy && root.pkceVerifier === "" && !pkceGenerator.running)
+        root.failLogin("Could not start a secure Spotify sign-in. Please try again")
+    })
   }
 
   Process {
@@ -462,13 +484,21 @@ Item {
       onRead: function(line) { root.handleCallbackLine(line) }
     }
     stderr: StdioCollector { waitForEnd: true }
-    onStarted: authOpenDelay.restart()
+    onStarted: {
+      write(root.oauthState + "\n")
+      authOpenDelay.restart()
+    }
     onExited: function(exitCode) {
       if (root.loginBusy && !root.callbackHandled && !root.exchangingCode)
         root.failLogin(exitCode === 0
           ? "The Spotify sign-in window closed before it finished"
           : "Could not complete Spotify sign-in. Close any other sign-in windows and try again")
     }
+    onRunningChanged: if (!running) Qt.callLater(function() {
+      if (root && root.loginBusy && root.pkceVerifier !== "" && !root.callbackHandled
+          && !root.exchangingCode && !callbackListener.running)
+        root.failLogin("Could not complete Spotify sign-in. Close any other sign-in windows and try again")
+    })
   }
 
   Process {

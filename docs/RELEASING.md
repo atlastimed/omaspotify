@@ -7,7 +7,8 @@ otherwise unproven binary as provenance.
 ## Prepare the source snapshot
 
 1. Update `manifest.json`, `backend/Cargo.toml`, `backend/Cargo.lock`, and the
-   changelog together.
+   changelog together. The test suite and the release workflow both refuse a
+   mismatch between the two version numbers.
 2. Run `./scripts/test.sh` and a locked release build.
 3. Commit and push the reviewed source. The release commit must be clean.
 4. Create `v<manifest version>` at that exact commit and push the tag. Never
@@ -23,14 +24,15 @@ publishing it with `SHA256SUMS` in the matching GitHub release.
 For each downloaded executable, verify the checksum and then independently bind
 GitHub's attestation to all of the following:
 
-- repository `jeremylanger/omaspotify`;
+- repository `atlastimed/omaspotify`;
 - `.github/workflows/release-backend.yml` at the exact version tag;
 - the release commit digest; and
 - a GitHub-hosted runner.
 
 The installer enforces that policy with `gh attestation verify`. If any check is
 unavailable or fails, it never installs the download; it uses a locked local
-source build or the packaged spotifyd fallback.
+source build instead. Omarchy's plugin updater fetches no tags, so the installer
+fetches the one tag it needs, then binds it to the checkout as above.
 
 After both release assets and their attestations are available, submit the exact
 release commit in a new marketplace Verify ticket. Include the workflow run and

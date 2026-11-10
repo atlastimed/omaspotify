@@ -1,10 +1,14 @@
 #!/usr/bin/python3
-"""Discover and activate genuine Spotify Connect receivers on the local LAN.
+"""Discover and activate Spotify Connect receivers on the local LAN.
 
-Activation uses spotifyd's owner-only reusable credential, a short-lived
-streaming access token, or a receiver-scoped authorization code according to
-the receiver's advertised token type. Credentials and derived keys never leave
-this process; stdout contains device metadata or a status result only.
+Activation uses a short-lived streaming access token, a receiver-scoped
+authorization code, or the owner-only reusable credential, according to the
+receiver's advertised token type. Credentials and derived keys never leave this
+process except encrypted for the chosen receiver; stdout contains device
+metadata or a status result only.
+
+ZeroConf has no way to authenticate a receiver. Anything on the LAN can claim to
+be a speaker, so a receiver the user picks is trusted with what it asks for.
 """
 
 from __future__ import annotations
@@ -18,9 +22,11 @@ import ipaddress
 import json
 import os
 import re
+import signal
 import stat
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -29,9 +35,16 @@ import xml.etree.ElementTree as ElementTree
 from pathlib import Path
 from typing import Any
 
-
 MAX_RESPONSE_BYTES = 65_536
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,160}$")
+RECEIVER_PATH_RE = re.compile(r"^/[A-Za-z0-9/_.~-]*$")
+RECEIVER_QUERY_RE = re.compile(r"^[A-Za-z0-9_.~%+=&-]{1,256}$")
+# Cloud instance metadata lives here on every major provider.
+METADATA_ADDRESS = "169.254.169.254"
+# A receiver that drips bytes must not hold the whole helper open.
+COMMAND_DEADLINE_SECONDS = {"discover": 30, "activate": 90, "control": 20}
+PROBE_CONCURRENCY = 8
+PROBE_DEADLINE_SECONDS = 10.0
 DH_GENERATOR = 2
 DH_PRIME = int.from_bytes(bytes([
     0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xC9, 0x0F, 0xDA, 0xA2,
@@ -58,6 +71,10 @@ SONOS_PLAY_MODES = {
 
 class ConnectError(Exception):
     pass
+
+
+class DeadlineExceeded(BaseException):
+    """Not a ConnectError, which retry loops catch, because this must end the command."""
 
 
 def emit(payload: dict[str, Any]) -> None:
@@ -124,12 +141,22 @@ def read_cached_receiver(device_id: str) -> dict[str, Any] | None:
 
 
 def avahi_unescape(value: str) -> str:
-    return re.sub(r"\\([0-9]{3})", lambda match: chr(int(match.group(1))), value)
+    # Avahi escapes individual bytes, so multi-byte names only make sense decoded
+    # afterwards. Anything else after a backslash stands for itself.
+    def replace(match: re.Match[bytes]) -> bytes:
+        escape = match.group(1)
+        return bytes([int(escape) & 0xFF]) if escape.isdigit() else escape
+
+    raw = re.sub(rb"\\([0-9]{3}|.)", replace, value.encode("utf-8"), flags=re.DOTALL)
+    return raw.decode("utf-8", errors="replace")
 
 
 def safe_address(value: str) -> str:
     address = ipaddress.ip_address(value)
-    if address.is_unspecified or address.is_multicast or address.is_loopback:
+    # An IPv4 address dressed as IPv6 is judged as the address it really is.
+    address = getattr(address, "ipv4_mapped", None) or address
+    if address.is_unspecified or address.is_multicast or address.is_loopback \
+            or str(address) == METADATA_ADDRESS:
         raise ConnectError("unsafe receiver address")
     if not (address.is_private or address.is_link_local):
         raise ConnectError("receiver is not on the local network")
@@ -138,7 +165,7 @@ def safe_address(value: str) -> str:
 
 def endpoint_path(cpath: str) -> str:
     value = str(cpath or "/").strip()
-    if not value.startswith("/") or ".." in value or len(value) > 256:
+    if not RECEIVER_PATH_RE.fullmatch(value) or ".." in value or len(value) > 256:
         raise ConnectError("invalid receiver path")
     return value
 
@@ -151,7 +178,11 @@ def request_json(
     fields: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     address = safe_address(address)
-    path = endpoint_path(path)
+    # Callers add their own encoded query to a receiver path checked on its own.
+    base, mark, query = path.partition("?")
+    if mark and not RECEIVER_QUERY_RE.fullmatch(query):
+        raise ConnectError("invalid receiver request")
+    path = endpoint_path(base) + mark + query
     body: bytes | None = None
     headers = {"Connection": "close", "Accept": "application/json"}
     if fields is not None:
@@ -315,17 +346,15 @@ def browse_spotify_connect() -> str:
         raise ConnectError("Spotify Connect discovery is unavailable") from error
 
 
-def discover_receivers(include_volume: bool = False) -> list[dict[str, Any]]:
-    stdout = browse_spotify_connect()
-
-    discovered: dict[str, dict[str, Any]] = {}
+def browse_records(stdout: str) -> list[dict[str, Any]]:
+    """One record per address and port: Avahi repeats a service per interface."""
+    records: dict[tuple[str, int], dict[str, Any]] = {}
     for line in stdout.splitlines():
         if not line.startswith("=;"):
             continue
         parts = line.split(";", 9)
         if len(parts) != 10:
             continue
-        service_name = avahi_unescape(parts[3])
         try:
             address = safe_address(parts[7])
             # Avahi often labels an IPv4 A record as IPv6 when AAAA resolve
@@ -336,46 +365,92 @@ def discover_receivers(include_volume: bool = False) -> list[dict[str, Any]]:
             if port < 1 or port > 65535:
                 continue
             txt = parse_txt(parts[9])
-            cpath = endpoint_path(txt.get("cpath", "/"))
-            version = txt.get("version", "1.0")[:32]
-            query = urllib.parse.urlencode({"action": "getInfo", "version": version})
-            info = request_json(address, port, f"{cpath}?{query}")
-            if int(info.get("status", 0)) != 101:
-                continue
-            device_id = str(info.get("deviceID") or "").strip()
-            if not DEVICE_ID_RE.fullmatch(device_id):
-                continue
+            records.setdefault((address, port), {
+                "serviceName": avahi_unescape(parts[3]),
+                "address": address,
+                "port": port,
+                "cpath": endpoint_path(txt.get("cpath", "/")),
+                "version": txt.get("version", "1.0")[:32],
+            })
         except (ConnectError, TypeError, ValueError):
             continue
+    return list(records.values())
 
-        model = str(info.get("modelDisplayName") or "").strip()[:120]
-        brand = str(info.get("brandDisplayName") or "").strip()[:120]
-        device = {
-            "id": device_id,
-            "name": receiver_name(info, service_name),
-            "type": str(info.get("deviceType") or "Speaker").strip().title()[:80],
-            "brand": brand,
-            "model": model,
-            "description": " · ".join(value for value in (brand, model) if value),
-            "activeUser": bool(str(info.get("activeUser") or "").strip()),
-            "tokenType": str(info.get("tokenType") or "default").strip().lower()[:40],
-            "clientId": str(info.get("clientID") or "").strip()[:80],
-            "localDiscovery": True,
-            "activationRequired": True,
-            "address": address,
-            "port": port,
-            "cpath": cpath,
-            "serviceVersion": version,
-            "publicKey": str(info.get("publicKey") or ""),
-        }
-        if include_volume and brand.casefold() == "sonos":
-            try:
-                device["volumePercent"] = sonos_volume(device)
-            except ConnectError:
-                # Discovery and playback control still work when a receiver
-                # temporarily declines the supplemental volume query.
-                pass
-        discovered[device_id] = device
+
+def probe_receiver(record: dict[str, Any], include_volume: bool) -> dict[str, Any] | None:
+    address, port, cpath = record["address"], record["port"], record["cpath"]
+    version = record["version"]
+    try:
+        query = urllib.parse.urlencode({"action": "getInfo", "version": version})
+        info = request_json(address, port, f"{cpath}?{query}")
+        if int(info.get("status", 0)) != 101:
+            return None
+    except (ConnectError, TypeError, ValueError):
+        return None
+    device_id = str(info.get("deviceID") or "").strip()
+    if not DEVICE_ID_RE.fullmatch(device_id):
+        return None
+
+    model = str(info.get("modelDisplayName") or "").strip()[:120]
+    brand = str(info.get("brandDisplayName") or "").strip()[:120]
+    device = {
+        "id": device_id,
+        "name": receiver_name(info, record["serviceName"]),
+        "type": str(info.get("deviceType") or "Speaker").strip().title()[:80],
+        "brand": brand,
+        "model": model,
+        "description": " · ".join(value for value in (brand, model) if value),
+        "activeUser": bool(str(info.get("activeUser") or "").strip()),
+        "tokenType": str(info.get("tokenType") or "default").strip().lower()[:40],
+        "clientId": str(info.get("clientID") or "").strip()[:80],
+        "localDiscovery": True,
+        "activationRequired": True,
+        "address": address,
+        "port": port,
+        "cpath": cpath,
+        "serviceVersion": version,
+        "publicKey": str(info.get("publicKey") or ""),
+    }
+    if include_volume and brand.casefold() == "sonos":
+        try:
+            device["volumePercent"] = sonos_volume(device)
+        except ConnectError:
+            # Discovery and playback control still work when a receiver
+            # temporarily declines the supplemental volume query.
+            pass
+    return device
+
+
+def discover_receivers(include_volume: bool = False) -> list[dict[str, Any]]:
+    records = browse_records(browse_spotify_connect())
+    pending = iter(records)
+    lock = threading.Lock()
+    found: list[dict[str, Any]] = []
+
+    def worker() -> None:
+        while True:
+            with lock:
+                record = next(pending, None)
+            if record is None:
+                return
+            device = probe_receiver(record, include_volume)
+            if device is not None:
+                with lock:
+                    found.append(device)
+
+    # Daemon threads, so one silent receiver can never keep the process alive.
+    threads = [
+        threading.Thread(target=worker, daemon=True)
+        for _ in range(min(PROBE_CONCURRENCY, len(records)))
+    ]
+    deadline = time.monotonic() + PROBE_DEADLINE_SECONDS
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(max(0.0, deadline - time.monotonic()))
+
+    with lock:
+        discovered = {device["id"]: device for device in found}
     return sorted(discovered.values(), key=lambda item: item["name"].casefold())
 
 
@@ -590,6 +665,16 @@ def build_login_blob(
     return signed_blob, client_key
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    """A bearer token is for Spotify; a redirect must not carry it anywhere else."""
+
+    def redirect_request(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+NO_REDIRECT_OPENER = urllib.request.build_opener(NoRedirect)
+
+
 def validated_access_token(access_token: str) -> str:
     token = str(access_token or "").strip()
     if len(token) < 20 or len(token) > 4096 or any(char.isspace() for char in token):
@@ -617,7 +702,7 @@ def exchange_access_token(access_token: str, receiver: dict[str, Any]) -> str:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=10) as response:
+        with NO_REDIRECT_OPENER.open(request, timeout=10) as response:
             raw = response.read(MAX_RESPONSE_BYTES + 1)
             status_code = response.status
     except urllib.error.HTTPError as error:
@@ -689,13 +774,22 @@ def exchange_authorization_code(access_token: str, receiver: dict[str, Any]) -> 
     return result
 
 
-def activate_receiver(device_id: str, access_token: str = "") -> dict[str, Any]:
+def activate_receiver(device_id: str, access_token: str = "", user_id: str = "") -> dict[str, Any]:
     if not DEVICE_ID_RE.fullmatch(device_id):
         raise ConnectError("invalid receiver id")
     receiver = find_receiver(device_id)
     if receiver is None:
         raise ConnectError("receiver is no longer discoverable")
-    username, auth_type, auth_data = load_credentials()
+    # Only the reusable-credential path needs a stored login, and installs that
+    # only ever used Soloist do not have one. A token speaks for the signed-in
+    # account, which may not be the one the stored login belongs to.
+    token_user = str(user_id or "").strip()
+    stored: tuple[str, int, bytes] | None = None
+    try:
+        stored = load_credentials()
+    except ConnectError:
+        if not token_user:
+            raise
 
     info_query = urllib.parse.urlencode({
         "action": "getInfo", "version": receiver["serviceVersion"]
@@ -733,11 +827,15 @@ def activate_receiver(device_id: str, access_token: str = "") -> dict[str, Any]:
                 blob = validated_access_token(access_token)
             client_key = ""
         else:
+            if stored is None:
+                raise ConnectError("local playback credentials are unavailable")
             public_key = str(info.get("publicKey") or "")
             blob, client_key = build_login_blob(
-                username, auth_type, auth_data,
+                stored[0], stored[1], stored[2],
                 str(info.get("deviceID") or device_id), public_key
             )
+        username = stored[0] if token_type == "default" and stored else (
+            token_user or (stored[0] if stored else ""))
         fields = {
             "action": "addUser",
             "version": str(receiver["serviceVersion"]),
@@ -848,8 +946,16 @@ def self_test() -> None:
         raise ConnectError("AES-CTR self-test failed")
 
 
+def on_deadline(_signum: int, _frame: object) -> None:
+    raise DeadlineExceeded
+
+
 def main() -> int:
     command = sys.argv[1] if len(sys.argv) == 2 else ""
+    deadline = COMMAND_DEADLINE_SECONDS.get(command)
+    if deadline:
+        signal.signal(signal.SIGALRM, on_deadline)
+        signal.alarm(deadline)
     try:
         if command == "discover":
             devices = discover_receivers(include_volume=True)
@@ -867,7 +973,8 @@ def main() -> int:
         if command == "activate":
             device_id = sys.stdin.readline(256).strip()
             access_token = sys.stdin.readline(4097).strip()
-            emit(activate_receiver(device_id, access_token))
+            user_id = sys.stdin.readline(257).strip()
+            emit(activate_receiver(device_id, access_token, user_id))
             return 0
         if command == "control":
             device_id = sys.stdin.readline(256).strip()
@@ -880,6 +987,9 @@ def main() -> int:
             emit({"status": "ok"})
             return 0
         return 2
+    except DeadlineExceeded:
+        sys.stderr.write("the speaker took too long to respond\n")
+        return 6
     except ConnectError as error:
         # Error messages are intentionally generic and cannot contain response
         # payloads, credentials, encrypted blobs, keys, or endpoint URLs.

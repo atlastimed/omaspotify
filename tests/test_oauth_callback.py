@@ -14,8 +14,10 @@ import io
 import socket
 import sys
 import threading
+import time
 import unittest
 from pathlib import Path
+from unittest import mock
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = SOURCE_ROOT / "scripts" / "oauth-callback.py"
@@ -25,6 +27,10 @@ if SPEC is None or SPEC.loader is None:
 helper = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = helper
 SPEC.loader.exec_module(helper)
+
+
+def stdin_for(response, state="xyz"):
+    return io.StringIO(state + "\n" + base64.b64encode(response).decode() + "\n")
 
 
 class RequestLineReading(unittest.TestCase):
@@ -118,7 +124,7 @@ class ServingEndToEnd(unittest.TestCase):
 
     def test_accepts_the_redirect_and_writes_back_what_it_is_given(self):
         response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
-        stdin = io.StringIO(base64.b64encode(response).decode() + "\n")
+        stdin = stdin_for(response)
         stdout = io.StringIO()
         port, thread, result = self.serve_on_free_port(stdin, stdout)
 
@@ -130,9 +136,72 @@ class ServingEndToEnd(unittest.TestCase):
         self.assertEqual(result, [0])
         self.assertEqual(stdout.getvalue(), "GET /callback?code=abc&state=xyz HTTP/1.1\n")
 
+    def test_a_browser_sized_request_gets_its_page_and_a_clean_close(self):
+        response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
+        stdout = io.StringIO()
+        port, thread, result = self.serve_on_free_port(stdin_for(response), stdout)
+
+        headers = b"".join(b"X-Header-%d: %s\r\n" % (n, b"v" * 80) for n in range(30))
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+            client.sendall(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\n" + headers + b"\r\n")
+            received = b""
+            # A reset here is what a browser shows as a failed page.
+            while chunk := client.recv(4096):
+                received += chunk
+        thread.join(5)
+        self.assertEqual(received, response)
+        self.assertEqual(result, [0])
+
+    def test_a_forged_redirect_does_not_end_the_sign_in(self):
+        response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
+        stdout = io.StringIO()
+        port, thread, result = self.serve_on_free_port(stdin_for(response), stdout)
+
+        for forged in (
+            b"GET /callback?code=evil&state=wrong HTTP/1.1\r\n\r\n",
+            b"GET /callback?error=x&error_description=%3Cimg%3E HTTP/1.1\r\n\r\n",
+            b"GET /callback HTTP/1.1\r\n\r\n",
+        ):
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as attacker:
+                attacker.sendall(forged)
+                self.assertIn(b"400", attacker.recv(128))
+        self.assertEqual(stdout.getvalue(), "", "nothing forged reaches the shell")
+
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+            client.sendall(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\n\r\n")
+            client.recv(len(response))
+        thread.join(5)
+        self.assertEqual(result, [0])
+        self.assertEqual(stdout.getvalue(), "GET /callback?code=abc&state=xyz HTTP/1.1\n")
+
+    def test_a_dripping_client_cannot_hold_the_real_redirect_back(self):
+        response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
+        stdout = io.StringIO()
+        with mock.patch.object(helper, "PER_CONNECTION_TIMEOUT", 0.3):
+            port, thread, result = self.serve_on_free_port(stdin_for(response), stdout)
+            dripper = socket.create_connection(("127.0.0.1", port), timeout=5)
+            self.addCleanup(dripper.close)
+            started = time.monotonic()
+            client = socket.create_connection(("127.0.0.1", port), timeout=5)
+            self.addCleanup(client.close)
+            client.sendall(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\n\r\n")
+            while time.monotonic() - started < 0.5:
+                try:
+                    dripper.sendall(b"G")
+                except OSError:
+                    break
+                time.sleep(0.05)
+            self.assertEqual(client.recv(len(response)), response)
+            thread.join(5)
+        self.assertEqual(result, [0])
+
+    def test_refuses_to_start_without_an_expected_state(self):
+        result = helper.serve(0, "/callback", 0.2, stdin=io.StringIO(""), stdout=io.StringIO())
+        self.assertEqual(result, 2)
+
     def test_a_flood_is_refused_and_the_real_redirect_still_lands(self):
         response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
-        stdin = io.StringIO(base64.b64encode(response).decode() + "\n")
+        stdin = stdin_for(response)
         stdout = io.StringIO()
         port, thread, result = self.serve_on_free_port(stdin, stdout)
 
@@ -141,7 +210,7 @@ class ServingEndToEnd(unittest.TestCase):
             self.assertIn(b"431", attacker.recv(128))
 
         with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
-            client.sendall(b"GET /callback?code=abc HTTP/1.1\r\n\r\n")
+            client.sendall(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\n\r\n")
             client.recv(len(response))
         thread.join(5)
         self.assertEqual(result, [0])
@@ -149,7 +218,7 @@ class ServingEndToEnd(unittest.TestCase):
 
     def test_an_unexpected_path_is_answered_and_ignored(self):
         response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nhi"
-        stdin = io.StringIO(base64.b64encode(response).decode() + "\n")
+        stdin = stdin_for(response)
         stdout = io.StringIO()
         port, thread, result = self.serve_on_free_port(stdin, stdout)
 
@@ -158,15 +227,15 @@ class ServingEndToEnd(unittest.TestCase):
             self.assertIn(b"404", stray.recv(128))
 
         with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
-            client.sendall(b"GET /callback?code=abc HTTP/1.1\r\n\r\n")
+            client.sendall(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\n\r\n")
             client.recv(len(response))
         thread.join(5)
         self.assertEqual(result, [0])
-        self.assertEqual(stdout.getvalue(), "GET /callback?code=abc HTTP/1.1\n")
+        self.assertEqual(stdout.getvalue(), "GET /callback?code=abc&state=xyz HTTP/1.1\n")
 
     def test_gives_up_when_the_deadline_passes(self):
         port, thread, result = self.serve_on_free_port(
-            io.StringIO(""), io.StringIO(), timeout=0.3
+            io.StringIO("xyz\n"), io.StringIO(), timeout=0.3
         )
         thread.join(5)
         self.assertEqual(result, [1], "a listener nobody used exits non-zero")

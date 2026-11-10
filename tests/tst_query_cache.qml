@@ -64,21 +64,10 @@ TestCase {
     compare(cache.freshness("a"), "missing")
   }
 
-  // Two things asking for the same page at once should make one request.
-  function test_onlyOneFetchPerPageAtATime() {
-    verify(cache.beginFetch("a"))
-    verify(!cache.beginFetch("a"), "the second caller is told one is running")
-    verify(cache.beginFetch("b"))
-    cache.endFetch("a")
-    verify(cache.beginFetch("a"))
-  }
-
-  function test_clearingForgetsEverythingIncludingWhatIsInFlight() {
+  function test_clearingForgetsEverything() {
     cache.write("a", { item: { id: "a" }, items: [1] })
-    verify(cache.beginFetch("a"))
     cache.clear()
     compare(cache.freshness("a"), "missing")
-    verify(cache.beginFetch("a"), "a cleared cache is not still waiting")
   }
 
   function test_theCacheSurvivesARestart() {

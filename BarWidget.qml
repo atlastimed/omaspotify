@@ -1,7 +1,7 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Effects
-import Quickshell
-import Quickshell.Io
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
@@ -16,7 +16,8 @@ BarWidget {
   readonly property var spotify: bar && bar.shell
     ? bar.shell.serviceFor("io.github.atlastimed.omaspotify") : null
   readonly property color foreground: bar ? bar.foreground : Commons.Color.foreground
-  readonly property color muted: Commons.Color.muted
+  readonly property color muted: Api.secondaryTextColor(Commons.Color.foreground,
+    Commons.Color.background)
   readonly property string surfaceKey: "spotify-popup-" + String(root)
   readonly property string lyricsRequestKey: surfaceKey + "-lyrics"
   readonly property string barText: spotify
@@ -27,8 +28,18 @@ BarWidget {
     String(root.setting("showMiniPlayer", "On")) !== "Off"
   readonly property bool vinylRecordEnabled:
     String(root.setting("showVinylRecord", "Off")) === "On"
+  // Tunemarchy is the bar player while it sits in this bar and is connected.
+  // Two Spotify entries side by side would only repeat each other.
+  readonly property bool companionInBar: !!spotify && spotify.companionAttached === true
+    && !!bar && Api.barLayoutHasWidget(bar.layoutConfig, "atlastimed.tunemarchy")
+  readonly property bool shown: root.setting("showBarWidget", true) !== false
+    && !companionInBar
+  // What the bar can spare before this entry would reach the next section.
+  readonly property real roomWidth: Style.bar.iconSlot + room.allowance
+  readonly property bool labelFits: Api.barLabelFits(roomWidth, button.labelChrome,
+    Style.space(48))
   readonly property bool iconOnly: !spotify || vertical || !spotify.hasMedia
-    || barText === ""
+    || barText === "" || !labelFits
   property bool popupOpen: false
   property bool contextMenuVisible: false
   property bool lyricsInstallPromptVisible: false
@@ -39,29 +50,27 @@ BarWidget {
   property bool miniCursorFromPointer: false
   property string miniCursor: "play"
   property real volumeBeforeMute: 0.5
-  property bool shortcutModeLatched: false
+  // Hint modifiers whose key went down here, and whether they have been held
+  // long enough to be a question rather than the start of a chord.
   property int heldModifierFlags: 0
-  property bool pendingShortcutLatch: false
+  property bool modifierHintsShown: false
+  property bool openedFromKeyboard: false
+  readonly property bool miniCursorShown: miniCursorActive && !miniCursorFromPointer
   readonly property bool shortcutHintsEnabled: spotify
     ? spotify.shortcutHintsEnabled
     : String(root.setting("shortcutHints", "On")) !== "Off"
-  readonly property bool shortcutHintsActive: shortcutHintsEnabled
-    && shortcutModeLatched && !miniShortcutHelpVisible
-    && !lyricsInstallPromptVisible
+  // Keycaps show while a modifier is held, and while the keyboard is steering.
   readonly property bool shortcutHintsInPopup: shortcutHintsEnabled
-    && shortcutModeLatched
-  readonly property bool hintCtrlHeld: (heldModifierFlags & Qt.ControlModifier) !== 0
-  readonly property bool hintShiftHeld: (heldModifierFlags & Qt.ShiftModifier) !== 0
-  readonly property bool hintAltHeld: (heldModifierFlags & Qt.AltModifier) !== 0
+    && (modifierHintsShown || miniCursorShown)
+  readonly property bool shortcutHintsActive: shortcutHintsInPopup
+    && !miniShortcutHelpVisible && !lyricsInstallPromptVisible
+  readonly property bool hintCtrlHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.ControlModifier) !== 0
+  readonly property bool hintShiftHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.ShiftModifier) !== 0
+  readonly property bool hintAltHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.AltModifier) !== 0
 
-  component KeyHint: ShortcutHint {
-    ctrlHeld: root.hintCtrlHeld
-    shiftHeld: root.hintShiftHeld
-    altHeld: root.hintAltHeld
-    active: root.shortcutHintsActive
-    foreground: root.foreground
-    accent: Commons.Color.accent
-  }
   readonly property bool opened: popupOpen
   readonly property var miniShortcutRows: spotify && spotify.showLyrics
     ? allMiniShortcutRows
@@ -80,7 +89,6 @@ BarWidget {
     { keys: "Ctrl+Shift+A", action: "Open the current artist" },
     { keys: "Ctrl+Shift+B", action: "Open the current album" },
     { keys: "O", action: "Open full player" },
-    { keys: "Ctrl+H", action: "Hide visible shortcut hints" },
     { keys: "Ctrl+/", action: "Toggle this reference" },
     { keys: "Scroll the bar icon", action: "Previous or next track" },
     { keys: "Middle-click the bar icon", action: "Play or pause" },
@@ -91,7 +99,7 @@ BarWidget {
     if (lyricsInstallPromptVisible) return ["prompt-cancel", "prompt-confirm"]
     if (miniShortcutHelpVisible) return ["help-close"]
     if (spotify && !spotify.accountConnected) {
-      var setupActions = ["setup"]
+      const setupActions = ["setup"]
       if (spotify.loginBusy) setupActions.push("setup-cancel")
       setupActions.push("open")
       return setupActions
@@ -120,45 +128,21 @@ BarWidget {
   function close() {
     miniShortcutHelpVisible = false
     contextMenuVisible = false
-    clearShortcutMode()
+    heldModifierFlags = 0
     popupOpen = false
   }
 
-  function applySequenceModifiers(sequence) {
-    heldModifierFlags = shortcutModifiers.flagsForSequence(sequence)
-  }
-
-  function latchShortcutMode(sequence) {
-    if (!shortcutHintsEnabled) return
-    shortcutModeLatched = true
-    if (sequence) applySequenceModifiers(sequence)
-  }
-
-  function clearShortcutMode() {
-    shortcutModeLatched = false
-    heldModifierFlags = 0
-  }
-
-  function disableShortcutHints() {
-    clearShortcutMode()
-    if (spotify) spotify.persistSettings({ shortcutHints: "Off" })
-  }
-
   function noteHeldModifiers(event, pressed) {
-    if (!event) return
+    // A repeating key reports releases that never happened.
+    if (!event || event.isAutoRepeat) return
     heldModifierFlags = shortcutModifiers.flagsAfterEvent(event.modifiers,
       pressed, heldModifierFlags, event.key)
+    // Another key before the keycaps appear means a chord is being typed.
+    if (pressed && !modifierHintsShown && !shortcutModifiers.isModifierKey(event.key))
+      modifierHintDelay.stop()
   }
 
-
-
-
-
-
-
   function acceptMiniKey(event) {
-    latchShortcutMode()
-    if (event) heldModifierFlags = event.modifiers
     event.accepted = true
   }
   function closeForPopoutSwitch() {
@@ -176,25 +160,30 @@ BarWidget {
       "Omarchy Music app"))
   }
 
+  function fullPlayerOpen() {
+    var host = bar ? bar.shell : null
+    return !!host && typeof host.isPluginOpen === "function"
+      && host.isPluginOpen(moduleName) === true
+  }
+
   function toggleMiniPlayerShortcut() {
-    if (!bar || typeof bar.isBarWidgetOpen !== "function"
-        || typeof bar.hideBarWidget !== "function"
-        || typeof bar.summonBarWidget !== "function") return "unavailable"
-    if (bar.isBarWidgetOpen(moduleName))
-      return bar.hideBarWidget(moduleName) ? "closed" : "unavailable"
-    pendingShortcutLatch = true
-    var host = bar.shell
-    if (host && typeof host.isPluginOpen === "function"
-        && host.isPluginOpen(moduleName) && typeof host.hide === "function") {
-      host.hide(moduleName)
-      Qt.callLater(function() {
-        if (root.bar) root.bar.summonBarWidget(root.moduleName)
-      })
+    if (companionInBar) {
+      if (!bar || typeof bar.run !== "function") return "unavailable"
+      bar.run("omarchy-shell -q shell toggle atlastimed.tunemarchy '{}'")
       return "opened"
     }
-    var opened = bar.summonBarWidget(moduleName)
-    if (!opened) pendingShortcutLatch = false
-    return opened ? "opened" : "unavailable"
+    if (!shown || !miniPlayerEnabled) return toggleFullPlayerShortcut()
+    if (popupOpen) {
+      close()
+      return "closed"
+    }
+    openedFromKeyboard = true
+    if (fullPlayerOpen()) {
+      // Let the full player's window go before the popup takes the keyboard.
+      bar.shell.hide(moduleName)
+      Qt.callLater(function() { root.open() })
+    } else open()
+    return "opened"
   }
 
   function toggleFullPlayerShortcut() {
@@ -206,19 +195,15 @@ BarWidget {
       host.hide(moduleName)
       return "closed"
     }
-    if (bar && typeof bar.isBarWidgetOpen === "function"
-        && bar.isBarWidgetOpen(moduleName)
-        && typeof bar.hideBarWidget === "function") {
-      bar.hideBarWidget(moduleName)
+    var payload = JSON.stringify({ shortcutLatch: true })
+    if (popupOpen) {
+      close()
       Qt.callLater(function() {
-        if (root.bar && root.bar.shell)
-          root.bar.shell.summon(root.moduleName,
-            JSON.stringify({ shortcutLatch: true }))
+        if (root.bar && root.bar.shell) root.bar.shell.summon(root.moduleName, payload)
       })
       return "opened"
     }
-    return host.summon(moduleName, JSON.stringify({ shortcutLatch: true }))
-      ? "opened" : "unavailable"
+    return host.summon(moduleName, payload) ? "opened" : "unavailable"
   }
 
   function toggleConfiguredPlayerShortcut() {
@@ -232,7 +217,7 @@ BarWidget {
 
   function openFullPanel(payload) {
     var next = payload && typeof payload === "object" ? Api.shallowCopy(payload) : ({})
-    if (shortcutModeLatched) next.shortcutLatch = true
+    if (miniCursorShown) next.shortcutLatch = true
     close()
     if (!bar || !bar.shell) return
     var encoded = JSON.stringify(next)
@@ -324,7 +309,6 @@ BarWidget {
     return miniCursorActive && !miniCursorFromPointer && miniCursor === action
   }
 
-
   function moveMiniCursor(delta) {
     var actions = miniKeyboardActions
     if (!actions.length) return
@@ -401,7 +385,6 @@ BarWidget {
   function handleMiniKey(event) {
     root.noteHeldModifiers(event, true)
     if (shortcutModifiers.isModifierKey(event.key)) {
-      if (shortcutModifiers.isHintModifierKey(event.key)) root.latchShortcutMode()
       event.accepted = true
       return
     }
@@ -502,7 +485,7 @@ BarWidget {
     if (spotify) spotify.applySettings(settings)
   }
 
-  visible: root.setting("showBarWidget", true) !== false
+  visible: shown
   implicitWidth: visible ? button.implicitWidth : 0
   implicitHeight: visible ? button.implicitHeight : 0
 
@@ -512,7 +495,13 @@ BarWidget {
     if (spotify) spotify.registerPlayerSurface(root)
   }
   onMiniPlayerEnabledChanged: if (!miniPlayerEnabled) close()
-  onShortcutHintsEnabledChanged: if (!shortcutHintsEnabled) clearShortcutMode()
+  onShownChanged: if (!shown) close()
+  onHeldModifierFlagsChanged: {
+    if (heldModifierFlags === 0) {
+      modifierHintDelay.stop()
+      modifierHintsShown = false
+    } else if (!modifierHintsShown) modifierHintDelay.restart()
+  }
   onMiniKeyboardActionsChanged: ensureMiniCursor()
   onLyricsInstallPromptVisibleChanged: {
     if (lyricsInstallPromptVisible) {
@@ -526,13 +515,12 @@ BarWidget {
       miniCursor = miniKeyboardActions.indexOf("play") >= 0
         ? "play" : miniKeyboardActions[0]
       miniCursorActive = miniKeyboardActions.length > 0
-      miniCursorFromPointer = !pendingShortcutLatch
-      if (pendingShortcutLatch) latchShortcutMode()
-      pendingShortcutLatch = false
+      miniCursorFromPointer = !openedFromKeyboard
+      openedFromKeyboard = false
     } else {
       miniCursorActive = false
-      clearShortcutMode()
-      pendingShortcutLatch = false
+      heldModifierFlags = 0
+      openedFromKeyboard = false
     }
     if (spotify) spotify.setUiVisible(surfaceKey, popupOpen)
     if (!popupOpen && lyricsInstallPromptVisible
@@ -572,12 +560,15 @@ BarWidget {
     readonly property real fittedWidth: Math.ceil(barGlyph.width
       + barContent.spacing + barLabel.implicitWidth + scaledHorizontalMargin * 2)
     readonly property real barTextCap: root.spotify ? root.spotify.maxBarTextWidth : 240
+    // Everything in the slot that is not the words themselves.
+    readonly property real labelChrome: Math.ceil(barGlyph.width + barContent.spacing
+      + scaledHorizontalMargin * 2)
 
     fixedWidth: root.vertical ? root.barSize
       : (root.iconOnly ? Style.bar.iconSlot
         : Api.barSlotWidth(root.spotify && root.spotify.fixedBarWidth,
           barTextCap > 0 ? Style.space(barTextCap) : 0, fittedWidth,
-          root.barSize))
+          root.barSize, root.roomWidth))
     fixedHeight: root.vertical && root.iconOnly ? Style.bar.iconSlot : -1
     clip: true
 
@@ -609,6 +600,7 @@ BarWidget {
 
         readonly property bool scrolling: root.spotify && root.spotify.scrollBarText
           && barLabel.needsScroll && !root.popupOpen && !root.vertical
+          && root.visible && root.spotify.playing && !Style.reduceMotion
         // Use a wide enough ramp to read as a deliberate fade at bar scale.
         readonly property real fadeStop: width > 0
           ? Math.min(0.2, Style.space(28) / width) : 0
@@ -629,6 +621,10 @@ BarWidget {
           Text {
             id: barLabel
             anchors.verticalCenter: parent.verticalCenter
+            // A title that does not fit ends in an ellipsis unless it scrolls.
+            width: scrollClip.scrolling ? implicitWidth : scrollClip.width
+            elide: scrollClip.scrolling ? Text.ElideNone : Text.ElideRight
+            textFormat: Text.PlainText
             text: root.barText
             color: button.foreground
             font.family: root.bar ? root.bar.fontFamily : Style.font.family
@@ -636,6 +632,7 @@ BarWidget {
             renderType: Text.NativeRendering
 
             readonly property bool needsScroll: implicitWidth > scrollClip.width
+            onTextChanged: if (barScrollAnimation.running) barScrollAnimation.restart()
 
             // Keep the marquee on the render thread so it remains smooth
             // without dispatching JavaScript timer callbacks through the
@@ -644,10 +641,10 @@ BarWidget {
               id: barScrollAnimation
               running: scrollClip.scrolling
               loops: Animation.Infinite
-              duration: Math.round(Math.max(6000, implicitWidth * 25)
+              duration: Math.round(Math.max(6000, barLabel.implicitWidth * 25)
                 / Math.max(0.25, root.spotify ? root.spotify.scrollSpeed : 1))
               from: scrollClip.width
-              to: -implicitWidth
+              to: -barLabel.implicitWidth
               easing.type: Easing.Linear
               onStopped: barLabel.x = 0
             }
@@ -700,774 +697,34 @@ BarWidget {
     }
   }
 
+  Timer {
+    id: modifierHintDelay
+    interval: 300
+    onTriggered: if (root.heldModifierFlags !== 0) root.modifierHintsShown = true
+  }
+
+  BarRoom {
+    id: room
+    widget: root
+    baseWidth: Style.bar.iconSlot
+    edge: root.fixedEdge
+    gap: Style.space(12)
+    active: root.shown && !root.vertical
+  }
+
   KeyboardPanel {
     id: popup
     anchorItem: button
     bar: root.bar
     owner: root
     open: root.popupOpen
-    focusTarget: miniKeyCatcher
+    focusTarget: popup.loadedContent
     contentWidth: fittedContentWidth(Style.space(340))
-    contentHeight: fittedContentHeight(root.contextMenuVisible ? barContextMenu.implicitHeight : root.miniShortcutHelpVisible
-      ? miniShortcutHelp.implicitHeight : contentColumn.implicitHeight)
-
-    Item {
-      id: miniKeyCatcher
-      anchors.fill: parent
-      focus: true
-      Keys.priority: Keys.BeforeItem
-      onActiveFocusChanged: if (!activeFocus) {
-        root.heldModifierFlags = 0
-        root.shortcutModeLatched = false
-      }
-      Keys.onShortcutOverride: function(event) {
-        if (shortcutModifiers.isHintModifierKey(event.key)) {
-          root.noteHeldModifiers(event, true)
-          root.latchShortcutMode()
-          event.accepted = true
-        }
-      }
-      Keys.onPressed: function(event) { root.handleMiniKey(event) }
-      Keys.onReleased: function(event) {
-        root.noteHeldModifiers(event, false)
-        if (shortcutModifiers.isHintModifierKey(event.key)) event.accepted = true
-      }
-
-      Shortcut {
-        sequence: "Ctrl+/"
-        enabled: root.popupOpen && !root.lyricsInstallPromptVisible
-        onActivated: {
-          root.latchShortcutMode("Ctrl+/")
-          root.toggleMiniShortcutHelp()
-        }
-      }
-      Shortcut {
-        sequence: "Ctrl+H"
-        enabled: root.shortcutHintsActive
-        onActivated: root.disableShortcutHints()
-      }
-
-      Column {
-        id: barContextMenu
-        width: parent.width
-        visible: root.contextMenuVisible
-        spacing: Style.space(6)
-        Button {
-          text: "Stop playback on this computer"
-          iconText: "󰓛"
-          foreground: root.foreground
-          visible: root.spotify && root.spotify.daemon.running
-          enabled: root.spotify && !root.spotify.daemon.busy
-          hasCursor: root.miniCursorOn("stop")
-          onClicked: root.activateMiniAction("stop")
-        }
-        Button {
-          text: "Open full player"
-          foreground: root.foreground
-          hasCursor: root.miniCursorOn("open")
-          onClicked: root.openFullPanel()
-        }
-      }
-
-      Column {
-        id: contentColumn
-        anchors.fill: parent
-        visible: !root.miniShortcutHelpVisible && !root.contextMenuVisible
-        spacing: Style.space(10)
-
-      Row {
-        width: parent.width
-        visible: root.shortcutHintsActive
-
-        Item {
-          width: Math.max(0, parent.width - miniHideHintsButton.width)
-          height: 1
-        }
-
-        Button {
-          id: miniHideHintsButton
-          text: "Ctrl+H · Hide hints"
-          foreground: root.foreground
-          fontSize: Style.font.caption
-          focusable: false
-          tooltipText: "Hide shortcut hints until re-enabled in Settings · Ctrl+H"
-          onClicked: root.disableShortcutHints()
-        }
-      }
-
-      Column {
-        width: parent.width
-        spacing: Style.space(8)
-        visible: !root.lyricsInstallPromptVisible
-          && root.spotify && !root.spotify.accountConnected
-
-        Text {
-          width: parent.width
-          text: root.spotify ? root.spotify.loginProgress : "Spotify is unavailable"
-          color: root.foreground
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.body
-          font.bold: true
-          wrapMode: Text.WordWrap
-        }
-
-        Text {
-          width: parent.width
-          text: "Connect your Spotify account from here. Playback on this computer can finish in the background."
-          color: root.muted
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-        }
-
-        Text {
-          width: parent.width
-          visible: root.spotify && (root.spotify.lastError !== ""
-            || root.spotify.auth.lastError !== ""
-            || root.spotify.daemon.lastError !== "")
-          text: root.spotify ? (root.spotify.lastError
-            || root.spotify.auth.lastError
-            || root.spotify.daemon.lastError) : ""
-          color: Commons.Color.urgent
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.caption
-          wrapMode: Text.WordWrap
-        }
-
-        Row {
-          width: parent.width
-          spacing: Style.space(6)
-
-          Button {
-            text: root.spotify && root.spotify.loginBusy
-              ? "Working…" : "Set up and continue"
-            iconText: "󰍂"
-            foreground: root.foreground
-            hasCursor: root.miniCursorOn("setup")
-            enabled: root.spotify && !root.spotify.loginBusy
-            onClicked: if (root.spotify) root.spotify.login()
-            onHovered: function(on) { if (on) root.setMiniCursor("setup") }
-          }
-
-          Button {
-            text: "Cancel"
-            foreground: root.foreground
-            visible: root.spotify && root.spotify.loginBusy
-            hasCursor: root.miniCursorOn("setup-cancel")
-            onClicked: if (root.spotify) root.spotify.cancelLogin()
-            onHovered: function(on) { if (on) root.setMiniCursor("setup-cancel") }
-          }
-        }
-      }
-
-      Item {
-        id: miniNowPlaying
-        width: parent.width
-        implicitHeight: Math.max(miniArtworkSurface.height,
-          miniNowPlayingMetadata.implicitHeight)
-        height: implicitHeight
-        readonly property real metadataSpacing: Style.space(12)
-        readonly property bool artworkVisible: !root.spotify
-          || root.spotify.artworkEnabled
-        visible: !root.lyricsInstallPromptVisible
-          && (!root.spotify || root.spotify.accountConnected)
-
-        Item {
-          id: miniArtworkSurface
-          width: miniNowPlaying.artworkVisible ? Style.space(78) : 0
-          height: width
-          visible: miniNowPlaying.artworkVisible
-          anchors.left: parent.left
-          anchors.verticalCenter: parent.verticalCenter
-
-          BorderSurface {
-            id: rectangleArtworkSurface
-            anchors.fill: parent
-            visible: !root.vinylRecordEnabled
-            radius: Style.cornerRadius
-            color: Style.normalFillFor(root.foreground, Commons.Color.accent)
-            borderSpec: Border.controlSpec("normal", root.foreground, Commons.Color.accent)
-
-            RetryImage {
-              id: popupArtwork
-              anchors.fill: parent
-              anchors.margins: Style.space(3)
-              requestedSource: !root.vinylRecordEnabled && root.popupOpen && root.spotify && root.spotify.artworkEnabled
-                ? Api.idleMediaText(root.spotify.artUrl, root.spotify.lastPlayedItem, "imageUrl", "") : ""
-              sourceSize.width: 156
-              sourceSize.height: 156
-              fillMode: Image.PreserveAspectFit
-              asynchronous: true
-              cache: true
-              visible: status === Image.Ready
-            }
-
-            Text {
-              anchors.centerIn: parent
-              visible: popupArtwork.status !== Image.Ready
-              text: ""
-              color: root.foreground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.displayLarge
-            }
-          }
-
-          Rectangle {
-            id: recordArtworkSurface
-            anchors.fill: parent
-            visible: root.vinylRecordEnabled
-            radius: width / 2
-            color: Style.normalFillFor(root.foreground, Commons.Color.accent)
-            border.width: 1
-            border.color: root.foreground
-            clip: true
-
-            Rectangle {
-              id: popupRecordMask
-              anchors.fill: parent
-              anchors.margins: Style.space(3)
-              radius: width / 2
-              color: "white"
-              visible: false
-              layer.enabled: true
-            }
-
-            Rectangle {
-              id: popupRecord
-              anchors.fill: parent
-              anchors.margins: Style.space(3)
-              radius: width / 2
-              color: Style.normalFillFor(root.foreground, Commons.Color.accent)
-              clip: true
-
-              RotationAnimation on rotation {
-                from: 0
-                to: 360
-                duration: 7000
-                loops: Animation.Infinite
-                running: root.vinylRecordEnabled && root.popupOpen
-                  && root.spotify && root.spotify.artworkEnabled && root.spotify.playing
-              }
-
-              RetryImage {
-                id: popupRecordArtwork
-                anchors.fill: parent
-                requestedSource: root.vinylRecordEnabled && root.popupOpen && root.spotify && root.spotify.artworkEnabled
-                  ? Api.idleMediaText(root.spotify.artUrl, root.spotify.lastPlayedItem, "imageUrl", "") : ""
-                sourceSize.width: 156
-                sourceSize.height: 156
-                fillMode: Image.PreserveAspectCrop
-                asynchronous: true
-                cache: true
-                visible: false
-              }
-
-              MultiEffect {
-                anchors.fill: parent
-                source: popupRecordArtwork
-                maskEnabled: true
-                maskSource: popupRecordMask
-                maskThresholdMin: 0.5
-                maskSpreadAtMin: 1
-                visible: popupRecordArtwork.status === Image.Ready
-              }
-
-              Rectangle {
-                anchors.centerIn: parent
-                width: Math.max(Style.space(8), parent.width * 0.16)
-                height: width
-                radius: width / 2
-                color: Commons.Color.background
-                border.width: 1
-                border.color: Qt.rgba(0, 0, 0, 0.35)
-                visible: popupRecordArtwork.status === Image.Ready
-              }
-            }
-
-            Text {
-              anchors.centerIn: parent
-              visible: popupRecordArtwork.status !== Image.Ready
-              text: ""
-              color: root.foreground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.displayLarge
-            }
-          }
-        }
-
-        Column {
-          id: miniNowPlayingMetadata
-          anchors.left: miniArtworkSurface.right
-          anchors.leftMargin: miniArtworkSurface.visible
-            ? miniNowPlaying.metadataSpacing : 0
-          anchors.right: parent.right
-          anchors.verticalCenter: parent.verticalCenter
-          spacing: Style.space(4)
-
-          Row {
-            width: parent.width
-            spacing: Style.space(3)
-
-            Text {
-              width: Math.max(20, parent.width
-                - (barCurrentTrackLikeButton.visible
-                  ? barCurrentTrackLikeButton.width + parent.spacing : 0))
-              anchors.verticalCenter: parent.verticalCenter
-              text: Api.idleMediaText(root.spotify ? root.spotify.title : "",
-                root.spotify ? root.spotify.lastPlayedItem : null, "name",
-                "Nothing playing")
-              color: root.spotify && root.spotify.title
-                ? root.foreground : root.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.subtitle
-              font.bold: true
-              elide: Text.ElideRight
-            }
-
-            Button {
-              id: barCurrentTrackLikeButton
-              objectName: "bar-current-track-like"
-              visible: root.spotify && !!root.spotify.currentTrackItem
-              anchors.verticalCenter: parent.verticalCenter
-              iconText: root.spotify && root.spotify.currentTrackSaved
-                ? "󰋑" : "󰋕"
-              iconSize: Style.font.body
-              foreground: Commons.Color.urgent
-              accent: Commons.Color.urgent
-              hasCursor: root.miniCursorOn("like")
-              enabled: root.spotify && root.spotify.currentTrackSaveAvailable
-              horizontalPadding: Style.space(4)
-              verticalPadding: Style.space(2)
-              tooltipText: root.spotify && root.spotify.currentTrackSaveChecking
-                ? "Checking liked status…"
-                : (root.spotify && root.spotify.currentTrackSaveBusy
-                  ? "Updating liked status…"
-                  : (root.spotify && root.spotify.currentTrackSaved
-                    ? "Remove like" : "Like this song"))
-              onClicked: if (root.spotify)
-                root.spotify.toggleCurrentTrackSaved()
-              onHovered: function(on) {
-                if (on) root.setMiniCursor("like")
-              }
-            }
-          }
-
-          CursorSurface {
-            id: miniArtistCursor
-            z: 2
-            clip: false
-            width: parent.width
-            height: miniArtistLinks.implicitHeight + Style.space(4)
-            visible: miniArtistLinks.fallbackText !== ""
-              || miniArtistLinks.artists.length > 0
-            enabled: root.spotify && root.spotify.currentArtistContextAvailable
-            hasCursor: root.miniCursorOn("artist") || miniArtistHover.hovered
-            foreground: root.foreground
-
-            ArtistLinks {
-              id: miniArtistLinks
-              anchors.fill: parent
-              anchors.leftMargin: Style.space(3)
-              anchors.rightMargin: Style.space(3) + miniArtistHint.reservedRight
-              artists: root.spotify ? root.spotify.currentArtists : []
-              fallbackText: Api.idleMediaText(
-                root.spotify ? root.spotify.artist : "",
-                root.spotify ? root.spotify.lastPlayedItem : null, "subtitle", "")
-              fallbackClickable: fallbackText !== "" && artists.length === 0
-                && root.spotify && root.spotify.currentArtistContextAvailable
-              color: root.spotify && root.spotify.artist !== ""
-                && root.spotify.currentArtistContextAvailable
-                ? Commons.Color.accent : root.muted
-              accent: Commons.Color.accent
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.bodySmall
-              onArtistRequested: function(item) { root.openArtist(item) }
-              onFallbackRequested: root.openCurrentArtist()
-            }
-
-            HoverHandler {
-              id: miniArtistHover
-              onHoveredChanged: if (hovered) root.setMiniCursor("artist")
-            }
-            PanelToolTip {
-              visible: miniArtistHover.hovered
-              text: "Open artist · Ctrl+Shift+A"
-            }
-            KeyHint {
-              id: miniArtistHint
-              sequences: ["Ctrl+Shift+A"]
-            }
-          }
-
-          CursorSurface {
-            id: miniAlbumCursor
-            z: 1
-            clip: false
-            width: parent.width
-            height: miniAlbumLinks.implicitHeight
-            visible: miniAlbumLinks.fallbackText !== ""
-            enabled: root.spotify && root.spotify.currentAlbumContextAvailable
-            hasCursor: root.miniCursorOn("album") || miniAlbumHover.hovered
-            foreground: root.foreground
-
-            ArtistLinks {
-              id: miniAlbumLinks
-              anchors.fill: parent
-              anchors.leftMargin: Style.space(3)
-              anchors.rightMargin: Style.space(3) + miniAlbumHint.reservedRight
-              artists: []
-              fallbackText: Api.idleMediaText(
-                root.spotify ? root.spotify.album : "",
-                root.spotify ? root.spotify.lastPlayedItem : null, "album", "")
-              fallbackClickable: root.spotify
-                && root.spotify.currentAlbumContextAvailable
-              color: root.spotify && root.spotify.currentAlbumContextAvailable
-                ? Commons.Color.accent : root.muted
-              accent: Commons.Color.accent
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-              onFallbackRequested: root.openCurrentAlbum()
-            }
-
-            HoverHandler {
-              id: miniAlbumHover
-              onHoveredChanged: if (hovered) root.setMiniCursor("album")
-            }
-            PanelToolTip {
-              visible: miniAlbumHover.hovered
-              text: "Open album · Ctrl+Shift+B"
-            }
-            KeyHint {
-              id: miniAlbumHint
-              sequences: ["Ctrl+Shift+B"]
-            }
-          }
-        }
-      }
-
-      Column {
-        width: parent.width
-        spacing: Style.space(3)
-        visible: !root.lyricsInstallPromptVisible
-          && (!root.spotify || root.spotify.accountConnected)
-          && root.spotify && root.spotify.lengthSeconds > 0
-
-        CursorSurface {
-          id: miniSeekCursor
-          width: parent.width
-          height: miniSeekSlider.implicitHeight + Style.space(2)
-          hasCursor: root.miniCursorOn("seek")
-          foreground: root.foreground
-
-          PlaybackSlider {
-            id: miniSeekSlider
-            anchors.fill: parent
-            anchors.leftMargin: Style.space(3)
-            anchors.rightMargin: Style.space(3)
-            bar: root.bar
-            minimum: 0
-            maximum: Math.max(1, root.spotify ? root.spotify.lengthSeconds : 1)
-            sourceValue: root.spotify ? root.spotify.positionSeconds : 0
-            sourcePending: root.spotify && root.spotify.pendingRemoteSeek !== null
-            acknowledgeTolerance: 2
-            contextKey: root.spotify
-              ? root.spotify.currentUri + "|" + root.spotify.playbackDeviceName : ""
-            step: 5
-            onCommitted: function(value) {
-              if (root.spotify) root.spotify.seekSeconds(value)
-            }
-          }
-
-          HoverHandler {
-            onHoveredChanged: if (hovered) root.setMiniCursor("seek")
-          }
-          KeyHint {
-            sequences: ["Shift+Left", "Shift+Right"]
-            active: root.shortcutHintsActive && root.spotify
-              && root.spotify.playbackControllable
-          }
-        }
-
-        Row {
-          width: parent.width
-
-          Text {
-            id: positionTime
-            text: Api.millisecondsToClock((root.spotify ? root.spotify.positionSeconds : 0) * 1000)
-            color: root.muted
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-          }
-
-          Item { width: Math.max(0, parent.width - positionTime.implicitWidth - endTime.implicitWidth); height: 1 }
-
-          Text {
-            id: endTime
-            text: Api.millisecondsToClock((root.spotify ? root.spotify.lengthSeconds : 0) * 1000)
-            color: root.muted
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.caption
-          }
-        }
-      }
-
-      Row {
-        anchors.horizontalCenter: parent.horizontalCenter
-        spacing: Style.space(5)
-        visible: !root.lyricsInstallPromptVisible
-          && (!root.spotify || root.spotify.accountConnected)
-
-        TransportButton {
-          glyphText: "󰒟"
-          foreground: root.foreground
-          selected: root.spotify && root.spotify.shuffle
-          hasCursor: root.miniCursorOn("shuffle")
-          tooltipText: "Shuffle · Ctrl+S"
-          enabled: root.spotify && root.spotify.playbackControllable
-          onClicked: if (root.spotify) root.spotify.setShuffle(!root.spotify.shuffle)
-          onHovered: function(on) { if (on) root.setMiniCursor("shuffle") }
-          KeyHint { sequences: ["Ctrl+S"] }
-        }
-
-        TransportButton {
-          glyphText: "󰒮"
-          foreground: root.foreground
-          hasCursor: root.miniCursorOn("previous")
-          tooltipText: "Previous · Ctrl+Left"
-          enabled: root.spotify && root.spotify.playbackControllable
-          onClicked: if (root.spotify) root.spotify.previous()
-          onHovered: function(on) { if (on) root.setMiniCursor("previous") }
-          KeyHint { sequences: ["Ctrl+Left"] }
-        }
-
-        TransportButton {
-          glyphText: root.spotify && root.spotify.playing ? "󰏤" : "󰐊"
-          glyphSize: Style.font.iconLarge
-          foreground: root.foreground
-          selected: root.spotify && root.spotify.playing
-          hasCursor: root.miniCursorOn("play")
-          tooltipText: (root.spotify && root.spotify.playing ? "Pause"
-            : (root.spotify && root.spotify.canResumeLastPlayed
-              ? "Resume last played" : "Play")) + " · Space"
-          enabled: root.spotify && root.spotify.playbackStartable
-          onClicked: if (root.spotify) root.spotify.togglePlayback()
-          onHovered: function(on) { if (on) root.setMiniCursor("play") }
-          KeyHint { sequences: ["Space"] }
-        }
-
-        TransportButton {
-          glyphText: "󰒭"
-          foreground: root.foreground
-          hasCursor: root.miniCursorOn("next")
-          tooltipText: "Next · Ctrl+Right"
-          enabled: root.spotify && root.spotify.playbackControllable
-          onClicked: if (root.spotify) root.spotify.next()
-          onHovered: function(on) { if (on) root.setMiniCursor("next") }
-          KeyHint { sequences: ["Ctrl+Right"] }
-        }
-
-        TransportButton {
-          glyphText: root.spotify && root.spotify.repeatMode === "track" ? "󰑘" : "󰑖"
-          foreground: root.foreground
-          selected: root.spotify && root.spotify.repeatMode !== "off"
-          hasCursor: root.miniCursorOn("repeat")
-          tooltipText: "Repeat: " + Api.repeatModeLabel(root.spotify
-            ? root.spotify.repeatMode : "off") + " · Ctrl+R"
-          enabled: root.spotify && root.spotify.playbackControllable
-          onClicked: if (root.spotify) root.spotify.cycleRepeat()
-          onHovered: function(on) { if (on) root.setMiniCursor("repeat") }
-          KeyHint { sequences: ["Ctrl+R"] }
-        }
-
-        TransportButton {
-          glyphText: "󰎈"
-          foreground: root.foreground
-          hasCursor: root.miniCursorOn("lyrics")
-          tooltipText: "Open lyrics in Omasing · Ctrl+Shift+L"
-          enabled: root.spotify && root.spotify.lyricsAvailable
-          onClicked: root.openLyrics()
-          onHovered: function(on) { if (on) root.setMiniCursor("lyrics") }
-          KeyHint { sequences: ["Ctrl+Shift+L"] }
-        }
-      }
-
-      CursorSurface {
-        id: miniVolumeCursor
-        width: parent.width
-        height: miniVolumeRow.implicitHeight + Style.space(2)
-        visible: !root.lyricsInstallPromptVisible
-          && (!root.spotify || root.spotify.accountConnected)
-          && root.spotify && root.spotify.hasPlayer
-        hasCursor: root.miniCursorOn("volume")
-        foreground: root.foreground
-
-        Row {
-          id: miniVolumeRow
-          anchors.fill: parent
-          anchors.leftMargin: Style.space(3)
-          anchors.rightMargin: Style.space(3)
-          spacing: Style.space(8)
-
-          Text {
-            anchors.verticalCenter: parent.verticalCenter
-            text: root.spotify && root.spotify.volume <= 0.001 ? "󰝟" : "󰕾"
-            color: root.spotify && root.spotify.volume <= 0.001
-              ? root.muted : root.foreground
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.icon
-          }
-
-          PlaybackSlider {
-            width: parent.width - Style.space(34)
-            anchors.verticalCenter: parent.verticalCenter
-            bar: root.bar
-            minimum: 0
-            maximum: 1
-            step: 0.05
-            sourceValue: root.spotify ? root.spotify.volume : 0
-            sourcePending: root.spotify && root.spotify.volumePending
-            contextKey: root.spotify ? root.spotify.playbackDeviceName : ""
-            enabled: root.spotify && root.spotify.volumeSupported
-            liveCommit: true
-            onCommitted: function(value, live) {
-              root.setVolumeValue(value, live)
-            }
-          }
-        }
-
-        HoverHandler {
-          onHoveredChanged: if (hovered) root.setMiniCursor("volume")
-        }
-        KeyHint {
-          sequences: ["M", "Ctrl+Up", "Ctrl+Down"]
-          active: root.shortcutHintsActive && root.spotify
-            && root.spotify.volumeSupported
-        }
-      }
-
-      PanelSeparator {
-        foreground: root.foreground
-        visible: !root.lyricsInstallPromptVisible
-      }
-
-      Row {
-        width: parent.width
-        spacing: Style.space(6)
-        visible: !root.lyricsInstallPromptVisible
-
-        Text {
-          width: parent.width - openButton.width - Style.space(6)
-          anchors.verticalCenter: parent.verticalCenter
-          text: !root.spotify ? "Spotify is unavailable"
-            : (root.spotify.lastError !== "" ? root.spotify.lastError
-            : (root.spotify.statusMessage !== "" ? root.spotify.statusMessage
-            : (!root.spotify.accountConnected ? "Connect Spotify to start"
-            : (!root.spotify.fullyConnected
-              ? (root.spotify.loginBusy ? root.spotify.loginProgress
-                : "Account connected · finish playback in Settings")
-            : (root.spotify.useRemotePlayback
-              ? (root.spotify.playing ? "Playing on " : "Connected to ")
-                + root.spotify.playbackDeviceName
-              : (root.spotify.daemon.running ? "Playing on this computer"
-                : "Ready when you press play"))))))
-          color: root.muted
-          font.family: root.bar ? root.bar.fontFamily : Style.font.family
-          font.pixelSize: Style.font.caption
-          elide: Text.ElideRight
-        }
-
-        Button {
-          id: openButton
-          text: "Open"
-          iconText: "󰏋"
-          foreground: root.foreground
-          hasCursor: root.miniCursorOn("open")
-          tooltipText: "Open full player · O"
-          onClicked: root.openFullPanel()
-          onHovered: function(on) { if (on) root.setMiniCursor("open") }
-          KeyHint { sequences: ["O"] }
-        }
-      }
-
-        LyricsInstallPrompt {
-          width: parent.width
-          visible: root.lyricsInstallPromptVisible
-          service: root.spotify
-          foreground: root.foreground
-          muted: root.muted
-          surfaceKey: root.lyricsRequestKey
-          cancelHasCursor: root.miniCursorOn("prompt-cancel")
-          confirmHasCursor: root.miniCursorOn("prompt-confirm")
-          onCanceled: root.dismissLyricsInstallPrompt()
-        }
-      }
-
-      Column {
-        id: miniShortcutHelp
-        anchors.fill: parent
-        visible: root.miniShortcutHelpVisible
-        spacing: Style.space(7)
-
-        Row {
-          width: parent.width
-          spacing: Style.space(6)
-
-          Text {
-            width: parent.width - miniShortcutHelpClose.width - parent.spacing
-            anchors.verticalCenter: parent.verticalCenter
-            text: "Keyboard shortcuts"
-            color: root.foreground
-            font.family: root.bar ? root.bar.fontFamily : Style.font.family
-            font.pixelSize: Style.font.subtitle
-            font.bold: true
-          }
-
-          Button {
-            id: miniShortcutHelpClose
-            iconText: "󰅖"
-            foreground: root.foreground
-            focusable: true
-            hasCursor: root.miniCursorOn("help-close")
-            tooltipText: "Close shortcut reference · Ctrl+/ or Esc"
-            onClicked: root.toggleMiniShortcutHelp()
-            onHovered: function(on) { if (on) root.setMiniCursor("help-close") }
-            KeyHint {
-              sequences: ["Esc", "Ctrl+/"]
-              active: root.shortcutHintsInPopup
-            }
-          }
-        }
-
-        PanelSeparator { foreground: root.foreground }
-
-        Repeater {
-          model: root.miniShortcutRows
-
-          delegate: Row {
-            required property var modelData
-            width: miniShortcutHelp.width
-            spacing: Style.space(8)
-
-            Text {
-              width: Style.space(128)
-              text: modelData.keys
-              color: root.foreground
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-              font.bold: true
-            }
-
-            Text {
-              width: parent.width - Style.space(128) - parent.spacing
-              text: modelData.action
-              color: root.muted
-              font.family: root.bar ? root.bar.fontFamily : Style.font.family
-              font.pixelSize: Style.font.caption
-              wrapMode: Text.WordWrap
-            }
-          }
-        }
-      }
+    contentHeight: fittedContentHeight(popup.loadedContentHeight)
+    // Built the first time it opens, so a closed player costs no objects on any
+    // monitor's bar.
+    content: Component {
+      MiniPlayerContent { widget: root }
     }
   }
 

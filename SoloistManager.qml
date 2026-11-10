@@ -1,5 +1,8 @@
 import QtQuick
+import Quickshell
 import Quickshell.Io
+
+import "Api.js" as Api
 
 // The UI sends keys to the helper over stdin, never via settings or the bridge.
 Item {
@@ -7,6 +10,10 @@ Item {
   property string pluginDir: ""
   property string deviceName: "OmaSpotify"
   property bool sessionConnected: false
+  // Status costs a Python start and a systemctl, so it runs when someone can see
+  // the answer, and when the backend's own connection says something changed.
+  property bool uiVisible: false
+  property bool backendConnected: false
   property bool binaryAvailable: false
   property bool unitAvailable: false
   property bool keyAvailable: false
@@ -19,10 +26,23 @@ Item {
   property bool credentialsClearBusy: false
   property bool terminalFailure: false
   property string lastError: ""
+  readonly property string statusUnknownText:
+    "Local playback could not be checked. It is checked again shortly."
   property string version: ""
   property int daysRemaining: 0
   property bool startAfterSave: false
   property int statusGeneration: 0
+  property bool helperSynced: false
+  property double failureClearedAt: 0
+  // A plugin update can change the backend, which keeps working until repaired.
+  property bool backendCurrent: true
+  property bool backendChecked: false
+  property int pairingTimeoutMs: 300000
+  readonly property bool statusPollNeeded: pluginDir !== "" && (authenticationBusy || uiVisible)
+  readonly property string failurePath: {
+    var runtime = Quickshell.env("XDG_RUNTIME_DIR")
+    return runtime ? runtime + "/omaspotify/startup-error.json" : ""
+  }
   readonly property bool credentialsAvailable: keyAvailable && (paired || sessionConnected)
   readonly property bool playbackReady: binaryAvailable && unitAvailable
   readonly property bool running: serviceActive
@@ -49,13 +69,16 @@ Item {
   function refreshStatus() {
     if (!pluginDir || status.running || busy) return
     status.generation = statusGeneration
-    status.command = ["python3", pluginDir + "/scripts/soloist-runtime.py", "status", credentialsChecked ? "--no-key" : "--key"]
+    // A keyring still locked at the first check must not read as no key for ever.
+    status.command = ["python3", pluginDir + "/scripts/soloist-runtime.py", "status",
+      keyAvailable ? "--no-key" : "--key"].concat(backendChecked ? [] : ["--backend"])
     status.running = true
   }
   function applyStatus(generation, data) {
     if (generation !== statusGeneration || !data || typeof data !== "object") return false
     credentialsChecked = true
     requirementsChecked = true
+    if (lastError === statusUnknownText) lastError = ""
     binaryAvailable = data.installed === true
     unitAvailable = data.unit === true
     if (typeof data.key === "boolean") keyAvailable = data.key
@@ -63,7 +86,43 @@ Item {
     serviceActive = data.running === true
     version = String(data.version || "")
     daysRemaining = Number(data.daysRemaining) || 0
+    if (typeof data.backendCurrent === "boolean") {
+      backendCurrent = data.backendCurrent
+      backendChecked = true
+    }
+    syncInstalledHelper()
+    if (serviceActive) terminalFailure = false
+    else if (failurePath) failureFile.reload()
     return true
+  }
+  // A check that could not run must not leave sign-in waiting on it for ever.
+  function statusUnknown() {
+    credentialsChecked = true
+    requirementsChecked = true
+    if (!lastError) lastError = statusUnknownText
+  }
+  // A plugin update replaces this file's helper, not the copy the service runs.
+  function syncInstalledHelper() {
+    if (helperSynced || !binaryAvailable || !pluginDir) return
+    helperSynced = true
+    sync.command = ["python3", pluginDir + "/scripts/soloist-runtime.py", "sync"]
+    sync.running = true
+  }
+  function applyFailureFile(raw) {
+    var record = Api.parseJson(raw, null)
+    var code = record ? String(record.code || "") : ""
+    // Only the librespot engine reports this one, and the file outlives a switch.
+    var message = code === "reconnect_exhausted" ? "" : Api.playbackFailureMessage(code)
+    if (!message) return
+    // Removing the file takes a moment, and a status check may already be reading it.
+    if (Number(record.timestamp) < Math.floor(failureClearedAt / 1000)) return
+    terminalFailure = true
+    lastError = message
+    authenticationBusy = false
+  }
+  function clearFailureFile() {
+    failureClearedAt = Date.now()
+    if (failurePath) Quickshell.execDetached(["rm", "-f", "--", failurePath])
   }
   function checkRequirements() { refreshStatus() }
   function checkCredentials() { refreshStatus() }
@@ -77,8 +136,12 @@ Item {
     setup.running = true
   }
   function start(explicit) {
+    // Asking again counts even if nothing can start this very moment.
+    if (explicit === true) {
+      terminalFailure = false
+      clearFailureFile()
+    }
     if (busy || running || !playbackReady || !keyAvailable) return
-    if (explicit === true) terminalFailure = false
     if (terminalFailure) return
     statusGeneration++
     configure.generation = statusGeneration
@@ -109,23 +172,56 @@ Item {
       authenticationSucceeded()
     }
   }
+  onBackendConnectedChanged: refreshStatus()
+  onUiVisibleChanged: if (uiVisible) refreshStatus()
   onPluginDirChanged: if (pluginDir) refreshStatus()
-  Timer { interval: root.authenticationBusy ? 2000 : 60000; running: root.pluginDir !== ""; repeat: true; onTriggered: root.refreshStatus() }
+  onAuthenticationBusyChanged: {
+    if (authenticationBusy) pairingDeadline.restart()
+    else pairingDeadline.stop()
+  }
+  Timer {
+    interval: root.authenticationBusy ? 2000 : 60000
+    running: root.statusPollNeeded
+    repeat: true
+    onTriggered: root.refreshStatus()
+  }
+  Timer {
+    id: pairingDeadline
+    interval: root.pairingTimeoutMs
+    onTriggered: {
+      root.authenticationBusy = false
+      root.lastError = "Pairing did not finish. Select OmaSpotify in the official Spotify app, then try again."
+      root.authenticationFailed(root.lastError)
+    }
+  }
+  FileView {
+    id: failureFile
+    path: root.failurePath
+    watchChanges: false
+    printErrors: false
+    onLoaded: root.applyFailureFile(text())
+  }
   Process {
     id: status
     property int generation: 0
-    stdout: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector { id: statusOutput; waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(code) {
       if (generation !== root.statusGeneration) {
         Qt.callLater(root.refreshStatus)
         return
       }
-      if (code !== 0) return
-      var data
-      try { data = JSON.parse(stdout.text) } catch (_) { return }
-      root.applyStatus(generation, data)
+      var data = null
+      if (code === 0) {
+        try { data = JSON.parse(statusOutput.text) } catch (_) { data = null }
+      }
+      if (!root.applyStatus(generation, data)) root.statusUnknown()
     }
+  }
+  Process {
+    id: sync
+    stdout: StdioCollector { waitForEnd: true }
+    stderr: StdioCollector { waitForEnd: true }
   }
   Process {
     id: configure
@@ -150,9 +246,24 @@ Item {
     onExited: function(code) {
       root.setupBusy = false
       Qt.callLater(root.refreshStatus)
-      if (code === 0) { root.binaryAvailable = true; root.unitAvailable = true; root.setupSucceeded() }
+      if (code === 0) {
+        root.binaryAvailable = true
+        root.unitAvailable = true
+        root.backendCurrent = true
+        root.terminalFailure = false
+        root.lastError = ""
+        root.clearFailureFile()
+        root.setupSucceeded()
+      }
       else { root.lastError = "Soloist setup failed. Check the network and Rust toolchain, then retry."; root.setupFailed(root.lastError) }
     }
+    // A command that cannot start never reports an exit.
+    onRunningChanged: if (!running) Qt.callLater(function() {
+      if (!root || !root.setupBusy || setup.running) return
+      root.setupBusy = false
+      root.lastError = "Soloist setup could not start."
+      root.setupFailed(root.lastError)
+    })
   }
   Process {
     id: operation
@@ -162,6 +273,13 @@ Item {
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onStarted: { if (input) write(input); input = ""; stdinEnabled = false }
+    onRunningChanged: if (!running) Qt.callLater(function() {
+      if (root && root.credentialsClearBusy && !operation.running) {
+        root.credentialsClearBusy = false
+        root.lastError = "Soloist could not complete this operation."
+        root.credentialsClearFailed(root.lastError)
+      }
+    })
     onExited: function(code) {
       var completedAction = action
       input = ""

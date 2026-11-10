@@ -1,0 +1,2 @@
+# Single quotes around jq programs, awk scripts and generated scripts are deliberate.
+disable=SC2016

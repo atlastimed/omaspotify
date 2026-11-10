@@ -1,9 +1,9 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Popup {
   id: popup
@@ -24,7 +24,7 @@ Popup {
     createPlaylistNameField.selectAll()
     createPlaylistNameField.forceActiveFocus()
   })
-  onClosed: popup.panel.createPlaylistName = ""
+  onClosed: Qt.callLater(function() { popup.panel.restoreFocus() })
 
   background: BorderSurface {
     color: popup.panel.popupBackground

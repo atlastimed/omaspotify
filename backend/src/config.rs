@@ -133,7 +133,8 @@ pub fn default_config_path() -> PathBuf {
 pub fn default_socket_path() -> PathBuf {
     let runtime = env::var_os("XDG_RUNTIME_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc_getuid() })));
+        // SAFETY: getuid reads one number and cannot fail.
+        .unwrap_or_else(|| PathBuf::from(format!("/run/user/{}", unsafe { libc::getuid() })));
     runtime.join("omaspotify/backend.sock")
 }
 
@@ -158,19 +159,6 @@ fn default_credentials_root() -> PathBuf {
         .or_else(|| env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/state")))
         .unwrap_or_else(|| PathBuf::from(".local/state"))
         .join("omaspotify")
-}
-
-#[cfg(unix)]
-unsafe fn libc_getuid() -> u32 {
-    unsafe extern "C" {
-        fn getuid() -> u32;
-    }
-    unsafe { getuid() }
-}
-
-#[cfg(not(unix))]
-unsafe fn libc_getuid() -> u32 {
-    0
 }
 
 #[cfg(test)]

@@ -20,13 +20,11 @@ Item {
   property string activatingDeviceId: ""
   property string activationInput: ""
   property string discoveryResult: ""
-  property string activationResult: ""
   property bool controlling: false
   property string controllingDeviceId: ""
   property string controlAction: ""
   property string controlValue: ""
   property string controlInput: ""
-  property string controlResult: ""
   property string lastError: ""
 
   // Commands that arrive while the helper is busy wait here and run in order.
@@ -45,27 +43,29 @@ Item {
     return Api.isSpotifyConnectDeviceId(value)
   }
 
+  // False when nothing was started, so nobody waits for an answer.
   function refresh() {
-    if (loading || discoveryCommand.running || !pluginDir) return
+    if (loading || discoveryCommand.running || !pluginDir) return false
     loading = true
     lastError = ""
     discoveryResult = ""
     discoveryCommand.command = [pluginDir + "/scripts/spotify-connect-device.py", "discover"]
     discoveryCommand.running = true
+    return true
   }
 
-  function activate(deviceId, accessToken) {
+  function activate(deviceId, accessToken, userId) {
     var requested = String(deviceId || "")
     var token = String(accessToken || "").trim()
+    var user = String(userId || "").trim()
     if (activating || activationCommand.running || !pluginDir
         || !validDeviceId(requested)) return
-    if (token.length > 4096 || /\s/.test(token)) return
+    if (token.length > 4096 || /\s/.test(token) || user.length > 256 || /[\r\n]/.test(user)) return
     activating = true
     activatingDeviceId = requested
     // Both values cross the process boundary only through stdin. In
     // particular, never expose the short-lived streaming token in argv.
-    activationInput = requested + "\n" + token
-    activationResult = ""
+    activationInput = requested + "\n" + token + "\n" + user
     lastError = ""
     activationCommand.command = [pluginDir + "/scripts/spotify-connect-device.py", "activate"]
     activationCommand.running = true
@@ -88,7 +88,6 @@ Item {
     controlAction = command
     controlValue = argument
     controlInput = requested + "\n" + command + "\n" + argument
-    controlResult = ""
     lastError = ""
     controlCommand.command = [pluginDir + "/scripts/spotify-connect-device.py", "control"]
     controlCommand.running = true
@@ -152,11 +151,12 @@ Item {
       if (!validDeviceId(id)) continue
       next.push({
         id: id,
-        name: String(item.name || "Spotify Connect device").slice(0, 160),
-        type: String(item.type || "Speaker").slice(0, 80),
-        description: String(item.description || "").slice(0, 260),
-        brand: String(item.brand || "").slice(0, 120),
-        model: String(item.model || "").slice(0, 120),
+        // These come from anything on the network that claims to be a speaker.
+        name: Api.plainLabel(item.name || "Spotify Connect device").slice(0, 160),
+        type: Api.plainLabel(item.type || "Speaker").slice(0, 80),
+        description: Api.plainLabel(item.description).slice(0, 260),
+        brand: Api.plainLabel(item.brand).slice(0, 120),
+        model: Api.plainLabel(item.model).slice(0, 120),
         localDiscovery: true,
         activationRequired: true,
         activeUser: item.activeUser === true,
@@ -167,6 +167,92 @@ Item {
     devices = next
   }
 
+  function finishDiscovery(exitCode) {
+    if (!loading) return
+    discoveryDeadline.stop()
+    loading = false
+    if (exitCode === 0) {
+      applyDiscovery(discoveryResult)
+      discoveryResult = ""
+      lastError = ""
+      refreshed()
+    } else {
+      discoveryResult = ""
+      lastError = "Could not find Spotify Connect devices on this network"
+      refreshFailed(lastError)
+    }
+  }
+
+  function finishActivation(exitCode) {
+    if (!activating) return
+    activationDeadline.stop()
+    var requested = activatingDeviceId
+    activating = false
+    activatingDeviceId = ""
+    activationInput = ""
+    if (exitCode === 0) {
+      lastError = ""
+      activated(requested)
+    } else {
+      lastError = "Could not connect to this Spotify Connect device"
+      activationFailed(lastError)
+    }
+    runQueuedControl()
+  }
+
+  function finishControl(exitCode) {
+    if (!controlling) return
+    controlDeadline.stop()
+    var requested = controllingDeviceId
+    var action = controlAction
+    var value = controlValue
+    controlling = false
+    controllingDeviceId = ""
+    controlAction = ""
+    controlValue = ""
+    controlInput = ""
+    if (exitCode === 0) {
+      lastError = ""
+      controlled(requested, action, value)
+    } else {
+      // The speaker is likely gone; do not make the user wait out a
+      // failure for every press that was waiting behind this one.
+      queuedControls = []
+      lastError = "Could not control this Sonos speaker"
+      controlFailed(requested, lastError)
+    }
+    runQueuedControl()
+  }
+
+  // Longer than the helper's own limits, for a helper that hangs anyway. A
+  // command that cannot start never reports an exit, so its end is watched too.
+  Timer {
+    id: discoveryDeadline
+    interval: 35000
+    onTriggered: {
+      discoveryCommand.running = false
+      root.finishDiscovery(-1)
+    }
+  }
+
+  Timer {
+    id: activationDeadline
+    interval: 95000
+    onTriggered: {
+      activationCommand.running = false
+      root.finishActivation(-1)
+    }
+  }
+
+  Timer {
+    id: controlDeadline
+    interval: 25000
+    onTriggered: {
+      controlCommand.running = false
+      root.finishControl(-1)
+    }
+  }
+
   Process {
     id: discoveryCommand
     stdout: StdioCollector {
@@ -174,18 +260,10 @@ Item {
       onStreamFinished: root.discoveryResult = String(text || "")
     }
     stderr: StdioCollector { waitForEnd: true }
-    onExited: function(exitCode) {
-      root.loading = false
-      if (exitCode === 0) {
-        root.applyDiscovery(root.discoveryResult)
-        root.discoveryResult = ""
-        root.lastError = ""
-        root.refreshed()
-      } else {
-        root.discoveryResult = ""
-        root.lastError = "Could not find Spotify Connect devices on this network"
-        root.refreshFailed(root.lastError)
-      }
+    onExited: function(exitCode) { root.finishDiscovery(exitCode) }
+    onRunningChanged: {
+      if (running) discoveryDeadline.restart()
+      else Qt.callLater(function() { if (root && !discoveryCommand.running) root.finishDiscovery(-1) })
     }
   }
 
@@ -194,27 +272,16 @@ Item {
     stdinEnabled: true
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.activationResult = String(text || "")
     }
     stderr: StdioCollector { waitForEnd: true }
     onStarted: {
       write(root.activationInput + "\n")
       root.activationInput = ""
     }
-    onExited: function(exitCode) {
-      var requested = root.activatingDeviceId
-      root.activating = false
-      root.activatingDeviceId = ""
-      root.activationInput = ""
-      root.activationResult = ""
-      if (exitCode === 0) {
-        root.lastError = ""
-        root.activated(requested)
-      } else {
-        root.lastError = "Could not connect to this Spotify Connect device"
-        root.activationFailed(root.lastError)
-      }
-      root.runQueuedControl()
+    onExited: function(exitCode) { root.finishActivation(exitCode) }
+    onRunningChanged: {
+      if (running) activationDeadline.restart()
+      else Qt.callLater(function() { if (root && !activationCommand.running) root.finishActivation(-1) })
     }
   }
 
@@ -223,34 +290,16 @@ Item {
     stdinEnabled: true
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.controlResult = String(text || "")
     }
     stderr: StdioCollector { waitForEnd: true }
     onStarted: {
       write(root.controlInput + "\n")
       root.controlInput = ""
     }
-    onExited: function(exitCode) {
-      var requested = root.controllingDeviceId
-      var action = root.controlAction
-      var value = root.controlValue
-      root.controlling = false
-      root.controllingDeviceId = ""
-      root.controlAction = ""
-      root.controlValue = ""
-      root.controlInput = ""
-      root.controlResult = ""
-      if (exitCode === 0) {
-        root.lastError = ""
-        root.controlled(requested, action, value)
-      } else {
-        // The speaker is likely gone; do not make the user wait out a
-        // failure for every press that was waiting behind this one.
-        root.queuedControls = []
-        root.lastError = "Could not control this Sonos speaker"
-        root.controlFailed(requested, root.lastError)
-      }
-      root.runQueuedControl()
+    onExited: function(exitCode) { root.finishControl(exitCode) }
+    onRunningChanged: {
+      if (running) controlDeadline.restart()
+      else Qt.callLater(function() { if (root && !controlCommand.running) root.finishControl(-1) })
     }
   }
 }

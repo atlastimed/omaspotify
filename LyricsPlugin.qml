@@ -48,7 +48,7 @@ Item {
     try {
       var config = JSON.parse(String(raw || ""))
       var layout = config && config.bar && config.bar.layout
-      var sections = ["left", "center", "right"]
+      var sections = ["left", "centerBegin", "center", "centerEnd", "right", "tray"]
       for (var s = 0; s < sections.length && !found; s++) {
         var entries = layout ? layout[sections[s]] : null
         if (!entries || !entries.length) continue
@@ -73,7 +73,8 @@ Item {
   signal promptRequested(string surface, string availability)
   signal opened(string surface)
 
-  onAvailabilityChanged: resumeIntent()
+  // Also fires as a reload takes this apart, when its functions are already gone.
+  onAvailabilityChanged: if (typeof resumeIntent === "function") resumeIntent()
 
   function currentSong() {
     return service ? service.currentLyricsSong : null
@@ -267,6 +268,13 @@ Item {
     command: []
     stdout: StdioCollector { id: setupStdout; waitForEnd: true }
     stderr: StdioCollector { id: setupStderr; waitForEnd: true }
+    // A command that cannot start never exits, and must not stay busy for ever.
+    onRunningChanged: if (!running) Qt.callLater(function() {
+      if (lyrics && lyrics.busy && !setupProcess.running) {
+        lyrics.busy = false
+        if (!lyrics.error) lyrics.error = "Omasing could not be installed."
+      }
+    })
     onExited: function(exitCode) {
       lyrics.busy = false
       if (Number(exitCode) === 0) {

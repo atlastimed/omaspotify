@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import qs.Commons
 import qs.Ui
@@ -10,7 +12,10 @@ Button {
 
   property string glyphText: ""
   property real glyphSize: Style.font.icon
-  property real controlSize: Style.space(32)
+  property real controlSize: Style.space(30)
+  // On, for modes like shuffle and repeat: accent glyph with a dot under it, so
+  // the state is not carried by colour alone.
+  property bool indicator: false
 
   width: controlSize
   height: controlSize
@@ -37,13 +42,26 @@ Button {
       - (glyphMetrics.tightBoundingRect.x + root.tightGlyphWidth / 2)
     anchors.verticalCenterOffset: implicitHeight / 2
       - (baselineOffset + glyphMetrics.tightBoundingRect.y
-        + root.tightGlyphHeight / 2)
+        + root.tightGlyphHeight / 2) - (root.indicator ? Style.space(2) : 0)
     text: root.glyphText
+    textFormat: Text.PlainText
     font.family: root.fontFamily
     font.pixelSize: root.renderedGlyphSize
     renderType: Text.NativeRendering
-    color: root.selected
-      ? Style.selectedStateColor(root.foreground, root.accent)
-      : root.foreground
+    color: root.indicator ? root.accent
+      : (root.selected ? Style.selectedStateColor(root.foreground, root.accent)
+        : root.foreground)
+    opacity: root.enabled ? 1 : 0.45
+  }
+
+  Rectangle {
+    visible: root.indicator
+    width: Math.max(3, Style.space(3))
+    height: width
+    radius: width / 2
+    anchors.horizontalCenter: parent.horizontalCenter
+    anchors.bottom: parent.bottom
+    anchors.bottomMargin: Style.space(4)
+    color: root.accent
   }
 }

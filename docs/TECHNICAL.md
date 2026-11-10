@@ -22,22 +22,39 @@ Local audio defaults to Spotify Soloist, supervised as a child of the Rust
 `omaspotify-backend --soloist` adapter in `omaspotify-soloist.service`. The adapter
 translates Soloist's loopback WebSocket events into the existing private Unix
 socket and MPRIS interfaces. Commands are serialized and acknowledged, with bounded
-frames and timeouts. Position uses a monotonic clock and publishes once a second.
+frames and timeouts. One unanswered command is reported and survived; a second in a
+row ends the adapter so systemd can restart it. A lock taken before anything starts
+keeps a second adapter from disturbing a running one. Position uses a monotonic
+clock and publishes once a second.
 Playlist offsets that Soloist cannot express locally fall back to the Spotify
 Web API, preserving the chosen context and song. Volume uses Soloist's linear scale.
 
 The official binary lives in `~/.local/lib/omaspotify/soloist`. A bounded download
 from Spotify's CDN extracts only the executable, checks its reported build age,
 and atomically replaces it. The daily user timer checks the 90-day lifetime and
-renews after 75 days; it does not interrupt the currently running inode. The
-SHA-256 record describes the downloaded binary, not a vendor signature. Spotify
-does not publish a signature in this workflow; HTTPS is the download trust boundary.
+renews after 75 days; it does not interrupt the currently running inode. Starting
+playback only downloads when no usable build exists, so renewal never delays
+music; a build in its renewal window instead asks the update service to run in the
+background. The SHA-256 record describes the downloaded binary, not a vendor
+signature. Spotify does not publish a signature in this workflow; HTTPS is the
+download trust boundary. Running the plugin refreshes the installed helper and
+units offline, so a plugin update reaches them without a repair.
 
 The masked UI passes the key over stdin to `secret-tool`. Only the runtime helper
-retrieves it. Soloist's CLI requires an argument, so the key remains visible to
-same-user process inspection while Soloist runs. Its unauthenticated WebSocket
-binds to `127.0.0.1` with an ephemeral port. This is a local-user interface, not a
-security boundary against untrusted local programs or browser pages.
+retrieves it. Soloist's CLI requires an argument and offers no alternative, so the
+key is visible in the process's command line while Soloist runs. `/proc` is not
+mounted with `hidepid` on a default system, so that means to every local user, not
+only yours, and it also shows in `systemctl status`. Treat a shared machine
+accordingly. Core dumps are disabled for these units so a crash cannot write the
+key to disk. Soloist's unauthenticated WebSocket binds to `127.0.0.1` with an
+ephemeral port. This is a local-user interface, not a security boundary against
+untrusted local programs or browser pages.
+
+An expired build (Soloist exit status 10) or a missing key is reported as a
+terminal failure through `startup-error.json` rather than burning the restart
+limit. Soloist is sent SIGTERM and given 1.5 seconds so it can remove its endpoint
+files, and the adapter also removes any stale ones before starting. While paused
+or idle the adapter makes no wakeups at all.
 
 The optional `librespot` engine retains the commit-pinned upstream implementation,
 its 250 ms PulseAudio buffer, 200 ms play/pause fades and square-root volume mapping.
@@ -67,11 +84,28 @@ the crawl.
 The rate limit belongs to your configured client ID and is shared with any other
 clients you configure to use that same developer app. On a
 429 the app honours `Retry-After` for everything, and the gap between background
-requests doubles and stays wide for the rest of the run. One page you are
-waiting on may try once during a cooldown, in case the refusal has slack in it;
-after being refused itself it waits its turn. Every request logs where its time
+requests doubles and stays wide for the rest of the run. Every request logs where its time
 went — queueing, token refresh, or the network — which is what makes a slow call
 diagnosable at all. See `docs/LIBRARY-DATA.md` for the measurements.
+
+## The bar entry
+
+Omarchy's bar places its left, centre and right sections independently, so nothing
+stops a wide widget in one from being drawn over the next. `BarRoom.qml` measures
+the room between this entry's section and its neighbours and the entry never grows
+past it: the label shortens, and below a few letters gives way to the icon. Plugins
+are given no interface for this, so it reads the bar's own items. If their structure
+changes it finds nothing and steps aside, and the user's width cap applies alone.
+
+While Tunemarchy is in the same bar and holding its connection, the entry hides
+itself, and the mini-player shortcut opens Tunemarchy's panel. The shell offers a
+plugin that is both a panel and a bar widget no way to open its bar popup, so the
+shortcut opens this entry's popup directly through the surfaces the service keeps.
+
+Shortcut hints follow the modifier keys themselves. Only a modifier key seen going
+down counts as held, so a chord sent by a tool that sets modifiers without a key
+event, or a release that never arrives, cannot leave hints on. They appear after
+300 ms, and a second key before then cancels them as a chord being typed.
 
 ## Runtime requirements
 
@@ -110,7 +144,8 @@ from reloading the plugin — and killing the build — mid-setup. A stale
 ## Authentication
 
 Web API access uses Spotify's Authorization Code with PKCE flow and the public
-application identity from the user’s own developer app. The fixed callback
+application identity from the user’s own developer app. Activating Spotify Connect
+receivers is the exception: see Local Spotify Connect. The fixed callback
 is `http://127.0.0.1:8989/login`. Soloist pairs once through an official Spotify
 client and stores its personal key in the desktop keyring. Only the optional
 librespot backend performs independent browser authorization on loopback port `8000`. Receivers that advertise the
@@ -127,7 +162,9 @@ similar) is written to `$XDG_STATE_HOME/omaspotify/session.json` so it
 does not pollute Omarchy's `shell.json`. Older copies kept as plugin settings
 are read once and removed from `shell.json` after that file is written.
 Short-lived access tokens and PKCE values remain in the shell process. OAuth
-state is checked, callback listeners bind explicitly to IPv4 loopback, API URLs
+state is checked by the callback listener, which takes the expected value over
+stdin and keeps listening after a request that lacks it, so a stray local request
+cannot end a sign-in. Callback listeners bind explicitly to IPv4 loopback, API URLs
 are restricted to
 `https://api.spotify.com/v1`, and sensitive credential patterns are redacted
 before an error can reach the interface.
@@ -139,6 +176,18 @@ It does not request profile or email permissions.
 The Spotify account grant unlocks search, library, and remote control. Local
 playback remains a separate approval. The full player and mini-player stay
 usable after the account connects, even while that second step is unfinished.
+
+A failed token refresh keeps the session unless Spotify says the grant is over;
+requests then back off for a few seconds rather than each trying again.
+
+Stored library, history and searches carry the account they belong to. Signing in
+with a different account puts the first account's listening record aside, because
+Spotify keeps only the last fifty plays and it could never be rebuilt, and restores
+it if that account returns. Signing out deletes all of them.
+
+The library cache is only marked fresh after a complete, error-free fill of every
+collection, and it is checked against the clock when used, so a long-lived shell
+still refreshes it. Artwork on disk is capped at 3,000 files.
 
 ## Local Spotify Connect
 
@@ -157,6 +206,19 @@ and the reusable credential as fallbacks; authorization-code receivers such
 as Sonos receive a receiver-scoped code exchanged from that grant.
 It then waits for Spotify to report the genuine device before transferring
 playback when needed. It never asks for or stores the user's password.
+
+Receiver activation is not part of the public Web API. Minting a device-scoped
+token uses Spotify's `spclient` `device-auth` endpoint, and the code exchange uses
+the desktop client's identity, because receivers only accept those. It works today
+and may stop without notice. Everything else in the plugin uses documented APIs.
+
+ZeroConf has no way to authenticate a receiver, so anything on the LAN can claim to
+be a speaker and any helper request goes where its advertisement says. Discovery
+therefore probes only private addresses, refuses the cloud metadata address and any
+path with a query string, and is bounded in time. A receiver you pick is trusted
+with what it asks for, which can include the reusable credential if it advertises
+the `default` token type. That credential exists only if you have signed in with
+the librespot engine.
 
 An album or playlist in its unfiltered Original order starts Spotify's native
 context, preserving the complete server-side collection. Sorting or filtering
@@ -223,9 +285,22 @@ Neither path enables or starts the playback unit at login.
 ./scripts/test.sh
 ```
 
-The suite runs Omarchy manifest validation, Qt 6 QML lint, offline Qt tests with
-mocked authentication responses, shell-script tests, configuration checks, and a
-forbidden-heavyweight-dependency scan.
+The suite runs the Rust checks, Omarchy manifest validation, Qt 6 QML lint, offline
+Qt tests with mocked authentication responses, Python and shell-script tests,
+configuration checks, static analysis, an advisory scan, a
+forbidden-heavyweight-dependency scan, and real Quickshell integration fixtures that
+never touch the live desktop. CI runs exactly this script. `--no-integration` skips
+the Quickshell fixtures while iterating.
+
+To see the interface without touching your desktop or account:
+
+```bash
+./scripts/ui-preview.sh --theme catppuccin-latte --size 1000x660
+```
+
+It drives the real panel through every page with made-up data, inside a private
+headless compositor with no network, and writes screenshots under
+`~/.cache/omaspotify/ui-preview/`.
 
 Resource sampling:
 
@@ -258,7 +333,9 @@ keybinding check.
 
 ## Followed releases
 
-`FollowedReleases.qml` loads only while the releases tab is open. Cursor-paged
+`FollowedReleases.qml` does its network work only while the releases tab is open,
+and its cache file is first read when the panel opens rather than at shell start,
+so a large cache costs nothing until someone uses it. Cursor-paged
 followed artists are cached for six hours; each artist's first ten albums/singles,
 including empty results, for 24 hours. Each user-triggered batch makes at most 25
 album requests, sequentially, through the existing bounded transport. Failures
@@ -272,7 +349,7 @@ The review also covers Soloist status generations, position reset on track chang
 backend pending-command cancellation on disconnect, and the Tunemarchy protocol.
 See the catalog loader tests and native lifecycle/disconnect fixtures. Spotify
 editorial/algorithmic playlists and unavailable recommendation endpoints remain
-platform restrictions; no private Spotify APIs are used.
+platform restrictions, and this feed uses documented Web API endpoints only.
 
 Soloist volume changes are saved atomically as a private percentage file and
 passed through its supported `--initial-volume` option on restart, including mute.

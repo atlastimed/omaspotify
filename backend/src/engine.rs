@@ -38,8 +38,14 @@ const INITIAL_VOLUME: u16 = ((u16::MAX as u32 * 90) / 100) as u16;
 const ENGINE_QUEUE_CAPACITY: usize = 64;
 const RECONNECT_LIMIT: usize = 5;
 const RECONNECT_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// A session that held this long ended for a reason retrying can fix.
+const SHORT_SESSION: Duration = Duration::from_secs(30);
 const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const SPIRC_STOP_TIMEOUT: Duration = Duration::from_secs(5);
+const SHUTDOWN_SPIRC_TIMEOUT: Duration = Duration::from_secs(3);
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
+const RECONNECT_BASE_DELAY: Duration = Duration::from_secs(1);
+const RECONNECT_DELAY_MAX: Duration = Duration::from_secs(60);
 const PAUSE_SETTLE_TIMEOUT: Duration = Duration::from_secs(1);
 const AUDIO_KEY_UNAVAILABLE_CODE: &str = "audio_key_unavailable";
 const AUDIO_KEY_UNAVAILABLE_MESSAGE: &str = "Spotify did not provide the audio key required to play this track on this computer. Try another Spotify Connect device.";
@@ -54,14 +60,18 @@ pub type EngineSender = mpsc::Sender<EngineRequest>;
 pub struct EngineRuntime {
     pub commands: EngineSender,
     pub(crate) shutdown: watch::Sender<bool>,
-    pub(crate) done: oneshot::Receiver<Result<()>>,
+    pub(crate) done: Option<oneshot::Receiver<Result<()>>>,
 }
 
 impl EngineRuntime {
+    /// Safe to call again after it has returned: an engine reports its end only once.
     pub async fn wait_done(&mut self) -> Result<()> {
-        (&mut self.done)
-            .await
-            .context("playback engine supervisor stopped")?
+        let Some(done) = self.done.as_mut() else {
+            return Ok(());
+        };
+        let result = done.await;
+        self.done = None;
+        result.context("playback engine supervisor stopped")?
     }
 
     pub fn shutdown(&self) {
@@ -112,14 +122,19 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
         volume_steps: 64,
         ..ConnectConfig::default()
     };
-    let (spirc, spirc_task) = Spirc::new(
-        connect_config.clone(),
-        session.clone(),
-        credentials.clone(),
-        Arc::clone(&player),
-        Arc::clone(&mixer),
+    let (spirc, spirc_task) = tokio::time::timeout(
+        CONNECT_TIMEOUT,
+        Spirc::new(
+            connect_config.clone(),
+            session.clone(),
+            credentials.clone(),
+            Arc::clone(&player),
+            Arc::clone(&mixer),
+        ),
     )
     .await
+    .context("timed out connecting the librespot session")?
+    .map_err(login_failure_or_error)
     .context("failed to connect the librespot session")?;
     let spirc = Arc::new(spirc);
 
@@ -170,7 +185,7 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
     Ok(EngineRuntime {
         commands,
         shutdown,
-        done,
+        done: Some(done),
     })
 }
 
@@ -191,6 +206,7 @@ async fn supervise_sessions(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let mut reconnects = VecDeque::new();
+    let mut session_began = Instant::now();
 
     loop {
         tokio::select! {
@@ -209,7 +225,11 @@ async fn supervise_sessions(
             }
             changed = shutdown.changed() => {
                 if changed.is_err() || *shutdown.borrow() {
+                    // Lets librespot pause and tell Spotify this device has gone.
                     let _ = spirc.shutdown();
+                    if tokio::time::timeout(SHUTDOWN_SPIRC_TIMEOUT, &mut spirc_task).await.is_err() {
+                        spirc_task.abort();
+                    }
                     return Ok(());
                 }
                 continue;
@@ -225,34 +245,56 @@ async fn supervise_sessions(
         });
 
         let now = Instant::now();
-        if !record_reconnect(&mut reconnects, now) {
+        if !record_reconnect(&mut reconnects, now.duration_since(session_began), now) {
             return Err(crate::failure::Failure::ReconnectExhausted.into());
         }
         log::warn!("librespot session ended; reconnecting");
 
-        if !session.is_invalid() {
-            session.shutdown();
+        // A session that keeps ending at once should not burn the budget in seconds.
+        let settle =
+            RECONNECT_BASE_DELAY.saturating_mul(1 << reconnects.len().saturating_sub(1).min(5));
+        tokio::select! {
+            () = tokio::time::sleep(settle) => {}
+            _ = shutdown.changed() => return Ok(()),
         }
-        session = replacement_session(&session, &session_config, Some(runtime_cache.clone()));
-        player.set_session(session.clone());
-        let reconnect = Spirc::new(
-            reconnect_config(&connect_config, mixer.as_ref()),
-            session.clone(),
-            credentials.clone(),
-            Arc::clone(&player),
-            Arc::clone(&mixer),
-        );
-        tokio::pin!(reconnect);
-        let (next_spirc, next_task) = tokio::select! {
-            result = &mut reconnect => {
-                result.context("failed to reconnect the librespot session")?
+
+        // A network outage is not a reason to give up: keep trying until it returns.
+        let mut delay = RECONNECT_BASE_DELAY;
+        let (next_spirc, next_task) = loop {
+            if !session.is_invalid() {
+                session.shutdown();
             }
-            changed = shutdown.changed() => {
-                if changed.is_err() || *shutdown.borrow() {
-                    return Ok(());
-                }
-                continue;
+            session = replacement_session(&session, &session_config, Some(runtime_cache.clone()));
+            player.set_session(session.clone());
+            let attempt = tokio::time::timeout(
+                CONNECT_TIMEOUT,
+                Spirc::new(
+                    reconnect_config(&connect_config, mixer.as_ref()),
+                    session.clone(),
+                    credentials.clone(),
+                    Arc::clone(&player),
+                    Arc::clone(&mixer),
+                ),
+            );
+            tokio::select! {
+                result = attempt => match result {
+                    Ok(Ok(connected)) => break connected,
+                    Ok(Err(error)) => {
+                        let error = login_failure_or_error(error);
+                        if error.downcast_ref::<crate::failure::Failure>().is_some() {
+                            return Err(error);
+                        }
+                        log::warn!("could not reconnect the librespot session: {error:#}");
+                    }
+                    Err(_) => log::warn!("timed out reconnecting the librespot session"),
+                },
+                _ = shutdown.changed() => return Ok(()),
             }
+            tokio::select! {
+                () = tokio::time::sleep(delay) => {}
+                _ = shutdown.changed() => return Ok(()),
+            }
+            delay = delay.saturating_mul(2).min(RECONNECT_DELAY_MAX);
         };
 
         spirc = Arc::new(next_spirc);
@@ -262,6 +304,7 @@ async fn supervise_sessions(
             let _ = spirc.load(LoadRequest::from_tracks(list, options));
         }
         spirc_task = tokio::spawn(next_task);
+        session_began = Instant::now();
         current_spirc.send_replace(Some(Arc::clone(&spirc)));
         state.update(|current| {
             current.lifecycle = Lifecycle::Ready;
@@ -271,6 +314,21 @@ async fn supervise_sessions(
         });
         log::info!("reconnected the librespot session");
     }
+}
+
+// Retrying cannot fix a refused login, so that one needs the user to sign in again.
+fn login_failure_or_error(error: librespot_core::Error) -> anyhow::Error {
+    if is_refused_login(&error) {
+        crate::failure::Failure::MissingCredentials.into()
+    } else {
+        error.into()
+    }
+}
+
+// An HTTP 403 reports the same kind of error, but that can pass, so go by the words too.
+fn is_refused_login(error: &librespot_core::Error) -> bool {
+    error.kind == librespot_core::error::ErrorKind::PermissionDenied
+        && error.error.to_string().starts_with("Login failed")
 }
 
 // Spotify hands the last song back to a device that returns with the same session id.
@@ -338,12 +396,15 @@ async fn session_lost(session: &Session) {
     }
 }
 
-fn record_reconnect(attempts: &mut VecDeque<Instant>, now: Instant) -> bool {
+fn record_reconnect(attempts: &mut VecDeque<Instant>, lasted: Duration, now: Instant) -> bool {
     while attempts
         .front()
         .is_some_and(|attempt| now.saturating_duration_since(*attempt) >= RECONNECT_WINDOW)
     {
         attempts.pop_front();
+    }
+    if lasted >= SHORT_SESSION {
+        return true;
     }
     if attempts.len() >= RECONNECT_LIMIT {
         return false;
@@ -403,7 +464,8 @@ fn load_credentials(credentials_root: &Path, legacy_cache_root: &Path) -> Result
 async fn run_commands(
     mut receiver: mpsc::Receiver<EngineRequest>,
     current_spirc: watch::Receiver<Option<Arc<Spirc>>>,
-    player: Arc<Player>,
+    // Held so the player lives for as long as commands can arrive.
+    _player: Arc<Player>,
     fader: Fader,
     state: StateStore,
     track_list: watch::Sender<Vec<String>>,
@@ -415,7 +477,7 @@ async fn run_commands(
             &state,
             request.command,
             |command| match current_spirc.borrow().clone() {
-                Some(spirc) => execute(&spirc, &player, command)
+                Some(spirc) => execute(&spirc, command)
                     .map(|()| serde_json::json!({}))
                     .map_err(|error| ProtocolError::new("engine_error", error.to_string())),
                 None => Err(ProtocolError::new(
@@ -462,10 +524,8 @@ async fn softly<R, E>(
     }
 }
 
-fn execute(spirc: &Spirc, player: &Player, command: Command) -> Result<()> {
-    dispatch_local_command(command, |command| {
-        execute_spirc_command(spirc, player, command)
-    })
+fn execute(spirc: &Spirc, command: Command) -> Result<()> {
+    dispatch_local_command(command, |command| execute_spirc_command(spirc, command))
 }
 
 fn dispatch_local_command(
@@ -483,7 +543,7 @@ fn dispatch_local_command(
     send(command)
 }
 
-fn execute_spirc_command(spirc: &Spirc, player: &Player, command: Command) -> Result<()> {
+fn execute_spirc_command(spirc: &Spirc, command: Command) -> Result<()> {
     match command {
         Command::Activate => spirc.activate()?,
         Command::Play => spirc.play()?,
@@ -538,9 +598,6 @@ fn execute_spirc_command(spirc: &Spirc, player: &Player, command: Command) -> Re
             bail!("command is handled by the protocol server")
         }
     }
-
-    // Keep the player handle alive for the lifetime of the command task.
-    let _ = player;
     Ok(())
 }
 
@@ -828,6 +885,17 @@ pub async fn send_with_reply(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn only_a_refused_login_is_treated_as_final() {
+        let refused = librespot_core::Error::permission_denied(std::io::Error::other(
+            "Login failed with reason: Bad credentials",
+        ));
+        assert!(is_refused_login(&refused));
+        let forbidden =
+            librespot_core::Error::permission_denied(std::io::Error::other("Status code 403"));
+        assert!(!is_refused_login(&forbidden));
+    }
+
     use super::*;
     use crate::{
         fade::{
@@ -949,14 +1017,40 @@ mod tests {
         for offset in 0..RECONNECT_LIMIT {
             assert!(record_reconnect(
                 &mut attempts,
+                Duration::ZERO,
                 start + Duration::from_secs(offset as u64)
             ));
         }
         assert!(!record_reconnect(
             &mut attempts,
+            Duration::ZERO,
             start + Duration::from_secs(RECONNECT_LIMIT as u64)
         ));
-        assert!(record_reconnect(&mut attempts, start + RECONNECT_WINDOW));
+        assert!(record_reconnect(
+            &mut attempts,
+            Duration::ZERO,
+            start + RECONNECT_WINDOW
+        ));
+    }
+
+    #[test]
+    fn sessions_that_held_do_not_use_up_the_reconnect_budget() {
+        let start = Instant::now();
+        let mut attempts = VecDeque::new();
+        for offset in 0..RECONNECT_LIMIT as u64 * 3 {
+            assert!(record_reconnect(
+                &mut attempts,
+                SHORT_SESSION,
+                start + Duration::from_secs(offset * 40)
+            ));
+        }
+        assert!(attempts.is_empty());
+        assert!(record_reconnect(
+            &mut attempts,
+            SHORT_SESSION - Duration::from_millis(1),
+            start
+        ));
+        assert_eq!(attempts.len(), 1);
     }
 
     #[tokio::test]

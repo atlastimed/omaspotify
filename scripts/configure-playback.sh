@@ -19,6 +19,7 @@ if IFS= read -r normalisation && [[ -n $normalisation ]]; then
   normalisation_specified=1
 fi
 
+# shellcheck disable=SC1003 # A single backslash is exactly what this looks for.
 if [[ -z $device_name || ${#device_name} -gt 64 || $device_name == *'"'* || $device_name == *'\'* ]]; then
   exit 3
 fi
@@ -55,7 +56,6 @@ awk -v name="$device_name" -v rate="$bitrate" -v rate_set="$bitrate_specified" \
     next
   }
   /^device[[:space:]]*=/ {
-    next
     next
   }
   /^autoplay[[:space:]]*=/ {

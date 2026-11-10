@@ -2,6 +2,7 @@ scripts/__pycache__/
 **/__pycache__/
 *.pyc
 backend/target/
+.ruff_cache/
 
 # Agent instruction files are kept out of the published plugin tree.
 AGENTS.md

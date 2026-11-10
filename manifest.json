@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "io.github.atlastimed.omaspotify",
   "name": "OmaSpotify",
-  "version": "2.2.0",
+  "version": "2.3.0",
   "author": "atlastimed (fork of jeremylanger/omaspotify)",
   "license": "MIT",
   "description": "Native Spotify player for Omarchy 4.5, with a shared playback connection for Tunemarchy.",
@@ -64,7 +64,7 @@
         "type": "boolean",
         "label": "Show OmaSpotify bar widget",
         "defaultValue": true,
-        "description": "Turn off when using Tunemarchy as your bar player. The full player and playback remain available."
+        "description": "Steps aside by itself while Tunemarchy is in the bar. Turn off to hide it always; the full player and playback remain available."
       },
       {
         "key": "deviceName",
@@ -126,7 +126,7 @@
           "Off"
         ],
         "defaultValue": "On",
-        "description": "After the first shortcut, matching controls show the next key to press. Shortcuts still work when this is off."
+        "description": "Hold Ctrl, Shift or Alt to see the keys on each control. Shortcuts still work when this is off."
       },
       {
         "key": "showLyrics",

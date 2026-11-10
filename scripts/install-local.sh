@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-source_root=$(CDPATH= cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
+# Resolved, so a rerun recognises its own link when the checkout sits behind one.
+source_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 section=left
 
 usage() {
@@ -47,7 +48,8 @@ omarchy plugin validate "$source_root"
 
 plugins_root="${XDG_CONFIG_HOME:-"$HOME/.config"}/omarchy/plugins"
 target="$plugins_root/io.github.atlastimed.omaspotify"
-install -d -m 700 -- "$plugins_root"
+# This directory is shared with other plugins, so it is never tightened.
+mkdir -p -- "$plugins_root"
 
 if [[ -L $target && $(readlink -f -- "$target") == "$source_root" ]]; then
   echo "Local plugin link already points at this checkout."

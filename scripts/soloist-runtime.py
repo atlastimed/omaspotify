@@ -3,6 +3,7 @@
 
 import fcntl
 import hashlib
+import http.client
 import json
 import os
 import platform
@@ -13,24 +14,57 @@ import sys
 import tarfile
 import tempfile
 import time
+import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 
+
+def xdg_path(variable, fallback):
+    # The XDG spec says relative values are invalid and must be ignored.
+    value = os.environ.get(variable, "")
+    return Path(value) if value.startswith("/") else Path.home() / fallback
+
+
 RUNTIME = Path.home() / ".local/lib/omaspotify"
-CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-STATE = (
-    Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local/state"))
-    / "omaspotify/soloist"
-)
-CACHE = (
-    Path(os.environ.get("XDG_CACHE_HOME", Path.home() / ".cache"))
-    / "omaspotify/soloist"
-)
+CONFIG = xdg_path("XDG_CONFIG_HOME", ".config")
+STATE = xdg_path("XDG_STATE_HOME", ".local/state") / "omaspotify/soloist"
+CACHE = xdg_path("XDG_CACHE_HOME", ".cache") / "omaspotify/soloist"
 UNIT = "omaspotify-soloist.service"
+UPDATE_UNIT = "omaspotify-soloist-update.service"
+TIMER_UNIT = "omaspotify-soloist-update.timer"
 KEY = ["service", "omaspotify", "kind", "soloist-api-key"]
 MAX_ARCHIVE = 80 * 1024 * 1024
 MAX_BINARY = 160 * 1024 * 1024
 BUILD_LIFETIME = 90 * 86400
+RENEW_AFTER = 75 * 86400
+# How long an answer of "nothing newer yet" stands before asking again.
+RECHECK_AFTER = 20 * 3600
+# Must stay under the backend's startup deadline, or a slow download is killed
+# part way and starts again from nothing on every restart.
+START_DOWNLOAD_SECONDS = 75
+INSTALL_DOWNLOAD_SECONDS = 600
+# The backend turns these into errors the UI can explain, and systemd does not retry them.
+EXIT_MISSING_KEY = 77
+EXIT_EXPIRED = 75
+
+
+class StartFailure(ValueError):
+    """A reason playback cannot start that restarting would not fix."""
+
+    def __init__(self, message, code):
+        super().__init__(message)
+        self.code = code
+
+
+DOWNLOAD_FAILURES = (
+    tarfile.TarError,
+    EOFError,
+    KeyError,
+    zlib.error,
+    http.client.HTTPException,
+    urllib.error.URLError,
+)
 
 
 def run(args, **kwargs):
@@ -40,7 +74,20 @@ def run(args, **kwargs):
 
 
 def key():
-    return run(["secret-tool", "lookup", *KEY]).stdout.strip()
+    result = run(["secret-tool", "lookup", *KEY])
+    # Exit 1 with nothing said means no such key. Anything else is a keyring
+    # that could not be asked, and the key may well be there.
+    if result.returncode not in (0, 1) or (result.returncode and result.stderr.strip()):
+        raise ValueError("The keyring could not be reached")
+    return result.stdout.strip()
+
+
+def key_known():
+    """True or False when the keyring answers, None when it cannot be asked."""
+    try:
+        return bool(key())
+    except (OSError, ValueError, subprocess.SubprocessError):
+        return None
 
 
 def build_timestamp(output):
@@ -55,22 +102,89 @@ def build_timestamp(output):
 
 def installed_metadata():
     try:
-        return json.loads((RUNTIME / "soloist-build.json").read_text())
+        metadata = json.loads((RUNTIME / "soloist-build.json").read_text())
     except (OSError, ValueError):
         return {}
+    return metadata if isinstance(metadata, dict) else {}
 
 
-def update(force=False):
-    RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
-    with (RUNTIME / ".soloist-install.lock").open("a") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
-        old = installed_metadata()
-        if (
-            not force
-            and (RUNTIME / "soloist").is_file()
-            and old.get("built_at", 0) + 75 * 86400 > time.time()
-        ):
+def build_time():
+    built_at = installed_metadata().get("built_at")
+    return built_at if isinstance(built_at, int) and not isinstance(built_at, bool) else 0
+
+
+def lock_for(lock, deadline):
+    """Wait for the install lock, so a stalled renewal cannot block playback forever."""
+    while True:
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise ValueError("Another Soloist update is still running") from None
+            time.sleep(0.5)
+
+
+def download_archive(url, destination, deadline):
+    with urllib.request.urlopen(url, timeout=60) as response, destination.open("wb") as output:
+        # No executable downloads may redirect away from Spotify's CDN.
+        if not response.url.startswith("https://soloist-builds.spotifycdn.com/"):
+            raise ValueError("Unexpected Soloist download destination")
+        size = 0
+        # read1 returns what has arrived, so a slow trickle still meets the deadline check.
+        while chunk := response.read1(65536):
+            size += len(chunk)
+            if size > MAX_ARCHIVE:
+                raise ValueError("Soloist archive exceeds the download limit")
+            if time.monotonic() > deadline:
+                raise ValueError("Soloist download took too long")
+            output.write(chunk)
+
+
+def extract_executable(archive, destination):
+    with tarfile.open(archive, "r:gz") as bundle:
+        # Walk rather than look up by name, which would inflate the whole archive.
+        for member in bundle:
+            if member.name == "soloist":
+                break
+            if bundle.offset > MAX_BINARY:
+                raise ValueError("Soloist archive has an invalid executable")
+        else:
+            raise ValueError("Soloist archive has no executable")
+        if not member.isfile() or not 0 < member.size <= MAX_BINARY:
+            raise ValueError("Soloist archive has an invalid executable")
+        with bundle.extractfile(member) as source, destination.open("wb") as output:
+            shutil.copyfileobj(source, output)
+        # No archive paths, links, scripts, or permissions are extracted.
+
+
+def sweep_interrupted_downloads():
+    # A killed download cannot clean up after itself. Caller holds the install lock.
+    for leftover in RUNTIME.glob(".soloist-*"):
+        if leftover.is_dir() and not leftover.is_symlink():
+            shutil.rmtree(leftover, ignore_errors=True)
+
+
+def update(force=False, deadline=INSTALL_DOWNLOAD_SECONDS):
+    RUNTIME.mkdir(parents=True, exist_ok=True, mode=0o700)
+    # One budget for the wait and the download together.
+    end = time.monotonic() + deadline
+    with (RUNTIME / ".soloist-install.lock").open("a") as lock:
+        lock_for(lock, end)
+        old_built_at = build_time()
+        now = time.time()
+        if not force and (RUNTIME / "soloist").is_file():
+            if old_built_at + RENEW_AFTER > now:
+                return
+            # Spotify had nothing newer a few hours ago, and this one still runs.
+            checked_at = installed_metadata().get("checked_at")
+            if (
+                isinstance(checked_at, int)
+                and checked_at + RECHECK_AFTER > now >= checked_at
+                and old_built_at + BUILD_LIFETIME > now
+            ):
+                return
+        sweep_interrupted_downloads()
         arch = {"x86_64": "x86_64", "aarch64": "arm64", "armv7l": "arm32"}.get(
             platform.machine()
         )
@@ -80,32 +194,12 @@ def update(force=False):
         with tempfile.TemporaryDirectory(prefix=".soloist-", dir=RUNTIME) as temporary:
             directory = Path(temporary)
             archive = directory / "download.tar.gz"
-            with (
-                urllib.request.urlopen(url, timeout=60) as response,
-                archive.open("wb") as output,
-            ):
-                # No executable downloads may redirect away from Spotify's CDN.
-                if not response.url.startswith(
-                    "https://soloist-builds.spotifycdn.com/"
-                ):
-                    raise ValueError("Unexpected Soloist download destination")
-                size = 0
-                while chunk := response.read(65536):
-                    size += len(chunk)
-                    if size > MAX_ARCHIVE:
-                        raise ValueError("Soloist archive exceeds the download limit")
-                    output.write(chunk)
             candidate = directory / "soloist"
-            with tarfile.open(archive, "r:gz") as bundle:
-                member = bundle.getmember("soloist")
-                if not member.isfile() or not 0 < member.size <= MAX_BINARY:
-                    raise ValueError("Soloist archive has an invalid executable")
-                with (
-                    bundle.extractfile(member) as source,
-                    candidate.open("wb") as output,
-                ):
-                    shutil.copyfileobj(source, output)
-                # No archive paths, links, scripts, or permissions are extracted.
+            try:
+                download_archive(url, archive, end)
+                extract_executable(archive, candidate)
+            except DOWNLOAD_FAILURES as error:
+                raise ValueError("Soloist download was invalid") from error
             candidate.chmod(0o755)
             version = run([str(candidate), "--version"])
             if version.returncode:
@@ -113,10 +207,11 @@ def update(force=False):
             built_at = build_timestamp(version.stdout)
             if built_at + BUILD_LIFETIME <= time.time():
                 raise ValueError("Spotify supplied an expired Soloist build")
-            if built_at < old.get("built_at", 0):
+            if built_at < old_built_at:
                 raise ValueError("Refusing to replace Soloist with an older build")
             metadata = {
                 "built_at": built_at,
+                "checked_at": int(time.time()),
                 "source": url,
                 "sha256": hashlib.sha256(candidate.read_bytes()).hexdigest(),
                 "version": version.stdout.strip()[:256],
@@ -136,22 +231,21 @@ def systemd_quote(path):
     )
 
 
-def install():
-    existing = shutil.which("soloist")
-    if existing and Path(existing).resolve() != (RUNTIME / "soloist").resolve():
-        raise ValueError(
-            "Soloist is already installed elsewhere; choose one installation source first"
-        )
-    update()
-    destination = RUNTIME / "soloist-runtime.py"
-    if Path(__file__).resolve() != destination.resolve():
-        shutil.copyfile(__file__, destination)
-        destination.chmod(0o755)
-    units = CONFIG / "systemd/user"
-    units.mkdir(parents=True, exist_ok=True)
-    backend = systemd_quote(RUNTIME / "omaspotify-backend")
-    config = systemd_quote(CONFIG / "omaspotify/playback.conf")
-    (units / UNIT).write_text(f"""[Unit]
+def unit_files(backend, config):
+    hardening = """UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+LimitCORE=0
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+"""
+    helper = systemd_quote(RUNTIME / "soloist-runtime.py")
+    return {
+        UNIT: f"""[Unit]
 Description=OmaSpotify with Spotify Soloist
 After=graphical-session.target sound.target
 Conflicts=omaspotify.service
@@ -159,26 +253,23 @@ StartLimitIntervalSec=300
 StartLimitBurst=3
 
 [Service]
-ExecStart={backend} --soloist --config-path={config}
+ExecStart={systemd_quote(backend)} --soloist --config-path={systemd_quote(config)}
 Restart=on-failure
 RestartSec=5
 RestartPreventExitStatus=75 77 78
 TimeoutStopSec=5
-UMask=0077
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=strict
-""")
-    (units / "omaspotify-soloist-update.service").write_text(f"""[Unit]
+{hardening}""",
+        UPDATE_UNIT: f"""[Unit]
 Description=Renew expiring Spotify Soloist build
 
 [Service]
 Type=oneshot
-ExecStart=/usr/bin/python3 {systemd_quote(destination)} update
-UMask=0077
-NoNewPrivileges=true
-""")
-    (units / "omaspotify-soloist-update.timer").write_text("""[Unit]
+ExecStart=/usr/bin/python3 {helper} update
+TimeoutStartSec=15min
+ProtectHome=read-only
+ReadWritePaths={systemd_quote(RUNTIME)}
+{hardening}""",
+        TIMER_UNIT: """[Unit]
 Description=Check Spotify Soloist build lifetime daily
 
 [Timer]
@@ -188,30 +279,102 @@ RandomizedDelaySec=1h
 
 [Install]
 WantedBy=timers.target
-""")
-    for args in (
-        ["daemon-reload"],
-        ["enable", "--now", "omaspotify-soloist-update.timer"],
-    ):
+""",
+    }
+
+
+def write_atomically(path, content, mode):
+    """Write only what changed. Returns whether the file on disk was replaced."""
+    try:
+        if path.read_bytes() == content and (path.stat().st_mode & 0o777) == mode:
+            return False
+    except OSError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as output:
+            output.write(content)
+        os.chmod(temporary, mode)
+        os.replace(temporary, path)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
+    return True
+
+
+def sync():
+    """Bring the installed helper and units up to this plugin version, offline.
+
+    A plugin update replaces this file but not the copy the service runs, and
+    Install / repair is only offered while playback is broken.
+    """
+    if not (RUNTIME / "soloist").is_file():
+        return False
+    units = CONFIG / "systemd/user"
+    changed = False
+    source = Path(__file__).read_bytes()
+    destination = RUNTIME / "soloist-runtime.py"
+    if Path(__file__).resolve() != destination.resolve():
+        changed = write_atomically(destination, source, 0o755)
+    files = unit_files(RUNTIME / "omaspotify-backend", CONFIG / "omaspotify/playback.conf")
+    for name, content in files.items():
+        changed = write_atomically(units / name, content.encode(), 0o600) or changed
+    if changed and run(["systemctl", "--user", "daemon-reload"]).returncode:
+        raise ValueError("Could not register Soloist's user service and update timer")
+    return changed
+
+
+def install():
+    existing = shutil.which("soloist")
+    if existing and Path(existing).resolve() != (RUNTIME / "soloist").resolve():
+        raise ValueError(
+            "Soloist is already installed elsewhere; choose one installation source first"
+        )
+    update()
+    sync()
+    for args in (["daemon-reload"], ["enable", "--now", TIMER_UNIT]):
         if run(["systemctl", "--user", *args]).returncode:
             raise ValueError(
                 "Could not register Soloist's user service and update timer"
             )
 
 
+def backend_current():
+    """Whether the installed backend was built from this plugin's source."""
+    fingerprint = Path(__file__).resolve().parent / "backend-source-id.sh"
+    if not fingerprint.is_file():
+        return True
+    try:
+        recorded = (RUNTIME / "backend-source.sha256").read_text().strip()
+    except OSError:
+        return False
+    result = run([str(fingerprint)])
+    return result.returncode == 0 and result.stdout.strip() == recorded
+
+
+def unit_running():
+    try:
+        return run(["systemctl", "--user", "is-active", "--quiet", UNIT]).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
 def status():
     info = installed_metadata()
-    built_at = info.get("built_at", 0)
-    return {
+    built_at = build_time()
+    result = {
         "installed": (RUNTIME / "soloist").is_file(),
         "unit": (CONFIG / "systemd/user" / UNIT).is_file(),
-        "key": None if "--no-key" in sys.argv else bool(key()),
+        "key": None if "--no-key" in sys.argv else key_known(),
         "paired": (STATE / "paired").is_file(),
-        "running": run(["systemctl", "--user", "is-active", "--quiet", UNIT]).returncode
-        == 0,
+        "running": unit_running(),
         "daysRemaining": max(0, int((built_at + BUILD_LIFETIME - time.time()) / 86400)),
         "version": info.get("version", ""),
     }
+    if "--backend" in sys.argv:
+        result["backendCurrent"] = backend_current()
+    return result
 
 
 def initial_volume_args():
@@ -225,20 +388,49 @@ def initial_volume_args():
     return []
 
 
-def start_receiver():
-    # Updates cannot replace the key or pairing. Failed renewal can use a still-valid build.
+def ensure_runnable_build():
+    """Download only when nothing here can run; otherwise renewal never delays music."""
+    now = time.time()
+    built_at = build_time()
+    if (RUNTIME / "soloist").is_file() and built_at + BUILD_LIFETIME > now:
+        if built_at + RENEW_AFTER <= now:
+            try:
+                run(["systemctl", "--user", "start", "--no-block", UPDATE_UNIT])
+            except (OSError, subprocess.SubprocessError):
+                pass
+        return
+    # Updates cannot replace the key or pairing.
     try:
-        update()
+        update(deadline=START_DOWNLOAD_SECONDS)
     except (OSError, ValueError, subprocess.SubprocessError):
-        if installed_metadata().get("built_at", 0) + BUILD_LIFETIME <= time.time():
-            raise ValueError("Soloist has expired and could not be updated") from None
+        raise StartFailure(
+            "Soloist has expired and could not be updated", EXIT_EXPIRED
+        ) from None
+
+
+def clear_key():
+    # Exit 1 means nothing matched only when nothing was said on stderr; an
+    # unreachable keyring also exits 1, and the key would still be there.
+    result = run(["secret-tool", "clear", *KEY])
+    return result.returncode == 0 or (result.returncode == 1 and not result.stderr.strip())
+
+
+def start_receiver():
+    ensure_runnable_build()
     token = key()
     if not token:
-        raise ValueError("Add your Spotify Soloist API key in OmaSpotify Settings")
+        raise StartFailure(
+            "Add your Spotify Soloist API key in OmaSpotify Settings", EXIT_MISSING_KEY
+        )
     for directory in (STATE, CACHE):
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         directory.chmod(0o700)
     name = sys.argv[2] if len(sys.argv) > 2 else "OmaSpotify"
+    # Our own errors go to the journal, but Soloist's output stays out of it because
+    # its command line holds the key.
+    silence = os.open(os.devnull, os.O_WRONLY)
+    os.dup2(silence, sys.stderr.fileno())
+    os.close(silence)
     os.execv(
         str(RUNTIME / "soloist"),
         [
@@ -267,6 +459,8 @@ def main():
         install()
     elif action == "update":
         update(force="--force" in sys.argv[2:])
+    elif action == "sync":
+        sync()
     elif action == "run":
         start_receiver()
     elif action == "status":
@@ -286,7 +480,7 @@ def main():
             raise ValueError(f"Could not {action} Soloist")
     elif action == "clear":
         run(["systemctl", "--user", "stop", UNIT])
-        if run(["secret-tool", "clear", *KEY]).returncode not in (0, 1):
+        if not clear_key():
             raise ValueError("Could not clear the Soloist key")
         # This directory belongs exclusively to this integration, never ~/.local/share/soloist.
         if STATE.is_symlink():
@@ -300,6 +494,9 @@ def main():
 if __name__ == "__main__":
     try:
         main()
+    except StartFailure as error:
+        print(error, file=sys.stderr)
+        sys.exit(error.code)
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         # Never print subprocess commands, outputs or exception details containing keys.
         print(

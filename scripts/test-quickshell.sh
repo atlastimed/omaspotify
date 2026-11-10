@@ -4,15 +4,26 @@ source_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 test_root=$(mktemp -d)
 trap 'rm -rf -- "$test_root"' EXIT
 mkdir -m 700 "$test_root/runtime"
-if [[ -n ${WAYLAND_DISPLAY:-} && $WAYLAND_DISPLAY != /* ]]; then
-  export WAYLAND_DISPLAY="$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY"
+# Never on the live desktop. Only a compositor named on purpose gets used.
+if [[ -n ${OMASPOTIFY_TEST_WAYLAND_DISPLAY:-} ]]; then
+  export WAYLAND_DISPLAY=$OMASPOTIFY_TEST_WAYLAND_DISPLAY
+else
+  unset WAYLAND_DISPLAY
 fi
 export XDG_RUNTIME_DIR="$test_root/runtime"
+# The fixtures run the real service, which keeps artwork, state and units under
+# the home directory and empties them on sign-out. None of it may be the real one.
+export HOME="$test_root/home"
+export XDG_CACHE_HOME="$HOME/.cache" XDG_STATE_HOME="$HOME/.local/state"
+export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
 export QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1
 cp "$source_root/"{AuthManager.qml,Api.js,OAuth.js} "$test_root/"
 sed 's|import "../.." as Plugin|import "." as Plugin|' \
   "$source_root/tests/integration/AuthIdentity.qml" > "$test_root/shell.qml"
+# Its own session bus, so a refused sign-in clears nothing in the real keyring.
 env -u WAYLAND_DISPLAY QT_QPA_PLATFORM=offscreen timeout 15s \
+  dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- \
   qs --no-color -p "$test_root" > "$test_root/output" 2>&1 || {
   cat "$test_root/output"
   exit 1
@@ -24,7 +35,7 @@ rg -q AUTH_IDENTITY_PASS "$test_root/output" || {
 echo 'Quickshell authorization integration passed.'
 
 mkdir -p "$test_root/soloist/plugin/scripts"
-cp "$source_root/SoloistManager.qml" "$test_root/soloist/plugin/"
+cp "$source_root/SoloistManager.qml" "$source_root/Api.js" "$test_root/soloist/plugin/"
 cp "$source_root/tests/integration/SoloistLifecycle.qml" "$test_root/soloist/shell.qml"
 cp "$source_root/tests/integration/soloist-runtime-fixture.py" "$test_root/soloist/plugin/scripts/soloist-runtime.py"
 printf '#!/bin/sh\nread -r device\n' > "$test_root/soloist/plugin/scripts/configure-playback.sh"
@@ -39,6 +50,25 @@ if ! rg -q SOLOIST_LIFECYCLE_PASS "$test_root/soloist-output" || \
   exit 1
 fi
 echo 'Quickshell Soloist key/start/replacement integration passed.'
+
+rm -f -- "$test_root/soloist/plugin/scripts/fixture.json"
+cp "$source_root/tests/integration/SoloistFailure.qml" "$test_root/soloist/shell.qml"
+mkdir -p "$XDG_RUNTIME_DIR/omaspotify"
+printf '{"code":"soloist_expired","timestamp":1}\n' >"$XDG_RUNTIME_DIR/omaspotify/startup-error.json"
+env QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 \
+  timeout 15s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root/soloist" > "$test_root/soloist-failure-output" 2>&1 || {
+  cat "$test_root/soloist-failure-output"
+  exit 1
+}
+rg -q SOLOIST_FAILURE_PASS "$test_root/soloist-failure-output" || {
+  rg 'SOLOIST_FAILURE|ReferenceError|TypeError' "$test_root/soloist-failure-output"
+  exit 1
+}
+[[ ! -e $XDG_RUNTIME_DIR/omaspotify/startup-error.json ]] || {
+  echo 'An explicit retry left the old failure in place' >&2
+  exit 1
+}
+echo 'Quickshell Soloist failure and polling integration passed.'
 
 mkdir -p "$test_root/app/plugin" "$test_root/state"
 cp "$source_root/"*.qml "$source_root/"*.js "$test_root/app/plugin/"
@@ -65,6 +95,26 @@ if rg -i 'ReferenceError|TypeError|binding loop|Cannot assign|Unable to assign|F
 fi
 echo 'Quickshell app smoke test passed.'
 
+# Every real page, with the keyboard cursor walked over each. Any warning fails it.
+mkdir -p "$test_root/pages/plugin" "$test_root/pages-state"
+cp "$source_root/"*.qml "$source_root/"*.js "$test_root/pages/plugin/"
+cp -r /usr/share/omarchy/shell/Commons /usr/share/omarchy/shell/Ui "$test_root/pages/"
+cp "$source_root/tests/integration/PagesSmoke.qml" "$test_root/pages/shell.qml"
+cp "$source_root/tests/ui/FixtureApi.js" "$test_root/pages/"
+env QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 XDG_STATE_HOME="$test_root/pages-state" \
+  timeout 45s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root/pages" > "$test_root/pages-output" 2>&1 || {
+  cat "$test_root/pages-output"
+  exit 1
+}
+rg -q PAGES_SMOKE_PASS "$test_root/pages-output" || {
+  cat "$test_root/pages-output"
+  exit 1
+}
+if rg -i 'PAGES_SMOKE_FAIL|ReferenceError|TypeError|binding loop|Cannot assign|Cannot anchor|Cannot read|Unable to assign|is not a function|non-existent' "$test_root/pages-output"; then
+  exit 1
+fi
+echo 'Quickshell pages smoke test passed.'
+
 mkdir -p "$test_root/sonos/plugin/scripts" "$test_root/sonos-state"
 cp "$source_root/"*.qml "$source_root/"*.js "$test_root/sonos/plugin/"
 cp "$source_root/tests/integration/SonosControl.qml" "$test_root/sonos/shell.qml"
@@ -89,6 +139,33 @@ if rg -i 'ReferenceError|TypeError|binding loop|Cannot assign|Unable to assign' 
   exit 1
 fi
 echo 'Quickshell Sonos control test passed.'
+
+mkdir -p "$test_root/logic/plugin" "$test_root/logic-state" "$test_root/logic-cache"
+cp "$source_root/"*.qml "$source_root/"*.js "$test_root/logic/plugin/"
+cp "$source_root/tests/integration/ServiceLogic.qml" "$test_root/logic/shell.qml"
+env QT_QPA_PLATFORM=offscreen QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1 \
+  XDG_STATE_HOME="$test_root/logic-state" XDG_CACHE_HOME="$test_root/logic-cache" \
+  timeout 120s dbus-run-session --config-file "$source_root/tests/isolated-session.conf" -- qs --no-color -p "$test_root/logic" > "$test_root/logic-output" 2>&1 || {
+  cat "$test_root/logic-output"
+  exit 1
+}
+rg -q SERVICE_LOGIC_PASS "$test_root/logic-output" || {
+  rg 'SERVICE_LOGIC|ReferenceError|TypeError' "$test_root/logic-output"
+  exit 1
+}
+if rg -i 'ReferenceError|TypeError|binding loop|Cannot assign|Unable to assign' "$test_root/logic-output"; then
+  exit 1
+fi
+# Listening history and the kept library belong to this login alone.
+if find "$test_root/logic-state/omaspotify" -maxdepth 1 -name '*.json' ! -perm 600 | rg .; then
+  echo 'A state file is readable by other users' >&2
+  exit 1
+fi
+[[ $(stat -c '%a' "$test_root/logic-state/omaspotify") == 700 ]] || {
+  echo 'The state directory is readable by other users' >&2
+  exit 1
+}
+echo 'Quickshell service logic test passed.'
 
 mkdir -p "$test_root/local/plugin" "$test_root/local-state" "$test_root/local-runtime/omaspotify"
 cp "$source_root/"*.qml "$source_root/"*.js "$test_root/local/plugin/"

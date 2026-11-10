@@ -19,17 +19,15 @@ Item {
   property bool searchLoading: false
   property var pageRequest: null
   property string retryMode: "initial"
+  // Search runs while you type, so a term only counts once it has been left alone.
+  property string historyTerm: ""
   onDataSerialChanged: clearSearch()
 
-  function progressText(timestamp) {
-    var remaining = Math.max(0, Number(api.rateLimitedUntil || 0) - timestamp)
-    if (remaining > 0)
-      return "Waiting for Spotify. Try again in " + Math.ceil(remaining / 1000) + " seconds."
-    var handle = pageRequest || api.searchRequest
-    var job = handle ? handle.job : null
-    if (job && !job.startedAt) return "Search queued…"
-    if (job && !job.sentAt) return "Refreshing Spotify authorization…"
-    return "Fetching results from Spotify…"
+  Timer {
+    id: historyDelay
+    interval: 2500
+    onTriggered: if (root.historyTerm && root.historyTerm === root.searchQuery)
+      root.rememberSearch(root.historyTerm)
   }
 
   function search(term, type, force) {
@@ -52,10 +50,10 @@ Item {
       searchLoadedTypes = ({})
     }
     if (force === true) {
-      var refreshedGroups = Api.shallowCopy(searchGroups)
+      const refreshedGroups = Api.shallowCopy(searchGroups)
       refreshedGroups[value] = Api.normalizeSearchPage({}, value, 128)
       searchGroups = refreshedGroups
-      var refreshedTypes = Api.shallowCopy(searchLoadedTypes)
+      const refreshedTypes = Api.shallowCopy(searchLoadedTypes)
       refreshedTypes[value] = false
       searchLoadedTypes = refreshedTypes
     }
@@ -81,14 +79,15 @@ Item {
       root.searchPendingType = ""
       if (error) root.searchError = root.safeError(error)
       else {
-        var incoming = ({})
+        const incoming = ({})
         incoming[value] = groups[value]
         root.searchGroups = Api.mergeSearchGroups(root.searchGroups, incoming)
-        var loaded = Api.shallowCopy(root.searchLoadedTypes)
+        const loaded = Api.shallowCopy(root.searchLoadedTypes)
         loaded[value] = true
         root.searchLoadedTypes = loaded
         root.searchError = ""
-        root.rememberSearch(normalized)
+        root.historyTerm = normalized
+        historyDelay.restart()
         root.checkSavedItems(root.searchItems(value))
       }
     })

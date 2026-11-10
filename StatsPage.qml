@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import qs.Commons
 import qs.Ui
@@ -12,8 +14,8 @@ Item {
   property var panel: null
 
   readonly property var service: panel ? panel.service : null
-  readonly property int weeks: Math.max(8,
-    Math.min(30, Math.floor((width - Style.space(60)) / Style.space(11))))
+  readonly property int weeks: Math.max(8, Math.min(53,
+    Math.floor((width - Style.space(110)) / (Style.space(10) + Style.space(2)))))
   readonly property var grid: service
     ? Api.heatmapWeeks(service.listeningDays, Date.now(), weeks) : []
 
@@ -27,9 +29,10 @@ Item {
 
   Column {
     anchors.fill: parent
-    spacing: Style.space(9)
+    spacing: page.panel.pageGap
 
     Row {
+      id: statsNumbers
       width: parent.width
       spacing: Style.space(24)
 
@@ -40,12 +43,15 @@ Item {
           { value: page.service ? page.service.likedSongLinkCount : 0, label: "liked songs indexed" }
         ]
 
-        Column {
+        Row {
+          id: statistic
           required property var modelData
-          spacing: Style.space(2)
+          spacing: Style.space(6)
 
           Text {
-            text: String(modelData.value)
+            anchors.baseline: statisticLabel.baseline
+            textFormat: Text.PlainText
+            text: String(statistic.modelData.value)
             color: page.panel.foreground
             font.family: page.panel.fontFamily
             font.pixelSize: Style.font.display
@@ -53,66 +59,51 @@ Item {
           }
 
           Text {
-            text: modelData.label
+            id: statisticLabel
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: Style.space(4)
+            textFormat: Text.PlainText
+            text: statistic.modelData.label
             color: page.panel.muted
             font.family: page.panel.fontFamily
-            font.pixelSize: Style.font.caption
+            font.pixelSize: Style.font.bodySmall
           }
         }
       }
     }
 
-    Column {
-      width: parent.width
-      spacing: Style.space(3)
+    ListeningHeatmap {
+      id: heatmap
+      grid: page.grid
+      accent: page.panel.accent
+      foreground: page.panel.foreground
+      muted: page.panel.muted
+      fontFamily: page.panel.fontFamily
+      emptyFill: Style.normalFillFor(page.panel.foreground, page.panel.accent)
+      cellSize: Style.space(10)
+      cellRadius: Style.space(2)
+      cellGap: Style.space(2)
 
-      Text {
-        text: "LISTENING"
-        color: page.panel.foreground
-        font.family: page.panel.fontFamily
-        font.pixelSize: Style.font.caption
-        font.bold: true
+      PanelToolTip {
+        parent: heatmap.hoverAnchor
+        visible: heatmap.hoveredDay !== null
+        delay: 0
+        text: heatmap.hoveredText
       }
-
-      ListeningHeatmap {
-        id: heatmap
-        grid: page.grid
-        accent: page.panel.accent
-        emptyFill: Style.normalFillFor(page.panel.foreground, page.panel.accent)
-        cellSize: Style.space(9)
-        cellRadius: Style.space(2)
-        spacing: Style.space(2)
-
-        // One tooltip for the grid: one per day costs more than the page.
-        PanelToolTip {
-          parent: heatmap.hoveredDay
-          visible: heatmap.hoveredDay !== null
-          text: heatmap.hoveredText
-        }
-      }
-
     }
 
-    Row {
+    PageTabs {
+      id: statsRanges
       width: parent.width
-      spacing: Style.space(4)
-
-      Repeater {
-        model: [
-          { range: "short_term", label: "Last 4 weeks" },
-          { range: "medium_term", label: "Last 6 months" },
-          { range: "long_term", label: "All time" }
-        ]
-
-        Button {
-          required property var modelData
-          text: modelData.label
-          foreground: page.panel.foreground
-          focusable: false
-          selected: page.service && page.service.statsRange === modelData.range
-          onClicked: if (page.service) page.service.setStatsRange(modelData.range)
-        }
-      }
+      panel: page.panel
+      actionPrefix: "stats-"
+      value: page.service ? page.service.statsRange : ""
+      options: [
+        { value: "short_term", label: "Last 4 weeks" },
+        { value: "medium_term", label: "Last 6 months" },
+        { value: "long_term", label: "All time" }
+      ]
+      onChosen: function(value) { if (page.service) page.service.setStatsRange(value) }
     }
 
     Row {
@@ -125,13 +116,11 @@ Item {
         height: parent.height
         spacing: Style.space(4)
 
-        Text {
+        PanelSectionHeader {
           id: artistsHeading
-          text: "TOP ARTISTS"
-          color: page.panel.foreground
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
+          text: "Top artists"
+          color: page.panel.muted
+          fontFamily: page.panel.fontFamily
         }
 
         MediaCollection {
@@ -140,13 +129,17 @@ Item {
           keyboardListId: "list-stats-artists"
           service: page.service
           sourceItems: page.service ? page.service.statsArtists : []
-          showFilter: false
-          showSort: false
+          showSave: true
           browseContexts: true
           loading: page.service && page.service.statsLoading
-          emptyMessage: "No ranking yet."
+          emptyGlyph: "󰠃"
+          emptyMessage: "No ranking yet. Spotify builds this as you listen."
           onActivated: function(item, items, uri) { page.panel.activateMedia(item, items, uri) }
           onOpened: function(item) { page.panel.openItem(item) }
+          onSaveToggled: function(item) { if (page.service) page.service.toggleSaved(item) }
+          onContextRequested: function(item, x, y, index, items, uri, playbackUri) {
+            page.panel.openMediaContext(item, x, y, items, uri, index, playbackUri)
+          }
         }
       }
 
@@ -156,13 +149,11 @@ Item {
         height: parent.height
         spacing: Style.space(4)
 
-        Text {
+        PanelSectionHeader {
           id: tracksHeading
-          text: "TOP SONGS"
-          color: page.panel.foreground
-          font.family: page.panel.fontFamily
-          font.pixelSize: Style.font.caption
-          font.bold: true
+          text: "Top songs"
+          color: page.panel.muted
+          fontFamily: page.panel.fontFamily
         }
 
         MediaCollection {
@@ -171,14 +162,19 @@ Item {
           keyboardListId: "list-stats-tracks"
           service: page.service
           sourceItems: page.service ? page.service.statsTracks : []
-          showFilter: false
-          showSort: false
+          showQueue: true
           showSave: true
           loading: page.service && page.service.statsLoading
-          emptyMessage: "No ranking yet."
+          emptyGlyph: "󰎈"
+          emptyMessage: "No ranking yet. Spotify builds this as you listen."
           onActivated: function(item, items, uri) { page.panel.activateMedia(item, items, uri) }
           onOpened: function(item) { page.panel.openItem(item) }
+          onQueued: function(item) { if (page.service) page.service.addToQueue(item) }
+          onPlaylistRequested: function(item) { page.panel.openPlaylistPicker(item) }
           onSaveToggled: function(item) { if (page.service) page.service.toggleSaved(item) }
+          onContextRequested: function(item, x, y, index, items, uri, playbackUri) {
+            page.panel.openMediaContext(item, x, y, items, uri, index, playbackUri)
+          }
         }
       }
     }

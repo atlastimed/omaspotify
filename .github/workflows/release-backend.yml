@@ -48,7 +48,11 @@ jobs:
         run: |
           version=$(python3 -c 'import json; print(json.load(open("manifest.json"))["version"])')
           test "$RELEASE_TAG" = "v$version"
+          grep -qx "version = \"$version\"" backend/Cargo.toml
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Test the tagged source
+        run: cargo test --locked --manifest-path backend/Cargo.toml --quiet
 
       - name: Build locked backend source
         env:

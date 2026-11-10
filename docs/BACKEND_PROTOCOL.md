@@ -19,7 +19,9 @@ A successful response keeps that id:
 
 Failures set `ok` to false and return a stable machine-readable error code plus
 a human-readable message. An unsupported protocol version is rejected rather
-than guessed.
+than guessed, as `unsupported_version`. A request the server cannot use is
+refused as `invalid_request`. Both keep the request's id; the id is 0 only when
+none could be read from the line.
 
 The server pushes a complete snapshot on connection and whenever playback
 state changes:

@@ -157,7 +157,7 @@ in `$XDG_STATE_HOME/omaspotify/plays.json`:
 
 Each time recently-played is fetched, that batch is folded in — newest time per
 context wins, and nothing is ever removed however large the record
-grows. Fetches happen when the panel opens and every five minutes
+grows. Fetches happen when the panel opens and every fifteen minutes
 while it is open, so a normal day of use captures far more than 50 plays.
 
 Verified by seeding a play from months ago, restarting, and letting a fresh
@@ -336,7 +336,7 @@ deleted between test runs, so just one batch had ever been counted.
 
 The one way to lose plays is to listen to more than 50 tracks between fetches —
 roughly three hours of music. Fetching used to happen only while the panel was
-open, which made that easy to hit. It now also polls every five minutes
+open, which made that easy to hit. It now also polls every fifteen minutes
 **whenever something is playing**, panel open or shut, so the window closes long
 before 50 plays can fall off the end.
 

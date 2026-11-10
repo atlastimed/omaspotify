@@ -9,11 +9,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import urllib.parse
 from pathlib import Path
 from unittest import mock
-
 
 SOURCE_ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = SOURCE_ROOT / "scripts" / "spotify-connect-device.py"
@@ -30,7 +31,7 @@ class FakeResponse:
         self.payload = json.dumps(payload).encode("utf-8")
         self.status = status
 
-    def __enter__(self) -> "FakeResponse":
+    def __enter__(self) -> FakeResponse:
         return self
 
     def __exit__(self, *_args: object) -> None:
@@ -41,6 +42,176 @@ class FakeResponse:
 
 
 class ConnectHelperTests(unittest.TestCase):
+    def test_avahi_escapes_are_utf8_bytes_and_dots(self) -> None:
+        self.assertEqual(helper.avahi_unescape(r"K\195\188che"), "K\u00fcche")
+        self.assertEqual(helper.avahi_unescape(r"Living\032Room\.1"), "Living Room.1")
+
+    def test_receiver_paths_cannot_carry_a_query_or_escape(self) -> None:
+        for bad in ("/cgi-bin/reboot.cgi?now=1", "/a#b", "/a%2f", "/../etc", "zc", "/a b"):
+            with self.assertRaises(helper.ConnectError, msg=bad):
+                helper.endpoint_path(bad)
+        self.assertEqual(helper.endpoint_path("/zc/0"), "/zc/0")
+        self.assertEqual(helper.endpoint_path(""), "/")
+
+    def test_requests_reach_the_receiver_with_their_query(self) -> None:
+        # Faked below request_json, so its own path check is part of the test.
+        seen: list[tuple[str, str]] = []
+
+        class FakeConnection:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def request(self, method: str, path: str, **_kwargs: object) -> None:
+                seen.append((method, path))
+
+            def getresponse(self) -> FakeResponse:
+                return FakeResponse({"status": 101, "deviceID": "a" * 40, "remoteName": "Speaker"})
+
+            def close(self) -> None:
+                pass
+
+        record = {"address": "192.168.1.9", "port": 5353, "cpath": "/zc", "version": "2.9.0",
+                  "serviceName": "Speaker"}
+        with mock.patch.object(helper.http.client, "HTTPConnection", FakeConnection):
+            device = helper.probe_receiver(record, False)
+        self.assertEqual(seen, [("GET", "/zc?action=getInfo&version=2.9.0")])
+        self.assertIsNotNone(device)
+        self.assertEqual(device["id"], "a" * 40)
+
+    def test_a_request_query_is_only_ever_plain_encoded_fields(self) -> None:
+        for bad in ("/zc?a=1#frag", "/zc?a=1 b", "/zc?a=/../etc", "/zc?", "/zc?a=1?b=2"):
+            with self.assertRaises(helper.ConnectError, msg=bad):
+                helper.request_json("192.168.1.9", 5353, bad)
+
+    def test_cloud_metadata_address_is_not_a_receiver(self) -> None:
+        with self.assertRaises(helper.ConnectError):
+            helper.safe_address("169.254.169.254")
+        self.assertEqual(helper.safe_address("169.254.10.20"), "169.254.10.20")
+        with self.assertRaises(helper.ConnectError):
+            helper.safe_address("::ffff:169.254.169.254")
+
+    def test_discovery_probes_each_receiver_once(self) -> None:
+        browse = "\n".join(
+            f'=;eth0;IPv4;Speaker;_spotify-connect._tcp;local;speaker.local;192.168.1.9;5353;"CPath=/zc"{suffix}'
+            for suffix in ("", "", " ")
+        )
+        calls: list[str] = []
+
+        def fake_request_json(address: str, port: int, path: str, *_rest: object) -> dict[str, object]:
+            calls.append(f"{address}:{port}{path}")
+            return {"status": 101, "deviceID": "0123456789abcdef", "remoteName": "Speaker"}
+
+        with mock.patch.object(helper, "browse_spotify_connect", return_value=browse), \
+                mock.patch.object(helper, "request_json", side_effect=fake_request_json):
+            devices = helper.discover_receivers()
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual([item["name"] for item in devices], ["Speaker"])
+
+    def test_a_silent_receiver_does_not_hold_up_the_others(self) -> None:
+        browse = "\n".join([
+            '=;eth0;IPv4;Slow;_spotify-connect._tcp;local;a.local;192.168.1.8;5353;"CPath=/zc"',
+            '=;eth0;IPv4;Fast;_spotify-connect._tcp;local;b.local;192.168.1.9;5353;"CPath=/zc"',
+        ])
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def fake_request_json(address: str, *_rest: object) -> dict[str, object]:
+            if address.endswith(".8"):
+                release.wait(30)
+            return {"status": 101, "deviceID": "fedcba9876543210", "remoteName": "Fast"}
+
+        started = time.monotonic()
+        with mock.patch.object(helper, "browse_spotify_connect", return_value=browse), \
+                mock.patch.object(helper, "request_json", side_effect=fake_request_json), \
+                mock.patch.object(helper, "PROBE_DEADLINE_SECONDS", 0.5):
+            devices = helper.discover_receivers()
+
+        self.assertLess(time.monotonic() - started, 5)
+        self.assertEqual([item["name"] for item in devices], ["Fast"])
+
+    def test_token_receiver_needs_no_saved_credential(self) -> None:
+        receiver = {
+            "id": "0123456789abcdef0123456789abcdef01234567",
+            "address": "192.168.1.20",
+            "port": 5389,
+            "cpath": "/zc",
+            "serviceVersion": "1.0",
+            "brand": "JBL",
+            "tokenType": "accesstoken",
+            "clientId": "76642c7bcc9c466bb99a44ce206edbbe",
+        }
+        posted: list[dict[str, str]] = []
+
+        def fake_request_json(
+            _address: str, _port: int, _path: str,
+            method: str = "GET", fields: dict[str, str] | None = None,
+        ) -> dict[str, object]:
+            if method == "GET":
+                return {"status": 101, "deviceID": receiver["id"], "tokenType": "accesstoken"}
+            posted.append(dict(fields or {}))
+            return {"status": 101}
+
+        token = "desktop-streaming-token-value-1234567890"
+        with mock.patch.object(helper, "discover_receivers", return_value=[receiver]), \
+                mock.patch.object(helper, "load_credentials",
+                                  side_effect=helper.ConnectError("no saved credential")), \
+                mock.patch.object(helper, "request_json", side_effect=fake_request_json):
+            result = helper.activate_receiver(receiver["id"], token, "harry")
+
+        self.assertEqual(result["status"], "activated")
+        self.assertEqual(posted[0]["blob"], token)
+        self.assertEqual(posted[0]["userName"], "harry")
+
+    def test_the_deadline_cannot_be_retried_away(self) -> None:
+        self.assertFalse(issubclass(helper.DeadlineExceeded, Exception))
+        calls: list[int] = []
+
+        def slow(*_args: object) -> dict[str, object]:
+            calls.append(1)
+            helper.on_deadline(0, None)
+            return {}
+
+        with mock.patch.object(helper, "request_json", side_effect=slow), \
+                mock.patch.object(helper.time, "sleep"), \
+                self.assertRaises(helper.DeadlineExceeded):
+            helper.request_json_with_retry("192.168.1.2", 1000, "/zc")
+        self.assertEqual(len(calls), 1)
+
+    def test_a_token_is_sent_under_the_signed_in_account(self) -> None:
+        receiver = {
+            "id": "0123456789abcdef0123456789abcdef01234567",
+            "address": "192.168.1.20",
+            "port": 5389,
+            "cpath": "/zc",
+            "serviceVersion": "1.0",
+            "tokenType": "accesstoken",
+        }
+        posted: list[dict[str, str]] = []
+
+        def fake_request_json(
+            _address: str, _port: int, _path: str,
+            method: str = "GET", fields: dict[str, str] | None = None,
+        ) -> dict[str, object]:
+            if method == "GET":
+                return {"status": 101, "deviceID": receiver["id"], "tokenType": "accesstoken"}
+            posted.append(dict(fields or {}))
+            return {"status": 101}
+
+        with mock.patch.object(helper, "discover_receivers", return_value=[receiver]), \
+                mock.patch.object(helper, "load_credentials",
+                                  return_value=("old-account", 1, b"stored")), \
+                mock.patch.object(helper, "request_json", side_effect=fake_request_json):
+            helper.activate_receiver(receiver["id"],
+                                     "desktop-streaming-token-value-1234567890", "current")
+        self.assertEqual(posted[0]["userName"], "current")
+
+    def test_device_auth_never_follows_a_redirect_with_the_token(self) -> None:
+        handler = helper.NoRedirect()
+        request = helper.urllib.request.Request("https://spclient.wg.spotify.com/x")
+        self.assertIsNone(handler.redirect_request(
+            request, None, 302, "Found", {}, "https://elsewhere.invalid/"))
+
     def test_credentials_prefer_durable_state_and_keep_cache_fallback(self) -> None:
         with tempfile.TemporaryDirectory() as raw_root:
             root = Path(raw_root)
@@ -69,7 +240,7 @@ class ConnectHelperTests(unittest.TestCase):
             "id": "0123456789abcdef0123456789abcdef01234567",
             "clientId": "76642c7bcc9c466bb99a44ce206edbbe",
         }
-        with mock.patch.object(helper.urllib.request, "urlopen", side_effect=fake_urlopen):
+        with mock.patch.object(helper.NO_REDIRECT_OPENER, "open", side_effect=fake_urlopen):
             result = helper.exchange_access_token(desktop_token, receiver)
 
         self.assertEqual(result, "receiver-access-token-value-1234567890")

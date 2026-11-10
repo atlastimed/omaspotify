@@ -33,7 +33,6 @@ Item {
   property bool serviceActive: false
   readonly property bool requirementsChecked: binaryChecked && unitChecked
   readonly property bool playbackReady: binaryAvailable && unitAvailable
-  readonly property bool setupRequired: requirementsChecked && !playbackReady
   readonly property bool running: mprisPresent || serviceActive
   property bool busy: false
   property bool setupBusy: false
@@ -175,6 +174,7 @@ Item {
 
   function authenticate() {
     if (authenticationBusy) return
+    authenticationCancelled = false
     if (!binaryAvailable) {
       lastError = "Playback support is not installed yet"
       authenticationFailed(lastError)
@@ -229,6 +229,38 @@ Item {
     clearCredentialsCommand.running = true
   }
 
+  // A command that cannot start never reports an exit, which would otherwise
+  // leave these set until the shell restarts.
+  function settleAfterCommandEnded() {
+    if (setupBusy && !setupCommand.running) {
+      setupBusy = false
+      lastError = "Playback setup could not be completed"
+      setupFailed(lastError)
+    }
+    if (configurationBusy && !configWriter.running) {
+      configurationBusy = false
+      configurationInput = ""
+      startAfterConfiguration = false
+    }
+    if (credentialsClearBusy && !clearCredentialsCommand.running) {
+      credentialsClearBusy = false
+      lastError = "Could not clear the saved playback session"
+      credentialsClearFailed(lastError)
+    }
+    if (authenticationBusy && !authCommand.running && !authAfterStop && !stopCommand.running) {
+      authenticationBusy = false
+      lastError = "Spotify could not connect playback on this computer. Try again"
+      authenticationFailed(lastError)
+    }
+    if (busy && !configurationBusy && !configWriter.running && !startCommand.running
+        && !stopCommand.running && !authCommand.running && !clearCredentialsCommand.running)
+      busy = false
+  }
+
+  function noteCommandEnded() {
+    Qt.callLater(function() { if (root) root.settleAfterCommandEnded() })
+  }
+
   onMprisPresentChanged: {
     if (mprisPresent) serviceActive = true
     else refreshStatus()
@@ -257,6 +289,7 @@ Item {
     stdinEnabled: true
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    onRunningChanged: if (!running) root.noteCommandEnded()
     onStarted: {
       write(root.configurationInput + "\n")
       root.configurationInput = ""
@@ -292,10 +325,10 @@ Item {
 
   Process {
     id: unitCheck
-    stdout: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector { id: unitOutput; waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
     onExited: function(exitCode) {
-      var unit = String(stdout.text || "").trim()
+      var unit = String(unitOutput.text || "").trim()
       root.unitAvailable = exitCode === 0
       root.unitChecked = true
       if (unit) root.unitName = unit
@@ -308,6 +341,7 @@ Item {
     id: setupCommand
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    onRunningChanged: if (!running) root.noteCommandEnded()
     onExited: function(exitCode) {
       root.setupBusy = false
       if (exitCode === 0) {
@@ -359,15 +393,10 @@ Item {
     stdout: StdioCollector { id: failureOutput; waitForEnd: true }
     onExited: {
       var code = String(failureOutput.text || "").trim()
-      var messages = {
-        invalid_configuration: "Playback configuration is invalid. Review Settings, then start this computer again.",
-        missing_credentials: "Authorize playback on this computer in Settings.",
-        reconnect_exhausted: "Playback lost its connection repeatedly. Check the network, then start this computer again.",
-        restart_limit: "Playback stopped after repeated failures. Check your network, Premium account and playback authorization, then start this computer again."
-      }
-      if (messages[code]) {
+      var message = Api.playbackFailureMessage(code)
+      if (message) {
         root.terminalFailure = true
-        root.lastError = messages[code]
+        root.lastError = message
       }
     }
   }
@@ -385,6 +414,7 @@ Item {
     command: ["/usr/bin/bash", root.pluginDir + "/scripts/playback-runtime.sh", "start"]
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    onRunningChanged: if (!running) root.noteCommandEnded()
     onExited: function(exitCode) {
       root.busy = false
       if (exitCode === 0) {
@@ -403,6 +433,7 @@ Item {
     command: ["/usr/bin/bash", root.pluginDir + "/scripts/playback-runtime.sh", "stop"]
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    onRunningChanged: if (!running) root.noteCommandEnded()
     onExited: function(exitCode) {
       root.serviceActive = false
       if (root.authAfterStop) {
@@ -427,6 +458,7 @@ Item {
       splitMarker: "\n"
       onRead: function(line) { root.safeError(line) }
     }
+    onRunningChanged: if (!running) root.noteCommandEnded()
     onExited: function(exitCode) {
       if (root.authenticationCancelled) {
         root.authenticationCancelled = false
@@ -459,6 +491,7 @@ Item {
     id: clearCredentialsCommand
     stdout: StdioCollector { waitForEnd: true }
     stderr: StdioCollector { waitForEnd: true }
+    onRunningChanged: if (!running) root.noteCommandEnded()
     onExited: function(exitCode) {
       root.credentialsClearBusy = false
       root.busy = false

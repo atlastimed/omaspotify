@@ -10,23 +10,15 @@ TestCase {
     id: modifiers
   }
 
-  function test_flagsForSequence_setsOnlyTheNamedModifiers() {
-    compare(modifiers.flagsForSequence("Ctrl+F"), Qt.ControlModifier)
-    compare(modifiers.flagsForSequence("Shift+Left"), Qt.ShiftModifier)
-    compare(modifiers.flagsForSequence("Alt+Right"), Qt.AltModifier)
-    compare(modifiers.flagsForSequence("Ctrl+Shift+A"),
-      Qt.ControlModifier | Qt.ShiftModifier)
-  }
-
-  function test_flagsForSequence_isZeroWithoutModifiers() {
-    compare(modifiers.flagsForSequence("Space"), 0)
-    compare(modifiers.flagsForSequence(""), 0)
-    compare(modifiers.flagsForSequence(null), 0)
-    compare(modifiers.flagsForSequence(undefined), 0)
-  }
-
-  function test_flagsForSequence_ignoresSuperBecauseHintsDoNotUseIt() {
-    compare(modifiers.flagsForSequence("Super+Shift+M"), Qt.ShiftModifier)
+  function test_flagsAfterEvent_tracksTheModifierKeysThemselves() {
+    var held = modifiers.flagsAfterEvent(Qt.ControlModifier, true, 0, Qt.Key_Control)
+    compare(held, Qt.ControlModifier)
+    // A letter typed with it changes nothing, pressed or released.
+    compare(modifiers.flagsAfterEvent(Qt.ControlModifier, true, held, Qt.Key_S), held)
+    compare(modifiers.flagsAfterEvent(0, false, held, Qt.Key_S), held)
+    compare(modifiers.flagsAfterEvent(0, false, held, Qt.Key_Control), 0)
+    // A chord whose modifier key was never seen leaves nothing held.
+    compare(modifiers.flagsAfterEvent(Qt.ControlModifier, true, 0, Qt.Key_A), 0)
   }
 
   function test_flagFor_mapsEachHintModifierKey() {

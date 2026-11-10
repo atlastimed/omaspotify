@@ -1,3 +1,5 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 
 Image {
@@ -13,6 +15,9 @@ Image {
   property int retryBaseDelayMs: 750
   property int retryMaximumDelayMs: 15000
   property string retryToken: ""
+
+  // A kept copy on disk that has gone. Whoever handed it over should stop.
+  signal localSourceMissing()
 
   readonly property int retryDelayMs: Math.min(retryMaximumDelayMs,
     retryBaseDelayMs * Math.pow(2, Math.max(0, retryAttempt - 1)))
@@ -49,6 +54,8 @@ Image {
         && retryAttempt < retryLimit) {
       retryAttempt++
       retryTimer.restart()
+    } else if (status === Image.Error && requestedSource.indexOf("file://") === 0) {
+      localSourceMissing()
     }
   }
 

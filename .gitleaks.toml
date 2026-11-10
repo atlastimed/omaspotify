@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+# Made-up credentials that exist only to exercise the code around them.
+[allowlist]
+description = "Test fixtures"
+paths = ['''^tests/ui/''', '''^tests/integration/PagesSmoke\.qml$''']

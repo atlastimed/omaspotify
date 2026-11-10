@@ -4,8 +4,9 @@
 # cava is pointed at the PipeWire object serial of the backend's output
 # stream, so other applications never show up in the equalizer. While no
 # local stream exists (nothing playing here, or playback on another Connect
-# device) the script prints "idle" once a second instead of frames. When the
-# stream disappears cava is restarted so a new stream is linked again.
+# device) the script prints "idle" instead of frames, looking less often the
+# longer nothing plays. When the stream disappears cava is restarted so a new
+# stream is linked again.
 #
 # Usage: equalizer.sh <config-path> [bars] [backend-binary-name]
 set -u
@@ -60,13 +61,16 @@ cleanup() {
 }
 trap cleanup TERM INT HUP
 
+idle_wait=1
 while true; do
   read -r node serial <<<"$(find_stream)"
   if [[ -z ${serial:-} ]]; then
     printf 'idle\n'
-    sleep 1
+    sleep "$idle_wait"
+    (( idle_wait < 5 )) && idle_wait=$(( idle_wait + 1 ))
     continue
   fi
+  idle_wait=1
   write_config "$serial"
   cava -p "$config_path" &
   cava_pid=$!

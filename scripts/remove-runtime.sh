@@ -41,10 +41,6 @@ require_safe_path "cache root" "$cache_root"
 require_safe_path "state root" "$state_root"
 require_safe_path "session runtime root" "$session_runtime_root"
 require_safe_path "backend runtime" "$runtime_dir"
-runtime_dir_is_dedicated=0
-if [[ ${runtime_dir##*/} == omaspotify ]]; then
-  runtime_dir_is_dedicated=1
-fi
 
 systemctl --user disable --now omaspotify.service >/dev/null 2>&1 || true
 for unit in omaspotify-soloist.service omaspotify-soloist-update.timer omaspotify-soloist-update.service; do
@@ -55,7 +51,8 @@ rm -f -- "$backend_unit_file" "$backend_binary" \
   "$backend_source_id_file" "$backend_binary_hash_file" "$backend_origin_file" \
   "$runtime_dir/soloist" "$runtime_dir/soloist-runtime.py" "$runtime_dir/soloist-build.json" \
   "$runtime_dir/.soloist-install.lock"
-systemctl --user daemon-reload
+# With no user bus the rest of the removal still has to happen.
+systemctl --user daemon-reload >/dev/null 2>&1 || true
 systemctl --user reset-failed omaspotify.service >/dev/null 2>&1 || true
 
 if [[ -d $config_dir ]]; then
@@ -71,11 +68,16 @@ if [[ -d $config_dir ]]; then
 fi
 
 if (( purge )); then
-  # Releases before 1.0.3 cached playback credentials and audio here.
+  # Releases before 1.0.3 cached playback credentials and audio here, which is
+  # also where a spotifyd of the user's own keeps its login and audio.
   if [[ -d $legacy_cache_dir ]]; then
     [[ $legacy_cache_dir == "$cache_root/spotifyd" ]] || exit 3
-    rm -rf -- "$legacy_cache_dir"
-    echo "Removed cached credentials and audio."
+    if [[ -e $config_root/spotifyd ]] || command -v spotifyd >/dev/null 2>&1; then
+      echo "Left $legacy_cache_dir alone: spotifyd is installed and this is its cache."
+    else
+      rm -rf -- "$legacy_cache_dir"
+      echo "Removed cached credentials and audio."
+    fi
   fi
   if [[ -d $build_cache_dir ]]; then
     [[ $build_cache_dir == "$cache_root/omaspotify" ]] || exit 3
@@ -93,13 +95,13 @@ if (( purge )); then
     echo "Removed playback sockets and temporary receiver state."
   fi
   if [[ -d $runtime_dir ]]; then
-    if (( runtime_dir_is_dedicated )); then
-      rm -rf -- "$runtime_dir"
+    # Only what setup put here, in case the directory was set to a shared one.
+    rm -rf -- "$runtime_dir"/.soloist-*
+    rm -f -- "$runtime_dir"/.omaspotify-*
+    if rmdir -- "$runtime_dir" 2>/dev/null; then
       echo "Removed installed playback backend."
-    elif rmdir -- "$runtime_dir" 2>/dev/null; then
-      echo "Removed empty custom backend directory."
     else
-      echo "Kept unknown files in custom backend directory: $runtime_dir" >&2
+      echo "Kept unknown files in backend directory: $runtime_dir" >&2
     fi
   fi
   for backup in "$config_root"/omaspotify.bak.*; do
@@ -108,11 +110,20 @@ if (( purge )); then
     echo "Removed old configuration backup: $backup"
   done
   if command -v secret-tool >/dev/null 2>&1; then
-    for _ in {1..100}; do
-      secret-tool clear service omaspotify kind refresh-token >/dev/null 2>&1 || break
+    keyring_failed=0
+    for kind in refresh-token soloist-api-key; do
+      # Exit 1 alone also means nothing matched; only an error message means the
+      # keyring could not be reached and the secret is still there.
+      if ! keyring_error=$(secret-tool clear service omaspotify kind "$kind" 2>&1 >/dev/null) \
+          && [[ -n $keyring_error ]]; then
+        keyring_failed=1
+      fi
     done
-    secret-tool clear service omaspotify kind soloist-api-key >/dev/null 2>&1 || true
-    echo "Cleared matching OmaSpotify keyring entries."
+    if (( keyring_failed )); then
+      echo "Could not reach the desktop keyring; OmaSpotify entries may remain." >&2
+    else
+      echo "Cleared matching OmaSpotify keyring entries."
+    fi
   fi
 else
   rmdir -- "$runtime_dir" 2>/dev/null || true

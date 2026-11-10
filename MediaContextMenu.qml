@@ -1,9 +1,9 @@
+pragma ComponentBehavior: Bound
+
 import QtQuick
 import QtQuick.Controls
 import qs.Commons
 import qs.Ui
-
-import "Api.js" as Api
 
 Popup {
   id: popup
@@ -13,10 +13,6 @@ Popup {
   // The panel drives keyboard navigation through these.
   function actionButtons() {
     return contextMenuContent ? contextMenuContent.children : []
-  }
-
-  component KeyHint: PanelKeyHint {
-    panel: popup.panel
   }
 
   component ContextMenuButton: Button {
@@ -29,11 +25,6 @@ Popup {
     focusable: false
     onHovered: function(on) {
       if (on && contextAction) popup.panel.setPanelCursor("popup", contextAction)
-    }
-    KeyHint {
-      region: "popup"
-      action: ctxBtn.contextAction
-      active: popup.panel.shortcutHintsInPopup
     }
   }
 
@@ -62,7 +53,6 @@ Popup {
   onOpened: {
     popup.panel.popupReturnRegion = popup.panel.panelCursorRegion
     popup.panel.popupReturnAction = popup.panel.panelCursorAction
-    popup.panel.latchShortcutMode()
     popup.panel.panelCursorActive = true
     popup.panel.panelCursorRegion = "popup"
     var actions = popup.panel.contextMenuCursorActions()
@@ -92,7 +82,7 @@ Popup {
     Keys.priority: Keys.BeforeItem
     Keys.onShortcutOverride: function(event) {
       if (shortcutModifiers.isHintModifierKey(event.key)) {
-        popup.panel.considerShortcutModeKey(event, true)
+        popup.panel.noteModifierKey(event, true)
         event.accepted = true
         return
       }
@@ -107,7 +97,7 @@ Popup {
         event.accepted = true
     }
     Keys.onPressed: function(event) {
-      popup.panel.considerShortcutModeKey(event, true)
+      popup.panel.noteModifierKey(event, true)
       if (shortcutModifiers.isHintModifierKey(event.key)) {
         event.accepted = true
         return
@@ -122,7 +112,7 @@ Popup {
       if (popup.panel.handleContextMenuKey(event)) event.accepted = true
     }
     Keys.onReleased: function(event) {
-      popup.panel.noteHeldModifiers(event, false)
+      popup.panel.noteModifierKey(event, false)
       if (shortcutModifiers.isHintModifierKey(event.key)) event.accepted = true
     }
 
@@ -166,24 +156,27 @@ Popup {
       topPadding: Style.space(4)
       bottomPadding: Style.space(4)
       text: popup.panel.contextItem ? String(popup.panel.contextItem.name || "Spotify item") : "Spotify item"
-      color: popup.panel.muted
+      textFormat: Text.PlainText
+      color: popup.panel.foreground
       font.family: popup.panel.fontFamily
       font.pixelSize: Style.font.caption
       font.bold: true
       elide: Text.ElideRight
     }
 
-    Text {
-      width: parent.width
-      leftPadding: Style.space(8)
-      rightPadding: Style.space(8)
-      text: "Arrows or Enter to choose · Esc to close"
-      color: popup.panel.muted
-      font.family: popup.panel.fontFamily
-      font.pixelSize: Style.font.caption
-    }
-
     PanelSeparator { width: parent.width; foreground: popup.panel.foreground }
+
+    ContextMenuButton {
+      contextAction: "ctx-pin"
+      visible: popup.panel.contextFromSidebar
+      text: popup.panel.contextItem && popup.panel.contextItem.pinned
+        ? "Unpin from the top" : "Pin to the top"
+      iconText: "󰐃"
+      onClicked: {
+        popup.close()
+        popup.panel.togglePinnedContextItem()
+      }
+    }
 
     ContextMenuButton {
       contextAction: "ctx-play"
@@ -326,9 +319,15 @@ Popup {
       text: "Remove from playlist"
       iconText: "󰅖"
       onClicked: {
-        var position = popup.panel.playlistPosition(popup.panel.contextItem)
+        var item = popup.panel.contextItem
+        var playlist = popup.panel.contextPlaylist
+        var position = popup.panel.playlistPosition(item)
+        var service = popup.panel.service
         popup.close()
-        popup.panel.service.removePlaylistItem(popup.panel.contextItem, position, popup.panel.contextPlaylist)
+        popup.panel.askToConfirm("Remove “" + String(item.name || "this song") + "” from "
+          + String(playlist.name || "this playlist") + "?", "Remove", function() {
+            service.removePlaylistItem(item, position, playlist)
+          })
       }
     }
 

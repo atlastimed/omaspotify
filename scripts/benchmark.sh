@@ -32,7 +32,8 @@ mapfile -t playback_pids < <(
   {
     for process_dir in /proc/[0-9]*; do
       executable=$(readlink -f -- "$process_dir/exe" 2>/dev/null || true)
-      if [[ $executable == */omaspotify-backend ]]; then
+      # The adapter and the Soloist it runs are both part of playing music.
+      if [[ $executable == */omaspotify-backend || $executable == */omaspotify/soloist ]]; then
         printf '%s\n' "${process_dir##*/}"
       fi
     done
@@ -49,13 +50,14 @@ cpu_ticks() {
 
 context_switches() {
   local pid=$1
-  [[ -r /proc/$pid/status ]] || { printf '0\n'; return; }
+  # The counters are kept per thread, so one process is the sum of its tasks.
+  compgen -G "/proc/$pid/task/*/status" >/dev/null || { printf '0\n'; return; }
   awk '
     $1 == "voluntary_ctxt_switches:" || $1 == "nonvoluntary_ctxt_switches:" {
       total += $2
     }
     END { print total + 0 }
-  ' "/proc/$pid/status"
+  ' /proc/"$pid"/task/*/status 2>/dev/null
 }
 
 rollup_value() {

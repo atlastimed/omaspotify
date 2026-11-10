@@ -52,6 +52,40 @@ TestCase {
       false, false), "")
   }
 
+  function test_barSlotWidth_neverOutgrowsTheRoomInTheBar() {
+    compare(Api.barSlotWidth(false, 240, 400, 26, 150), 150)
+    compare(Api.barSlotWidth(true, 240, 180, 26, 150), 150)
+    compare(Api.barSlotWidth(false, 0, 400, 26, 150), 150)
+    compare(Api.barSlotWidth(false, 240, 100, 26, 150), 100)
+    // Unmeasured room is no limit at all.
+    compare(Api.barSlotWidth(false, 240, 400, 26, Infinity), 240)
+    compare(Api.barSlotWidth(false, 240, 400, 26, undefined), 240)
+    compare(Api.barSlotWidth(false, 240, 400, 26, 5), 26)
+  }
+
+  function test_barLabelFits_needsRoomForMoreThanAFewLetters() {
+    verify(Api.barLabelFits(Infinity, 40, 48))
+    verify(Api.barLabelFits(undefined, 40, 48))
+    verify(Api.barLabelFits(88, 40, 48))
+    verify(!Api.barLabelFits(87, 40, 48))
+    verify(!Api.barLabelFits(0, 40, 48))
+  }
+
+  function test_barLayoutHasWidget_looksInEverySection() {
+    var layout = {
+      left: [{ id: "omarchy.menu" }, { id: "atlastimed.tunemarchy" }],
+      center: [{ id: "omarchy.clock" }],
+      right: [null, "junk", { id: "omarchy.power" }],
+      tray: [{ id: "local.tucked" }]
+    }
+    verify(Api.barLayoutHasWidget(layout, "atlastimed.tunemarchy"))
+    verify(Api.barLayoutHasWidget(layout, "local.tucked"))
+    verify(!Api.barLayoutHasWidget(layout, "omarchy.media"))
+    verify(!Api.barLayoutHasWidget(layout, ""))
+    verify(!Api.barLayoutHasWidget(null, "omarchy.clock"))
+    verify(!Api.barLayoutHasWidget({ left: "nope" }, "omarchy.clock"))
+  }
+
   function test_idleShutdown_onlyRunsForAnEmptyReceiver() {
     verify(Api.idleShutdownShouldRun(true, false, false, 15))
     verify(!Api.idleShutdownShouldRun(true, true, false, 15))
@@ -129,6 +163,59 @@ TestCase {
     compare(Api.touchBoundedOrder(order, "four", 3), "one")
     compare(order, ["three", "two", "four"])
     compare(Api.touchBoundedOrder(order, "", 3), "")
+  }
+
+  function test_normalizeTrack_dropsRowsSpotifyReturnsEmpty() {
+    // A removed or unavailable song arrives as a wrapper around nothing.
+    compare(Api.normalizeTrack({ added_at: "2026-01-01T00:00:00Z", track: null }), null)
+    compare(Api.normalizeTrack({ item: null }), null)
+    compare(Api.normalizeTrack(null), null)
+    compare(Api.normalizeTrack({}), null)
+    verify(Api.normalizeTrack({ track: { name: "Kept", uri: "spotify:track:1", type: "track" } }))
+    // A local file has a name but no id, and still belongs in the list.
+    verify(Api.normalizeTrack({ track: { name: "Mine", uri: "spotify:local:a:b:c:1", type: "track" } }))
+  }
+
+  function test_localFilesAreNeverSentToSpotifyAsUris() {
+    var local = { kind: "item", type: "track", uri: "spotify:local:a:b:c:1", name: "Mine" }
+    var first = { kind: "item", type: "track", uri: "spotify:track:1", name: "One" }
+    var second = { kind: "item", type: "track", uri: "spotify:track:2", name: "Two" }
+    compare(Api.playlistItemUris([first, local, second]),
+      ["spotify:track:1", "spotify:track:2"])
+    compare(Api.playbackBody(first, [first, local, second], "").uris,
+      ["spotify:track:1", "spotify:track:2"])
+  }
+
+  function test_filteredSorted_sortsRowsWithMissingFieldsAsEmpty() {
+    var rows = [
+      { name: "b", subtitle: "Zed" },
+      { name: "a" },
+      { name: "c", subtitle: "Abba" }
+    ]
+    // No artist sorts first, as an empty name would, not under "undefined".
+    compare(Api.filteredSorted(rows, "", "artist", false).map(function(row) { return row.name }),
+      ["a", "c", "b"])
+  }
+
+  function test_compactCount_neverShowsAThousandOfAUnit() {
+    compare(Api.compactCount(999949), "999.9K")
+    compare(Api.compactCount(999950), "1.0M")
+    compare(Api.compactCount(999999), "1.0M")
+    compare(Api.compactCount(999950000), "1.0B")
+    compare(Api.compactCount(12345), "12.3K")
+    compare(Api.compactCount(1500000), "1.5M")
+  }
+
+  function test_parseStringList_keepsWordsThatNameBuiltIns() {
+    compare(Api.parseStringList(["constructor", "hasOwnProperty", "toString", "abc", "abc"]),
+      ["constructor", "hasOwnProperty", "toString", "abc"])
+  }
+
+  function test_redact_coversBareTokensAndOtherSeparators() {
+    verify(Api.redact("error=x;refresh_token=abc123").indexOf("abc123") < 0)
+    verify(Api.redact("failed, access_token=abc123").indexOf("abc123") < 0)
+    verify(Api.redact("sent Bearer abc123.def to the server").indexOf("abc123") < 0)
+    compare(Api.redact("the bearer of bad news"), "the bearer of bad news")
   }
 
   function test_filteredSorted_reusesTheUnchangedDefaultList() {
@@ -441,61 +528,6 @@ TestCase {
   // A personal client id has its own quota but loses the catalog endpoints a
   // grandfathered app still reaches, so what it refuses is tried once through
   // the shared one.
-  function test_sharedClientFallback_onlyForRefusalsItCanAnswer() {
-    var catalog = "/artists/abc/related-artists"
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET", catalog))
-    verify(Api.shouldFallBackToSharedClient(400, false, true, "GET", catalog),
-      "catalog refusals arrive as a bogus parameter error")
-    verify(Api.shouldFallBackToSharedClient(404, false, true, "GET", catalog))
-
-    verify(!Api.shouldFallBackToSharedClient(401, false, true, "GET", catalog),
-      "a token to refresh, not a permission problem")
-    verify(!Api.shouldFallBackToSharedClient(429, false, true, "GET", catalog),
-      "slow down rather than spend someone else's quota")
-    verify(!Api.shouldFallBackToSharedClient(200, false, true, "GET", catalog))
-    verify(!Api.shouldFallBackToSharedClient(500, false, true, "GET", catalog))
-
-    verify(!Api.shouldFallBackToSharedClient(403, true, true, "GET", catalog),
-      "only once")
-    verify(!Api.shouldFallBackToSharedClient(403, false, false, "GET", catalog),
-      "nothing to fall back to")
-  }
-
-  // The shared quota is the thing we are trying to stop spending, so only the
-  // requests a personal client genuinely cannot answer are sent to it.
-  function test_sharedClientFallback_staysOffAnythingItCannotHelpWith() {
-    verify(!Api.shouldFallBackToSharedClient(404, false, true, "PUT",
-      "/me/player/play"), "never repeat something that changes state")
-    verify(!Api.shouldFallBackToSharedClient(403, false, true, "POST",
-      "/playlists/abc/tracks"))
-    verify(!Api.shouldFallBackToSharedClient(400, false, true, "DELETE",
-      "/playlists/abc/tracks"))
-
-    verify(!Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "/me/tracks"), "your own library reads fine on your own client")
-    verify(!Api.shouldFallBackToSharedClient(404, false, true, "GET",
-      "https://api.spotify.com/v1/me/albums?offset=50"),
-      "including when it arrives as a paging cursor")
-
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "https://api.spotify.com/v1/artists/abc/albums"),
-      "a catalog cursor still falls back")
-    verify(Api.shouldFallBackToSharedClient(400, false, true, "GET", "/tracks"))
-    verify(Api.shouldFallBackToSharedClient(403, false, true, "GET",
-      "/browse/new-releases"))
-  }
-
-  // Spotify's own playlists arrive in a list of their own, so they replace the old copies.
-  function test_withSpotifyPlaylists_replacesOnlySpotifysOwn() {
-    var mine = { id: "m", uri: "spotify:playlist:m", ownerId: "jeremy" }
-    var stale = { id: "r", uri: "spotify:playlist:r", ownerId: "spotify", name: "old" }
-    var unfollowed = { id: "u", uri: "spotify:playlist:u", ownerId: "spotify" }
-    var fresh = { id: "r", uri: "spotify:playlist:r", ownerId: "spotify", name: "new" }
-    var merged = Api.withSpotifyPlaylists([mine, stale, unfollowed], [fresh])
-    compare(merged.map(function(p) { return p.id + ":" + (p.name || "") }),
-      ["m:", "r:new"])
-  }
-
   // The budget is shared with every other app using this client ID, so it
   // cannot be known ahead of time. Each refusal costs about twenty seconds of
   // everything stopping, so the gap only ever widens within a run.
@@ -833,18 +865,6 @@ TestCase {
     verify(albums.query.include_groups.indexOf("single") >= 0)
   }
 
-  function test_artistCatalog_readsTheTopTracksReply() {
-    var payload = { tracks: [
-      { id: "t1", type: "track", name: "One", uri: "spotify:track:t1",
-        duration_ms: 1000, artists: [{ name: "Someone", uri: "ar:1" }],
-        album: { name: "Album", uri: "al:1", images: [] } }
-    ] }
-    var out = Api.normalizeArtistTopTracks(payload, 96)
-    compare(out.length, 1)
-    compare(out[0].name, "One")
-    compare(JSON.stringify(Api.normalizeArtistTopTracks(null, 96)), "[]")
-  }
-
   // Paging one request at a time is slow when the first reply already tells us
   // how many pages there are.
   function test_pageOffsets_askForEveryRemainingPageAtOnce() {
@@ -925,12 +945,6 @@ TestCase {
     var out = Api.withoutLikedTrack({ "ar:a": ["t1", "t2"], "ar:b": ["t1"] }, "t1")
     compare(out["ar:a"].join(","), "t2")
     compare(out["ar:b"].length, 0)
-  }
-
-  function test_likedIndex_batchesIdsIntoRequestSizedGroups() {
-    compare(JSON.stringify(Api.idBatches(["a", "b", "c"], 2)), '[["a","b"],["c"]]')
-    compare(JSON.stringify(Api.idBatches([], 2)), "[]")
-    compare(JSON.stringify(Api.idBatches(["a"], 0)), '[["a"]]')
   }
 
   // Playlists and artists carry no date of their own, so we work one out from
@@ -1073,10 +1087,11 @@ TestCase {
 
   function test_playHistory_survivesAFileRoundTrip() {
     var text = Api.encodePlayHistory({ plays: { "a": 100 } })
-    compare(Api.parsePlayHistory(text)["a"], 100)
-    compare(JSON.stringify(Api.parsePlayHistory("not json")), "{}")
-    compare(JSON.stringify(Api.parsePlayHistory("")), "{}")
-    compare(JSON.stringify(Api.parsePlayHistory('{"plays":[1,2]}')), "{}")
+    compare(Api.parsePlayHistoryRecord(text).plays["a"], 100)
+    compare(JSON.stringify(Api.parsePlayHistoryRecord("not json").plays), "{}")
+    compare(JSON.stringify(Api.parsePlayHistoryRecord("").plays), "{}")
+    compare(JSON.stringify(Api.parsePlayHistoryRecord('{"plays":[1,2]}').plays), "{}")
+    compare(Api.parsePlayHistoryRecord(Api.encodePlayHistory({ owner: "someone" })).owner, "someone")
   }
 
   function test_mergedPlayTimes_saysWhetherATimeWasMeasuredOrEstimated() {
@@ -1370,43 +1385,10 @@ TestCase {
     compare(Api.playlistItemsEmptyMessage(own, 0,
       "API rate limit exceeded. Try again in 10 seconds.", 429, "user-1"),
       "Couldn't load this playlist. Try again in a moment.")
-    compare(Api.playlistItemsEmptyMessage(own, 0,
-      "API rate limit exceeded. Try again in 10 seconds.", 429, "user-1", true),
-      Api.sharedClientRateLimitMessage())
     compare(Api.playlistItemsEmptyMessage(own, 0, "Server error", 500,
-      "user-1", true), "Couldn't load this playlist. Try again in a moment.")
+      "user-1"), "Couldn't load this playlist. Try again in a moment.")
     compare(Api.playlistItemsEmptyMessage(followed, 0, "", 200, ""),
       "This playlist has no visible items.")
-  }
-
-  function test_responsiveMediaRowsAndSearchColumnsUseMeasuredWidth() {
-    verify(Api.mediaRowShouldCompact(220, 180, 4))
-    verify(!Api.mediaRowShouldCompact(180, 220, 4))
-    verify(!Api.mediaRowShouldCompact(220, 180, 0))
-    compare(Api.responsiveResultColumns(1000, 760), 2)
-    compare(Api.responsiveResultColumns(500, 760), 1)
-  }
-
-  function test_sectionedMediaRows_flattensGroupsForOneVirtualizedView() {
-    var songs = [{ id: "one" }, { id: "two" }, { id: "three" }]
-    var rows = Api.sectionedMediaRows([
-      { id: "songs", heading: "SONGS", items: songs, loading: false, hasMore: true },
-      { id: "albums", heading: "ALBUMS", items: [], loading: false, hasMore: false },
-      { id: "playlists", heading: "PLAYLISTS", items: [], loading: true, hasMore: false }
-    ], 2)
-
-    compare(rows.length, 6)
-    compare(rows[0].kind, "heading")
-    compare(rows[0].sectionId, "songs")
-    compare(rows[1].kind, "items")
-    compare(rows[1].items.length, 2)
-    compare(rows[1].startIndex, 0)
-    compare(rows[2].items.length, 1)
-    compare(rows[2].startIndex, 2)
-    compare(rows[3].kind, "more")
-    compare(rows[4].kind, "heading")
-    compare(rows[4].sectionId, "playlists")
-    compare(rows[5].kind, "more")
   }
 
   function test_artistSubtitleSuffix_keepsNonArtistAlbumDetails() {
@@ -1653,39 +1635,6 @@ TestCase {
     ], "Björk"), null)
   }
 
-  function test_trackRadioPlaylists_onlyKeepsExactSpotifyContexts() {
-    var result = Api.trackRadioPlaylists([
-      { id: "official", uri: "spotify:playlist:official", type: "playlist",
-        name: "Dreams - 2004 Remaster Radio", ownerId: "spotify" },
-      { id: "copy", uri: "spotify:playlist:copy", type: "playlist",
-        name: "Dreams - 2004 Remaster Radio", ownerName: "A listener" },
-      { id: "other", uri: "spotify:playlist:other", type: "playlist",
-        name: "Sunset Dreams - 2004 Remaster Radio", ownerName: "Spotify" }
-    ], "Dreams - 2004 Remaster")
-
-    compare(result.length, 1)
-    compare(result[0].id, "official")
-  }
-
-  function test_radioSeedMatches_acceptsRelinkedTrackFromSameArtist() {
-    verify(Api.radioSeedMatches({
-      id: "market-version", uri: "spotify:track:market-version",
-      name: "Love The Way You Lie",
-      artists: [{ id: "eminem", name: "Eminem" }, { id: "rihanna", name: "Rihanna" }]
-    }, {
-      id: "original", uri: "spotify:track:original",
-      name: "Love The Way You Lie",
-      artists: [{ id: "eminem", name: "Eminem" }]
-    }))
-    verify(!Api.radioSeedMatches({
-      id: "cover", name: "Love The Way You Lie",
-      artists: [{ id: "cover-band", name: "Cover Band" }]
-    }, {
-      id: "original", name: "Love The Way You Lie",
-      artists: [{ id: "eminem", name: "Eminem" }]
-    }))
-  }
-
   function test_uniqueRadioTracks_keepsSeedFirstAndDropsDuplicateUris() {
     var seed = { uri: "spotify:track:seed", name: "Seed" }
     var radio = Api.uniqueRadioTracks(seed, [
@@ -1802,8 +1751,43 @@ TestCase {
     compare(episode.subtitle, "A show")
     compare(episode.parentContext.type, "show")
     compare(episode.resumeMs, 42000)
-    compare(episode.fullyPlayed, false)
+    verify(!episode.fullyPlayed)
     compare(episode.playedAt, "2026-08-11T10:00:00Z")
+  }
+
+  // Rows are kept by the thousand, so nothing stores what it does not have.
+  function test_normalizedRowsLeaveOutEmptyFields() {
+    var track = Api.normalizeTrack({ type: "track", id: "t", uri: "spotify:track:t",
+      name: "Song", artists: [{ id: "a", uri: "spotify:artist:a", name: "Artist" }],
+      album: { id: "b", uri: "spotify:album:b", type: "album", name: "Album", images: [] } }, 96)
+    verify(JSON.stringify(track).length < 700, JSON.stringify(track).length + " bytes for a bare track")
+    compare(track.artists[0].kind, "context", "an artist still opens as a page")
+    compare(track.artists[0].type, "artist")
+    compare(track.albumItem.kind, "context", "so does an album")
+    var album = Api.normalizeContext({ type: "album", id: "b", uri: "spotify:album:b", name: "Album" }, 96)
+    verify(!album.hasOwnProperty("description"))
+    verify(!album.hasOwnProperty("genres"))
+    compare(Api.artistDetailLine(album), "", "readers treat a missing field as empty")
+    verify(JSON.stringify(Api.compactRelease(album)).length <= JSON.stringify(album).length)
+    compare(Api.compactRelease(album).kind, "context")
+  }
+
+  function test_appendLikedIdsKeepsOrderAndSkipsRepeats() {
+    var target = { a: ["1"] }
+    Api.appendLikedIds(target, { a: ["1", "2"], b: ["3"] })
+    compare(JSON.stringify(target), '{"a":["1","2"],"b":["3"]}')
+  }
+
+  function test_plainLabelStripsWhatWouldReadAsRichText() {
+    compare(Api.plainLabel('<img src="http://x">Speaker'), 'img src="http://x"Speaker')
+    compare(Api.plainLabel(undefined), "")
+  }
+
+  function test_playbackFailureMessages() {
+    verify(Api.playbackFailureMessage("soloist_expired").indexOf("Soloist") >= 0)
+    verify(Api.playbackFailureMessage("missing_credentials") !== "")
+    compare(Api.playbackFailureMessage("connection_failed"), "",
+      "an ordinary failure is left to systemd's restarts")
   }
 
   function test_searchGroups_normalizeEverySupportedType() {
@@ -2207,8 +2191,6 @@ TestCase {
     compare(Api.repeatModeLabel("context"), "All")
     compare(Api.searchTypeLabel("track"), "Songs")
     compare(Api.searchTypeLabel("audiobook"), "Books")
-    compare(Api.spotifyTypeLabel("track"), "Song")
-    compare(Api.spotifyTypeLabel("playlist"), "Playlist")
   }
 
   function test_backendLoadFields_mapsWebApiBodies() {
@@ -2563,25 +2545,37 @@ TestCase {
     compare(Api.shortcutHintCaption("Shift+F10", shift, true), "F10")
     compare(Api.shortcutHintCaption("Shift+F10", none, true), "")
     compare(Api.shortcutHintCaption("Menu", none, true), "Menu")
-    compare(Api.shortcutOverlayLabel("Shift+F10", shift, true, "↵"), "↵ F10")
-    compare(Api.shortcutOverlayLabel("Shift+F10", shift, true, ""), "F10")
     compare(Api.shortcutHintCaption("C", none, true), "C")
-    compare(Api.shortcutOverlayLabel("C", none, true, "↵"), "↵ C")
     compare(Api.shortcutHintCaption("Ctrl+,", ctrl, true), ",")
     compare(Api.shortcutHintCaption("Ctrl+/", ctrl, true), "/")
     compare(Api.shortcutHintCaption("Esc", none, true), "Esc")
     compare(Api.shortcutHintCaption("Space", none, false), "")
-    compare(Api.shortcutOverlayLabel("Space", none, true, "Tab"), "Tab Space")
-    compare(Api.shortcutOverlayLabel(["/", "Ctrl+F"], none, true, "Tab"), "Tab /")
-    compare(Api.shortcutOverlayLabel("Space", none, true, ""), "Space")
-    compare(Api.shortcutOverlayLabel("Space", none, true, "↵"), "↵ Space")
-    compare(Api.shortcutOverlayLabel("Ctrl+S", none, true, ""), "")
-    compare(Api.shortcutOverlayLabel("Space", none, false, "Tab"), "")
-    compare(Api.shortcutModifierFlagsAfterEvent(0, false, 3, 0), 3)
-    compare(Api.shortcutModifierFlagsAfterEvent(3, true, 0, 1), 3)
-    compare(Api.shortcutModifierFlagsAfterEvent(3, false, 3, 1), 2)
-    compare(Api.shortcutModifierFlagsAfterEvent(1, false, 1, 1), 0)
-    compare(Api.shortcutModifierFlagsAfterEvent(3, true, 0, 0), 3)
+  }
+
+  function test_heldHintModifiers_followOnlyKeysSeenGoingDown() {
+    var ctrl = 1, shift = 2
+    // A modifier key going down or up is the only thing that sets or clears it.
+    compare(Api.heldHintModifiers(0, ctrl, true, ctrl), ctrl)
+    compare(Api.heldHintModifiers(ctrl, ctrl | shift, true, shift), ctrl | shift)
+    compare(Api.heldHintModifiers(ctrl | shift, shift, false, ctrl), shift)
+    compare(Api.heldHintModifiers(ctrl, 0, false, ctrl), 0)
+    // A chord typed by a tool that never sent the modifier key shows nothing.
+    compare(Api.heldHintModifiers(0, ctrl, true, 0), 0)
+    // An ordinary key going down tells the truth about a release that was missed.
+    compare(Api.heldHintModifiers(ctrl | shift, ctrl, true, 0), ctrl)
+    compare(Api.heldHintModifiers(ctrl, 0, true, 0), 0)
+    // Its release says nothing reliable, so nothing changes.
+    compare(Api.heldHintModifiers(ctrl, 0, false, 0), ctrl)
+  }
+
+  function test_mixColors_blendsTowardTheSecond() {
+    var mixed = Api.mixColors(Qt.rgba(0, 0, 0, 1), Qt.rgba(1, 0.5, 0, 1), 0.5)
+    fuzzyCompare(mixed.r, 0.5, 0.01)
+    fuzzyCompare(mixed.g, 0.25, 0.01)
+    fuzzyCompare(mixed.b, 0, 0.01)
+    fuzzyCompare(mixed.a, 1, 0.01)
+    fuzzyCompare(Api.mixColors(Qt.rgba(0, 0, 0, 1), Qt.rgba(1, 1, 1, 1), 2).r, 1, 0.01)
+    fuzzyCompare(Api.mixColors(Qt.rgba(0, 0, 0, 1), Qt.rgba(1, 1, 1, 1), -1).r, 0, 0.01)
   }
 
   function test_searchShortcutAction_startsGlobalThenTogglesScope() {
@@ -2605,108 +2599,7 @@ TestCase {
     compare(Api.listIndexAfterMove(3, -1, 1), 0)
   }
 
-  function test_cursorNavHint_marksTabAndArrowDestinations() {
-    var query = {
-      currentRegion: "footer",
-      currentAction: "play",
-      regionActions: ["previous", "play", "next"],
-      tabRegion: "sidebar",
-      tabAction: "nav-home",
-      backtabRegion: "page",
-      backtabAction: "list",
-      modifiersHeld: false
-    }
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "footer", action: "play"
-    })), "↵")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "footer", action: "next"
-    })), "↓")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "footer", action: "previous"
-    })), "↑")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "sidebar", action: "nav-home"
-    })), "Tab")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "page", action: "list"
-    })), "⇧Tab")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "footer", action: "next", modifiersHeld: true
-    })), "")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "sidebar", action: "nav-home", modifiersHeld: true
-    })), "Tab")
-    compare(Api.cursorNavHint({
-      region: "popup",
-      action: "sleep-30",
-      currentRegion: "popup",
-      currentAction: "sleep-15",
-      regionActions: ["sleep-15", "sleep-30", "sleep-cancel"],
-      tabRegion: "popup",
-      tabAction: "sleep-30"
-    }), "Tab")
-    compare(Api.cursorNavHint({
-      region: "footer",
-      action: "play",
-      currentRegion: "footer",
-      currentAction: "play",
-      tabRegion: "footer",
-      tabAction: "play",
-      cursorActive: false
-    }), "Tab")
-  }
-
-  function test_cursorListRowHint_marksTheRowsArrowsWouldPress() {
-    var list = {
-      count: 5,
-      currentIndex: 3,
-      atList: true,
-      modifiersHeld: false
-    }
-    compare(Api.cursorListRowHint(Api.assign({ rowIndex: 3 }, list)), "↵")
-    compare(Api.cursorListRowHint(Api.assign({ rowIndex: 2 }, list)), "↑")
-    compare(Api.cursorListRowHint(Api.assign({ rowIndex: 4 }, list)), "↓")
-    compare(Api.cursorListRowHint(Api.assign({ rowIndex: 0 }, list)), "")
-    compare(Api.cursorListRowHint({
-      rowIndex: 0, count: 5, currentIndex: 3, previousIsCurrent: true
-    }), "↓")
-    compare(Api.cursorListRowHint({
-      rowIndex: 4, count: 5, currentIndex: 3, nextIsCurrent: true
-    }), "↑")
-    compare(Api.cursorNavHint({
-      region: "sidebar",
-      action: "nav-settings",
-      currentRegion: "sidebar",
-      currentAction: "sidebar-playlists",
-      regionActions: ["nav-playlists", "sidebar-playlists", "nav-settings"],
-      listAction: "sidebar-playlists",
-      listIndex: 3,
-      listCount: 8
-    }), "")
-    compare(Api.cursorNavHint({
-      region: "sidebar",
-      action: "nav-settings",
-      currentRegion: "sidebar",
-      currentAction: "sidebar-playlists",
-      regionActions: ["nav-playlists", "sidebar-playlists", "nav-settings"],
-      listAction: "sidebar-playlists",
-      listIndex: 7,
-      listCount: 8
-    }), "↓")
-    compare(Api.cursorListRowHint({
-      rowIndex: 3, count: 8, currentIndex: 3, tabIsList: true, tabRowIndex: 1
-    }), "")
-    compare(Api.cursorListRowHint({
-      rowIndex: 1, count: 8, currentIndex: 3, tabIsList: true, tabRowIndex: 1
-    }), "Tab")
-    compare(Api.cursorListRowHint({
-      rowIndex: 1, count: 8, currentIndex: 3, tabIsList: true, tabRowIndex: 1,
-      modifiersHeld: true
-    }), "Tab")
-    compare(Api.cursorListRowHint({
-      rowIndex: 3, count: 5, currentIndex: 3, atList: true, tabIsList: true
-    }), "↵")
+  function test_listHintRowIndex_staysInsideTheList() {
     compare(Api.listHintRowIndex(8, 1), 1)
     compare(Api.listHintRowIndex(8, -1), 0)
     compare(Api.listHintRowIndex(0, 0), -1)

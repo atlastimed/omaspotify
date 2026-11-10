@@ -6,7 +6,9 @@ This is [atlastimed’s fork](https://github.com/atlastimed/omaspotify) of
 The upstream player and MIT attribution are retained.
 
 Tunemarchy supplies a compact bar panel; this plugin owns the full library,
-account sign-in and playback. Hide this plugin’s own bar entry with
+account sign-in and playback. While Tunemarchy is in the bar and connected,
+this plugin’s own bar entry steps aside, so there is one Spotify icon. To hide
+it always, run
 `omarchy bar set io.github.atlastimed.omaspotify showBarWidget false --json`.
 The full player remains available through Tunemarchy’s **Open** action or
 `omarchy-shell shell summon io.github.atlastimed.omaspotify '{}'`.
@@ -68,7 +70,7 @@ too.
 | `Ctrl+F` or `/` again | Toggle current area / all of Spotify |
 | `Tab` / `F6` | Move between sidebar, search, the song list, and the player |
 | `Arrow keys` | Move to a control; Enter activates |
-| `C` | Row actions; arrows or Enter choose |
+| `C` | Actions for the highlighted row or sidebar item; arrows or Enter choose |
 | `Space` | Play or pause |
 | `Ctrl+Left` / `Ctrl+Right` | Previous or next song |
 | `Shift+Left` / `Shift+Right` | Seek 10 seconds |
@@ -77,15 +79,13 @@ too.
 | `Ctrl+Shift+A` | Open the current song's artist |
 | `Ctrl+Shift+B` | Open the current song's album |
 | `Ctrl+/` | See every keyboard shortcut |
-| `Ctrl+H` | Hide visible shortcut hints |
 
-The first shortcut, Tab, or opening the player from the keyboard lights
-matching controls with the next key. Hold Ctrl, Shift, or Alt to see those
-chords; the matching hints remain until you release the held modifiers. While
-hints are visible, the header keeps a **Ctrl+H · Hide hints** action in reach.
-It turns hints off until you enable them again in Settings.
+Hold Ctrl, Shift, or Alt for a moment and a small keycap appears beside each
+control that modifier works, and goes when you let go. A quick chord shows
+nothing. While you are steering with Tab or the arrow keys, the keys that need
+no modifier are shown the same way. Hints can be turned off in Settings.
 
-![Shortcut hints lighting up the sidebar, search and transport on the For you page](docs/screenshots/shortcut-hints.png)
+![Keycaps beside the search field, settings and transport while Ctrl is held](docs/screenshots/shortcut-hints.png)
 
 The mini-player takes keyboard focus when it is opened from a shortcut. Use
 `Tab` or the arrow keys to select every control, `Enter` to activate buttons,
@@ -102,7 +102,7 @@ Everything is where you expect it to be—just faster, lighter, and dressed in
 your Omarchy theme. Your whole library lives in the sidebar: playlists,
 albums, artists and podcasts together, sorted however you like.
 
-![The Ambient Space Soundscapes playlist open in OmaSpotify](docs/screenshots/library-playlist.png)
+![A playlist open in OmaSpotify, shown with made-up data](docs/screenshots/library-playlist.png)
 
 ### Everything from an artist, in one view
 
@@ -110,7 +110,7 @@ Browse albums and EPs, songs found by artist-scoped search, and your indexed
 liked songs together. Artist search results are filtered by artist ID; they
 are not Spotify's unavailable top-track ranking.
 
-![The Lane 8 artist page, with top releases, top songs and liked songs side by side](docs/screenshots/artist-page.png)
+![An artist page, with releases and songs side by side, shown with made-up data](docs/screenshots/artist-page.png)
 
 ### What you actually listened to
 
@@ -192,25 +192,6 @@ volume, including speakers, not the computer's output level.
 
 ## Connect your Spotify account
 
-1. Click the Spotify icon in your bar (on the left by default; your layout may
-   place it elsewhere).
-2. Click **Set up and continue**, or **Continue with Spotify** if playback is
-   already installed.
-3. Sign in on Spotify's own page in your browser and approve access.
-4. To listen on this computer, complete the separate playback authorization
-   in your browser. If prompted, choose **Finish playback setup**.
-
-You need a Spotify Premium account. You do not need to create a Spotify
-Developer app or enter a client ID, client secret, or password in OmaSpotify.
-Account access and playback on this computer use separate authorizations.
-
-Local playback installs an exact-version backend only after its GitHub build
-provenance matches this plugin version's tag and the checkout's backend inputs
-still match that tagged source. If verification is unavailable, setup builds
-the locked Rust source locally instead of executing an unverified download.
-
-## Connect your Spotify account
-
 1. Open the [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
    and create or select your own app with **Web API** enabled.
 2. Add `http://127.0.0.1:8989/login` to its Redirect URIs, exactly. Existing
@@ -241,17 +222,24 @@ own use; do not distribute your ID as the default for other installations.
 
 ### Local playback and updates
 
+Local playback installs an exact-version backend only after its GitHub build
+provenance matches this plugin version's tag and the checkout's backend inputs
+still match that tagged source. If verification is unavailable, setup builds
+the locked Rust source locally instead of executing an unverified download.
+
 Soloist is downloaded directly from Spotify, not redistributed in this repository.
 Its builds expire after 90 days. The installed user timer checks daily and renews
-builds after 75 days; startup also checks. A running player keeps playing during
-an update and uses the new build on its next start. Internet access is required
+builds after 75 days. Starting playback only downloads a build when none can run,
+so renewal never delays your music. A running player keeps playing during an
+update and uses the new build on its next start. Internet access is required
 for renewal. The cache is capped at 512 MB.
 
 The API key is stored in GNOME Keyring, and pairing state lives in the private
 `$XDG_STATE_HOME/omaspotify/soloist` directory. Do not paste your key into an issue
-or commit it. Soloist currently accepts its key as a process argument, so other
-processes running as your Linux user can inspect it. Its control WebSocket binds
-only to loopback; local clients, including browser pages, must be trusted.
+or commit it. Soloist only accepts its key as a process argument, so other programs
+on this computer can read it while Soloist runs, including those of other Linux
+users on a shared machine. Its control WebSocket binds only to loopback; local
+clients, including browser pages, must be trusted.
 
 `omaspotify-soloist.service` starts on demand. The update timer is enabled at login;
 the player itself is not. Inspect either with `systemctl --user status`.
@@ -327,7 +315,8 @@ used again.
 ## Library features
 
 - Browse discovery results where Spotify makes them available to your developer app.
-- Browse Liked Songs, saved albums, followed artists, podcasts, and books.
+- Browse Your library: liked songs, saved albums, followed artists, podcasts, and
+  books.
 - Create playlists, add songs, reorder tracks, and turn followed playlists
   into your own editable copies when Spotify makes their contents available.
 - Build a queue, play an artist mix, use shuffle and repeat, or set a sleep timer.
@@ -340,6 +329,7 @@ used again.
 
 Your Spotify password is entered only on Spotify's own page. OmaSpotify
 stores your saved session in GNOME Keyring and clears it when you log out.
+Logging out also deletes your local listening record, so OmaSpotify asks first.
 
 Want the details? Read the [technical notes](docs/TECHNICAL.md) or see the
 [memory benchmark](docs/BENCHMARK.md).
