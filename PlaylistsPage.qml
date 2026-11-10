@@ -197,6 +197,7 @@ Item {
       contextUri: page.playlist ? page.playlist.uri : ""
       showQueue: true
       showSort: true
+      showCount: false
       showSave: true
       browseContexts: false
       allowReorder: page.playlist && page.service.playlistOwned(page.playlist)

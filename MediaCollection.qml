@@ -19,6 +19,8 @@ Item {
   property bool sortDescending: false
   property string contextUri: ""
   property bool showSort: false
+  // Off where a header above already says how many there are.
+  property bool showCount: true
   property bool showQueue: true
   property bool showPlaylist: true
   property bool showSave: true
@@ -383,6 +385,7 @@ Item {
 
       Text {
         id: countLabel
+        visible: root.showCount || root.filterText.trim() !== ""
         anchors.verticalCenter: parent.verticalCenter
         textFormat: Text.PlainText
         text: root.visibleItems.length

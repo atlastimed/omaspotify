@@ -373,7 +373,7 @@ Item {
             cursorId: "set-hints"
             width: page.toggleWidth
             label: "Shortcut hints"
-            description: "After a shortcut or Tab, controls show the next key. Ctrl+H turns this off."
+            description: "Hold Ctrl, Shift or Alt to see the keys on each control. Tab shows the rest."
             checked: page.panel.draftShortcutHints
             onClicked: page.saveToggle("draftShortcutHints")
           }
@@ -382,6 +382,12 @@ Item {
 
       Section {
         SectionTitle { text: "Bar text" }
+
+        SettingNote {
+          visible: page.service && page.service.companionAttached === true
+          text: "Tunemarchy is connected. While it is in the bar it is your bar player, "
+            + "and this one steps aside, so these apply only when it is not there."
+        }
 
         Flow {
           width: parent.width

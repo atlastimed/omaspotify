@@ -6,7 +6,9 @@ This is [atlastimed’s fork](https://github.com/atlastimed/omaspotify) of
 The upstream player and MIT attribution are retained.
 
 Tunemarchy supplies a compact bar panel; this plugin owns the full library,
-account sign-in and playback. Hide this plugin’s own bar entry with
+account sign-in and playback. While Tunemarchy is in the bar and connected,
+this plugin’s own bar entry steps aside, so there is one Spotify icon. To hide
+it always, run
 `omarchy bar set io.github.atlastimed.omaspotify showBarWidget false --json`.
 The full player remains available through Tunemarchy’s **Open** action or
 `omarchy-shell shell summon io.github.atlastimed.omaspotify '{}'`.
@@ -77,15 +79,13 @@ too.
 | `Ctrl+Shift+A` | Open the current song's artist |
 | `Ctrl+Shift+B` | Open the current song's album |
 | `Ctrl+/` | See every keyboard shortcut |
-| `Ctrl+H` | Hide visible shortcut hints |
 
-The first shortcut, Tab, or opening the player from the keyboard lights
-matching controls with the next key. Hold Ctrl, Shift, or Alt to see those
-chords; the matching hints remain until you release the held modifiers. While
-hints are visible, the header keeps a **Ctrl+H · Hide hints** action in reach.
-It turns hints off until you enable them again in Settings.
+Hold Ctrl, Shift, or Alt for a moment and a small keycap appears beside each
+control that modifier works, and goes when you let go. A quick chord shows
+nothing. While you are steering with Tab or the arrow keys, the keys that need
+no modifier are shown the same way. Hints can be turned off in Settings.
 
-![Shortcut hints lighting up the sidebar, search and transport on the For you page](docs/screenshots/shortcut-hints.png)
+![Keycaps beside the search field, settings and transport while Ctrl is held](docs/screenshots/shortcut-hints.png)
 
 The mini-player takes keyboard focus when it is opened from a shortcut. Use
 `Tab` or the arrow keys to select every control, `Enter` to activate buttons,
