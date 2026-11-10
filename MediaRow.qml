@@ -199,6 +199,8 @@ BorderSurface {
           ? (root.service ? root.service.artworkFor(root.itemData.imageUrl)
             : root.itemData.imageUrl) : ""
         retryLimit: 4
+        onLocalSourceMissing: if (root.service && root.itemData)
+          root.service.forgetArtwork(root.itemData.imageUrl)
         sourceSize.width: 64
         sourceSize.height: 64
         fillMode: Image.PreserveAspectCrop

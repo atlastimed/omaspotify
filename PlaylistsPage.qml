@@ -80,6 +80,9 @@ Item {
             sourceSize.height: 104
             fillMode: Image.PreserveAspectCrop
             asynchronous: true
+            onStatusChanged: if (status === Image.Error && page.playlist && page.service
+                && String(source).indexOf("file://") === 0)
+              page.service.forgetArtwork(page.playlist.imageUrl)
           }
         }
 

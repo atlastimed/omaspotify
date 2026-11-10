@@ -68,6 +68,8 @@ Item {
         requestedSource: page.service && page.service.artworkEnabled
           ? page.service.artworkFor(Api.idleMediaText(page.service.artUrl, page.idleItem, "imageUrl", ""))
           : ""
+        onLocalSourceMissing: page.service.forgetArtwork(
+          Api.idleMediaText(page.service.artUrl, page.idleItem, "imageUrl", ""))
         sourceSize.width: 920
         sourceSize.height: 920
         fillMode: Image.PreserveAspectCrop

@@ -11,6 +11,12 @@ else
   unset WAYLAND_DISPLAY
 fi
 export XDG_RUNTIME_DIR="$test_root/runtime"
+# The fixtures run the real service, which keeps artwork, state and units under
+# the home directory and empties them on sign-out. None of it may be the real one.
+export HOME="$test_root/home"
+export XDG_CACHE_HOME="$HOME/.cache" XDG_STATE_HOME="$HOME/.local/state"
+export XDG_CONFIG_HOME="$HOME/.config" XDG_DATA_HOME="$HOME/.local/share"
+mkdir -p "$XDG_CACHE_HOME" "$XDG_STATE_HOME" "$XDG_CONFIG_HOME" "$XDG_DATA_HOME"
 export QT_QPA_PLATFORMTHEME=generic NO_AT_BRIDGE=1
 cp "$source_root/"{AuthManager.qml,Api.js,OAuth.js} "$test_root/"
 sed 's|import "../.." as Plugin|import "." as Plugin|' \

@@ -802,6 +802,8 @@ Item {
 
   function keepArtwork(items) { artworkCache.keep(items) }
 
+  function forgetArtwork(url) { artworkCache.forget(url) }
+
   // The sidebar is the same library every launch, so it is drawn from disk
   // straight away and quietly replaced when Spotify answers.
   function applyLibraryCacheFile(raw) {

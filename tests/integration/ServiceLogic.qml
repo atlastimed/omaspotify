@@ -451,6 +451,15 @@ ShellRoot {
       done()
     } },
 
+    { name: "a kept cover that has gone is read from its source again", run: function(done) {
+      var url = "https://i.scdn.co/image/gone"
+      svc.artwork.cached = ({ "https://i.scdn.co/image/gone": true })
+      top.check(svc.artworkFor(url).indexOf("file://") === 0, "the kept copy was not used")
+      svc.forgetArtwork(url)
+      top.check(svc.artworkFor(url) === url, "still points at the file that has gone")
+      done()
+    } },
+
     { name: "a failed save is not later taken for a saved one", run: function(done) {
       heldFile.heldHash = "whatever was tried"
       heldFile.failures = heldFile.maxRetries

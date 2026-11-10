@@ -82,7 +82,7 @@ Popup {
     Keys.priority: Keys.BeforeItem
     Keys.onShortcutOverride: function(event) {
       if (shortcutModifiers.isHintModifierKey(event.key)) {
-        popup.panel.considerShortcutModeKey(event, true)
+        popup.panel.noteModifierKey(event, true)
         event.accepted = true
         return
       }
@@ -97,7 +97,7 @@ Popup {
         event.accepted = true
     }
     Keys.onPressed: function(event) {
-      popup.panel.considerShortcutModeKey(event, true)
+      popup.panel.noteModifierKey(event, true)
       if (shortcutModifiers.isHintModifierKey(event.key)) {
         event.accepted = true
         return
@@ -112,7 +112,7 @@ Popup {
       if (popup.panel.handleContextMenuKey(event)) event.accepted = true
     }
     Keys.onReleased: function(event) {
-      popup.panel.noteHeldModifiers(event, false)
+      popup.panel.noteModifierKey(event, false)
       if (shortcutModifiers.isHintModifierKey(event.key)) event.accepted = true
     }
 

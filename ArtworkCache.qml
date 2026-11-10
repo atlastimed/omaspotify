@@ -66,6 +66,26 @@ Item {
     return names
   }
 
+  // A row found its kept copy gone, so it reads from the source again and the
+  // copy is fetched afresh.
+  function forget(url) {
+    var text = String(url || "")
+    if (!text || !cached[text]) return
+    var kept = Api.shallowCopy(cached)
+    delete kept[text]
+    cached = kept
+    var names = Api.shallowCopy(namesOnDisk)
+    delete names[Api.artworkCacheName(text)]
+    namesOnDisk = names
+    Qt.callLater(root.refetch)
+  }
+
+  function refetch() {
+    var last = lastItems
+    keep(priorityItems)
+    if (!fetchProcess.running) keep(last)
+  }
+
   function scan() {
     if (!directory || scanProcess.running) return
     scanProcess.command = ["/usr/bin/sh", "-c", scanScript, "sh", directory,

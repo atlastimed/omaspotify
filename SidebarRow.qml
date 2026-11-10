@@ -95,6 +95,10 @@ BorderSurface {
         fillMode: Image.PreserveAspectCrop
         asynchronous: true
         visible: status === Image.Ready
+        // The kept copy has gone: read from the source and fetch it again.
+        onStatusChanged: if (status === Image.Error && row.service && row.item
+            && String(source).indexOf("file://") === 0)
+          row.service.forgetArtwork(row.item.imageUrl)
       }
 
       Text {
