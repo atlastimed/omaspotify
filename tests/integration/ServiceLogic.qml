@@ -628,6 +628,29 @@ ShellRoot {
       })
     } },
 
+    { name: "an open playlist shows how many songs it has now", run: function(done) {
+      svc.currentUserId = "me"
+      // The count kept with the library is from the last time the library was read.
+      var playlist = Api.normalizeContext({ type: "playlist", id: "grown", uri: "spotify:playlist:grown",
+        name: "Grown", owner: { id: "me" }, snapshot_id: "s", items: { total: 85 } }, 96)
+      svc.playlists = [playlist]
+      top.handler = function(x) {
+        var rows = []
+        for (var i = 0; i < 3; i++) rows.push({ track: { type: "track", id: "g" + i,
+          uri: "spotify:track:g" + i, name: "g", artists: [], album: {} } })
+        top.reply(x, 200, { items: rows, total: 87, offset: 0, next: null })
+      }
+      svc.openPlaylist(playlist)
+      top.waitUntil(function() { return svc.playlistItems.length === 3 }, 4000, function() {
+        top.check(svc.selectedPlaylist && svc.selectedPlaylist.total === 87,
+          "the header still counts " + (svc.selectedPlaylist ? svc.selectedPlaylist.total : "nothing"))
+        top.check(svc.playlists[0].total === 87, "the library still counts " + svc.playlists[0].total)
+        svc.selectedPlaylist = null
+        svc.playlists = []
+        done()
+      })
+    } },
+
     { name: "removing a repeated song says how many went", run: function(done) {
       svc.currentUserId = "me"
       var playlist = Api.normalizeContext({ type: "playlist", id: "p", uri: "spotify:playlist:p",

@@ -1898,6 +1898,33 @@ Item {
 
   // Every playlist edit comes back with a new snapshot id, so this is the one
   // place that knows the page we kept is now wrong.
+  // The library's count of a playlist dates from when the library was last read.
+  // The playlist's own page knows how many it has now.
+  function notePlaylistTotal(id, total) {
+    var key = String(id || "")
+    var count = Math.floor(Number(total) || 0)
+    if (!key || count <= 0) return
+    function counted(item) {
+      if (!item || String(item.id || "") !== key || item.total === count) return item
+      var copy = Api.shallowCopy(item)
+      copy.total = count
+      return copy
+    }
+    var changed = false
+    var next = []
+    for (var i = 0; i < playlists.length; i++) {
+      var row = counted(playlists[i])
+      if (row !== playlists[i]) changed = true
+      next.push(row)
+    }
+    if (changed) {
+      playlists = next
+      saveLibraryCache()
+    }
+    selectedPlaylist = counted(selectedPlaylist)
+    if (detailItem && detailItem.type === "playlist") detailItem = counted(detailItem)
+  }
+
   function updatePlaylistSnapshot(id, snapshotId) {
     var key = String(id || "")
     var snapshot = String(snapshotId || "")
@@ -2607,6 +2634,8 @@ Item {
           append, page.next)
         root.playlistItems = playlistPage.items
         root.playlistItemsNext = playlistPage.next
+        if (root.selectedPlaylist && payload && Number(payload.total) > 0)
+          root.notePlaylistTotal(root.selectedPlaylist.id, Number(payload.total))
         if (Api.playlistRestoreShouldContinue(root.playlistItems.length,
             root.playlistRestoreTargetCount, root.playlistItemsNext))
           root.loadPlaylistItems(true)

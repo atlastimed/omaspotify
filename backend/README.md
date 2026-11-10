@@ -35,7 +35,8 @@ matching the UI timer while Quickshell interpolates between updates. Backend
 state is held in one watch channel, unchanged events are discarded, commands
 are bounded, and MPRIS emits `Seeked` only for an actual seek event. MPRIS uses
 the library-recommended PID-qualified instance name so a stray second backend
-cannot take the supervised process's bus ownership.
+cannot take the supervised process's bus ownership. A lock file beside the
+socket stops that second backend before it starts an engine of its own.
 
 If librespot's session task ends, the backend replaces only its Session and
 Spirc pair. The socket, MPRIS name, player, and command queue remain alive.
@@ -54,7 +55,7 @@ does so only when that song is in the list, and an album or playlist load
 forgets the list.
 A failed attempt to reconnect keeps retrying with backoff, so a network outage
 of any length recovers on its own. A refused login stops immediately, because
-retrying cannot fix it. A session that connects and then ends straight away
+retrying cannot fix it. A session that connects and then ends within 30 seconds
 counts against a budget of five in ten minutes; exceeding it exits with status
 75, which systemd does not restart, and the player explains the failure.
 

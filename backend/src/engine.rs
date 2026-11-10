@@ -38,6 +38,8 @@ const INITIAL_VOLUME: u16 = ((u16::MAX as u32 * 90) / 100) as u16;
 const ENGINE_QUEUE_CAPACITY: usize = 64;
 const RECONNECT_LIMIT: usize = 5;
 const RECONNECT_WINDOW: Duration = Duration::from_secs(10 * 60);
+/// A session that held this long ended for a reason retrying can fix.
+const SHORT_SESSION: Duration = Duration::from_secs(30);
 const SESSION_CHECK_INTERVAL: Duration = Duration::from_secs(1);
 const SPIRC_STOP_TIMEOUT: Duration = Duration::from_secs(5);
 const SHUTDOWN_SPIRC_TIMEOUT: Duration = Duration::from_secs(3);
@@ -58,14 +60,18 @@ pub type EngineSender = mpsc::Sender<EngineRequest>;
 pub struct EngineRuntime {
     pub commands: EngineSender,
     pub(crate) shutdown: watch::Sender<bool>,
-    pub(crate) done: oneshot::Receiver<Result<()>>,
+    pub(crate) done: Option<oneshot::Receiver<Result<()>>>,
 }
 
 impl EngineRuntime {
+    /// Safe to call again after it has returned: an engine reports its end only once.
     pub async fn wait_done(&mut self) -> Result<()> {
-        (&mut self.done)
-            .await
-            .context("playback engine supervisor stopped")?
+        let Some(done) = self.done.as_mut() else {
+            return Ok(());
+        };
+        let result = done.await;
+        self.done = None;
+        result.context("playback engine supervisor stopped")?
     }
 
     pub fn shutdown(&self) {
@@ -179,7 +185,7 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
     Ok(EngineRuntime {
         commands,
         shutdown,
-        done,
+        done: Some(done),
     })
 }
 
@@ -200,6 +206,7 @@ async fn supervise_sessions(
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
     let mut reconnects = VecDeque::new();
+    let mut session_began = Instant::now();
 
     loop {
         tokio::select! {
@@ -238,7 +245,7 @@ async fn supervise_sessions(
         });
 
         let now = Instant::now();
-        if !record_reconnect(&mut reconnects, now) {
+        if !record_reconnect(&mut reconnects, now.duration_since(session_began), now) {
             return Err(crate::failure::Failure::ReconnectExhausted.into());
         }
         log::warn!("librespot session ended; reconnecting");
@@ -297,6 +304,7 @@ async fn supervise_sessions(
             let _ = spirc.load(LoadRequest::from_tracks(list, options));
         }
         spirc_task = tokio::spawn(next_task);
+        session_began = Instant::now();
         current_spirc.send_replace(Some(Arc::clone(&spirc)));
         state.update(|current| {
             current.lifecycle = Lifecycle::Ready;
@@ -388,12 +396,15 @@ async fn session_lost(session: &Session) {
     }
 }
 
-fn record_reconnect(attempts: &mut VecDeque<Instant>, now: Instant) -> bool {
+fn record_reconnect(attempts: &mut VecDeque<Instant>, lasted: Duration, now: Instant) -> bool {
     while attempts
         .front()
         .is_some_and(|attempt| now.saturating_duration_since(*attempt) >= RECONNECT_WINDOW)
     {
         attempts.pop_front();
+    }
+    if lasted >= SHORT_SESSION {
+        return true;
     }
     if attempts.len() >= RECONNECT_LIMIT {
         return false;
@@ -453,7 +464,8 @@ fn load_credentials(credentials_root: &Path, legacy_cache_root: &Path) -> Result
 async fn run_commands(
     mut receiver: mpsc::Receiver<EngineRequest>,
     current_spirc: watch::Receiver<Option<Arc<Spirc>>>,
-    player: Arc<Player>,
+    // Held so the player lives for as long as commands can arrive.
+    _player: Arc<Player>,
     fader: Fader,
     state: StateStore,
     track_list: watch::Sender<Vec<String>>,
@@ -465,7 +477,7 @@ async fn run_commands(
             &state,
             request.command,
             |command| match current_spirc.borrow().clone() {
-                Some(spirc) => execute(&spirc, &player, command)
+                Some(spirc) => execute(&spirc, command)
                     .map(|()| serde_json::json!({}))
                     .map_err(|error| ProtocolError::new("engine_error", error.to_string())),
                 None => Err(ProtocolError::new(
@@ -512,10 +524,8 @@ async fn softly<R, E>(
     }
 }
 
-fn execute(spirc: &Spirc, player: &Player, command: Command) -> Result<()> {
-    dispatch_local_command(command, |command| {
-        execute_spirc_command(spirc, player, command)
-    })
+fn execute(spirc: &Spirc, command: Command) -> Result<()> {
+    dispatch_local_command(command, |command| execute_spirc_command(spirc, command))
 }
 
 fn dispatch_local_command(
@@ -533,7 +543,7 @@ fn dispatch_local_command(
     send(command)
 }
 
-fn execute_spirc_command(spirc: &Spirc, player: &Player, command: Command) -> Result<()> {
+fn execute_spirc_command(spirc: &Spirc, command: Command) -> Result<()> {
     match command {
         Command::Activate => spirc.activate()?,
         Command::Play => spirc.play()?,
@@ -588,9 +598,6 @@ fn execute_spirc_command(spirc: &Spirc, player: &Player, command: Command) -> Re
             bail!("command is handled by the protocol server")
         }
     }
-
-    // Keep the player handle alive for the lifetime of the command task.
-    let _ = player;
     Ok(())
 }
 
@@ -1010,14 +1017,40 @@ mod tests {
         for offset in 0..RECONNECT_LIMIT {
             assert!(record_reconnect(
                 &mut attempts,
+                Duration::ZERO,
                 start + Duration::from_secs(offset as u64)
             ));
         }
         assert!(!record_reconnect(
             &mut attempts,
+            Duration::ZERO,
             start + Duration::from_secs(RECONNECT_LIMIT as u64)
         ));
-        assert!(record_reconnect(&mut attempts, start + RECONNECT_WINDOW));
+        assert!(record_reconnect(
+            &mut attempts,
+            Duration::ZERO,
+            start + RECONNECT_WINDOW
+        ));
+    }
+
+    #[test]
+    fn sessions_that_held_do_not_use_up_the_reconnect_budget() {
+        let start = Instant::now();
+        let mut attempts = VecDeque::new();
+        for offset in 0..RECONNECT_LIMIT as u64 * 3 {
+            assert!(record_reconnect(
+                &mut attempts,
+                SHORT_SESSION,
+                start + Duration::from_secs(offset * 40)
+            ));
+        }
+        assert!(attempts.is_empty());
+        assert!(record_reconnect(
+            &mut attempts,
+            SHORT_SESSION - Duration::from_millis(1),
+            start
+        ));
+        assert_eq!(attempts.len(), 1);
     }
 
     #[tokio::test]

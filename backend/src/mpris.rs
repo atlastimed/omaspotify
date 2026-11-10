@@ -87,9 +87,13 @@ impl PlayerInterface for MprisAdapter {
     }
 
     async fn seek(&self, offset: Time) -> fdo::Result<()> {
-        let position_ms = self
-            .state
-            .with(|state| seek_target(state.position_ms, offset.as_millis(), track_length(state)));
+        let position_ms = self.state.with(|state| {
+            seek_target(
+                live_position(state),
+                offset.as_millis(),
+                track_length(state),
+            )
+        });
         self.send(Command::Seek { position_ms })
     }
 
@@ -171,7 +175,7 @@ impl PlayerInterface for MprisAdapter {
     async fn position(&self) -> fdo::Result<Time> {
         Ok(self
             .state
-            .with(|state| Time::from_millis(i64::from(state.position_ms))))
+            .with(|state| Time::from_millis(i64::from(live_position(state)))))
     }
     async fn minimum_rate(&self) -> fdo::Result<PlaybackRate> {
         Ok(1.0)
@@ -207,6 +211,19 @@ fn track_length(state: &crate::protocol::BackendState) -> u32 {
         .map(|track| track.duration_ms)
         .filter(|ms| *ms > 0)
         .unwrap_or(u32::MAX)
+}
+
+/// The position right now, not as of the last update.
+fn live_position(state: &crate::protocol::BackendState) -> u32 {
+    let Some(anchor) = state.position_anchor else {
+        return state.position_ms;
+    };
+    let moved = if state.playback == PlaybackStatus::Playing {
+        (anchor.at.elapsed().as_millis() as f64 * anchor.speed) as u32
+    } else {
+        0
+    };
+    anchor.ms.saturating_add(moved).min(track_length(state))
 }
 
 fn seek_target(position_ms: u32, offset_ms: i64, length_ms: u32) -> u32 {
@@ -314,7 +331,9 @@ fn metadata(state: &crate::protocol::BackendState) -> Metadata {
     };
     let mut metadata = Metadata::new();
     metadata.set_trackid(Some(track_id_for(&track.uri)));
-    metadata.set_length(Some(Time::from_millis(i64::from(track.duration_ms))));
+    if track.duration_ms > 0 {
+        metadata.set_length(Some(Time::from_millis(i64::from(track.duration_ms))));
+    }
     if !track.art_url.is_empty() {
         metadata.set_art_url(Some(track.art_url.clone()));
     }
@@ -350,7 +369,54 @@ fn bus_name_suffix(process_id: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::protocol::{BackendState, Track};
+    use crate::protocol::{BackendState, PositionAnchor, Track};
+    use std::time::{Duration, Instant};
+
+    fn anchored(playback: PlaybackStatus, speed: f64, duration_ms: u32) -> BackendState {
+        BackendState {
+            playback,
+            position_ms: 10_000,
+            position_anchor: Some(PositionAnchor {
+                ms: 10_000,
+                at: Instant::now() - Duration::from_millis(600),
+                speed,
+            }),
+            track: Some(Track {
+                uri: "spotify:track:abc123".into(),
+                title: String::new(),
+                artists: Vec::new(),
+                album: String::new(),
+                art_url: String::new(),
+                duration_ms,
+                item_type: "track".into(),
+            }),
+            ..BackendState::default()
+        }
+    }
+
+    #[test]
+    fn the_position_keeps_moving_between_updates() {
+        let playing = live_position(&anchored(PlaybackStatus::Playing, 1.0, 0));
+        assert!((10_600..11_000).contains(&playing), "{playing}");
+        let slow = live_position(&anchored(PlaybackStatus::Playing, 0.5, 0));
+        assert!((10_300..10_500).contains(&slow), "{slow}");
+        let stalled = live_position(&anchored(PlaybackStatus::Playing, 0.0, 0));
+        assert_eq!(stalled, 10_000);
+        let paused = live_position(&anchored(PlaybackStatus::Paused, 1.0, 0));
+        assert_eq!(paused, 10_000);
+        let ended = live_position(&anchored(PlaybackStatus::Playing, 1.0, 10_200));
+        assert_eq!(ended, 10_200);
+    }
+
+    #[test]
+    fn without_an_anchor_the_position_is_the_last_one_published() {
+        let state = BackendState {
+            playback: PlaybackStatus::Playing,
+            position_ms: 10_000,
+            ..BackendState::default()
+        };
+        assert_eq!(live_position(&state), 10_000);
+    }
 
     #[test]
     fn metadata_preserves_spotify_uri_for_qml() {
@@ -370,6 +436,23 @@ mod tests {
         assert_eq!(metadata.title(), Some("A title"));
         assert_eq!(metadata.url().as_deref(), Some("spotify:track:abc123"));
         assert_eq!(metadata.length(), Some(Time::from_millis(42_000)));
+    }
+
+    #[test]
+    fn a_length_that_is_not_known_yet_is_left_out() {
+        let state = BackendState {
+            track: Some(Track {
+                uri: "spotify:track:abc123".into(),
+                title: "A title".into(),
+                artists: Vec::new(),
+                album: String::new(),
+                art_url: String::new(),
+                duration_ms: 0,
+                item_type: "track".into(),
+            }),
+            ..BackendState::default()
+        };
+        assert_eq!(metadata(&state).length(), None);
     }
 
     #[test]

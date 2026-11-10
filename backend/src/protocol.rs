@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use serde::{Deserialize, Serialize};
 
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -73,7 +75,6 @@ pub enum Lifecycle {
     #[default]
     Starting,
     Ready,
-    Error,
     Stopped,
 }
 
@@ -98,6 +99,14 @@ pub struct Track {
     pub item_type: String,
 }
 
+/// Where the position was at one moment and how fast it moves from there.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PositionAnchor {
+    pub ms: u32,
+    pub at: Instant,
+    pub speed: f64,
+}
+
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct BackendState {
     pub protocol_version: u16,
@@ -119,6 +128,8 @@ pub struct BackendState {
     pub error: String,
     #[serde(skip)]
     pub seek_sequence: u64,
+    #[serde(skip)]
+    pub position_anchor: Option<PositionAnchor>,
 }
 
 impl Default for BackendState {
@@ -141,6 +152,7 @@ impl Default for BackendState {
             error_code: String::new(),
             error: String::new(),
             seek_sequence: 0,
+            position_anchor: None,
         }
     }
 }
@@ -226,8 +238,30 @@ mod tests {
     }
 
     #[test]
+    fn a_request_reads_the_same_from_text_or_parsed_json() {
+        for line in [
+            r#"{"v":1,"id":7,"command":"seek","position_ms":1234}"#,
+            r#"{"v":1,"id":8,"command":"load","uris":["spotify:track:abc"],"offset_index":2}"#,
+            r#"{"v":1,"id":9,"command":"set_repeat","mode":"context"}"#,
+        ] {
+            let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
+            assert_eq!(
+                serde_json::from_value::<Request>(parsed).unwrap(),
+                serde_json::from_str::<Request>(line).unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn state_event_has_stable_envelope() {
-        let state = BackendState::default();
+        let state = BackendState {
+            position_anchor: Some(PositionAnchor {
+                ms: 0,
+                at: Instant::now(),
+                speed: 1.0,
+            }),
+            ..BackendState::default()
+        };
         let value = serde_json::to_value(ServerMessage::Event {
             v: PROTOCOL_VERSION,
             event: "state_changed",
@@ -239,6 +273,7 @@ mod tests {
         assert_eq!(value["state"]["engine"], "librespot");
         assert!(value["state"].get("error_code").is_none());
         assert!(value["state"].get("seek_sequence").is_none());
+        assert!(value["state"].get("position_anchor").is_none());
     }
 
     #[test]
