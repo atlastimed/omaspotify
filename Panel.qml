@@ -999,7 +999,7 @@ Item {
     var collections = pageCollections()
     for (var c = 0; c < collections.length; c++) {
       var collection = collections[c]
-      if (collections.length === 1 && collection.showSort) actions.push("sort")
+      if (collections.length === 1 && collection.sortShown) actions.push("sort")
       actions.push(collection.keyboardListId || "list")
       if (collections.length === 1) {
         if (collection.hasMore) actions.push("more")

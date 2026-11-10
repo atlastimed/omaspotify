@@ -21,6 +21,8 @@ Item {
   property bool showSort: false
   // Off where a header above already says how many there are.
   property bool showCount: true
+  // An empty list has nothing to sort, and "0 items" above "nothing here" says it twice.
+  readonly property bool sortShown: showSort && sourceItems.length > 0
   property bool showQueue: true
   property bool showPlaylist: true
   property bool showSave: true
@@ -353,7 +355,7 @@ Item {
       id: tools
       width: parent.width
       height: visible ? sortButton.implicitHeight : 0
-      visible: root.showSort
+      visible: root.sortShown
       spacing: Style.space(7)
 
       Button {

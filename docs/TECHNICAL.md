@@ -22,7 +22,10 @@ Local audio defaults to Spotify Soloist, supervised as a child of the Rust
 `omaspotify-backend --soloist` adapter in `omaspotify-soloist.service`. The adapter
 translates Soloist's loopback WebSocket events into the existing private Unix
 socket and MPRIS interfaces. Commands are serialized and acknowledged, with bounded
-frames and timeouts. Position uses a monotonic clock and publishes once a second.
+frames and timeouts. One unanswered command is reported and survived; a second in a
+row ends the adapter so systemd can restart it. A lock taken before anything starts
+keeps a second adapter from disturbing a running one. Position uses a monotonic
+clock and publishes once a second.
 Playlist offsets that Soloist cannot express locally fall back to the Spotify
 Web API, preserving the chosen context and song. Volume uses Soloist's linear scale.
 
@@ -84,6 +87,25 @@ clients you configure to use that same developer app. On a
 requests doubles and stays wide for the rest of the run. Every request logs where its time
 went — queueing, token refresh, or the network — which is what makes a slow call
 diagnosable at all. See `docs/LIBRARY-DATA.md` for the measurements.
+
+## The bar entry
+
+Omarchy's bar places its left, centre and right sections independently, so nothing
+stops a wide widget in one from being drawn over the next. `BarRoom.qml` measures
+the room between this entry's section and its neighbours and the entry never grows
+past it: the label shortens, and below a few letters gives way to the icon. Plugins
+are given no interface for this, so it reads the bar's own items. If their structure
+changes it finds nothing and steps aside, and the user's width cap applies alone.
+
+While Tunemarchy is in the same bar and holding its connection, the entry hides
+itself, and the mini-player shortcut opens Tunemarchy's panel. The shell offers a
+plugin that is both a panel and a bar widget no way to open its bar popup, so the
+shortcut opens this entry's popup directly through the surfaces the service keeps.
+
+Shortcut hints follow the modifier keys themselves. Only a modifier key seen going
+down counts as held, so a chord sent by a tool that sets modifiers without a key
+event, or a release that never arrives, cannot leave hints on. They appear after
+300 ms, and a second key before then cancels them as a chord being typed.
 
 ## Runtime requirements
 

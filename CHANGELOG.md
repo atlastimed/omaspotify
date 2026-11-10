@@ -1,8 +1,37 @@
 ## 2.3.0 — Full review
 
 A complete review of the plugin, backend, install scripts and CI, with fixes
-verified against tests and an isolated preview. Not yet exercised against a real
-Spotify session.
+verified against tests and an isolated preview, then run on a real desktop with a
+real account, three monitors and Tunemarchy in the bar.
+
+**Found by running it for real**
+
+- A long title in the bar no longer runs under the clock or the next section. The
+  bar lays its sections out without looking at each other, so the entry now measures
+  the room left and shortens its label to fit, ending in an ellipsis.
+- One Spotify icon, not two. With Tunemarchy in the bar and connected, this plugin's
+  own entry steps aside.
+- Shortcut hints no longer switch on at any modifier and stay on. Hold Ctrl, Shift or
+  Alt and a small keycap appears beside each control; let go and they leave. Nothing
+  is washed in colour, no keycap sits on top of an icon, and the arrows on
+  neighbouring rows are gone. `Ctrl+H` and the header's Hide hints button went with
+  them.
+- The mini-player shortcut works again. It returned "unavailable" on Omarchy 4.5,
+  which gives plugins no way to open a bar popup; it now opens its own, or
+  Tunemarchy's when that is the bar player.
+- Nearby speakers are found again. Every lookup built a URL with a query, and the
+  request function refused any path containing one, so discovery, activation and
+  Sonos control could never succeed.
+- Pinned items survive closing the player. Every close saved the player's own state
+  over the whole session.
+- Covers come back by themselves if the kept copies on disk go missing, instead of
+  showing placeholders until a restart.
+- An open playlist shows how many songs it has now, not how many it had when the
+  library was last read.
+- The sign-in page no longer shows a connection error after a successful sign-in.
+- A fresh install with no client ID no longer shows a disabled "Working" button.
+- Running the tests no longer empties the real player's artwork: four fixtures ran
+  the real service against the real cache directory.
 
 **Interface**
 
@@ -48,9 +77,29 @@ Spotify session.
 - An expired Soloist build or missing key is now explained rather than retried.
 - Playback startup errors were being read from the wrong directory and never shown.
 
+- A request the backend cannot read is refused under its own id, so the player no
+  longer waits for ever on it. One unanswered command no longer ends playback. Every
+  way out of the backend stops Soloist cleanly first, and a second backend can no
+  longer remove a running one's files.
+- Playlists made or converted here are still there after a restart. Top lists that
+  failed to load are asked for again, and a playlist that has changed moves in
+  Recents without waiting for a restart.
+- An unreachable keyring is no longer taken for a missing Soloist key, a build in its
+  renewal window is no longer downloaded again on every start, and a wait for the
+  install lock comes out of the download's time.
+- Removed songs no longer appear as "Untitled" rows, and local files are no longer
+  sent to Spotify.
+- Less idle work: a queue waiting out a rate limit no longer wakes the shell four
+  times a second, a poll with nothing new no longer rebuilds the device and artist
+  lists, and artwork is first listed when something wants it.
+
 **Security**
 
-- Signing in with a different account keeps each account's listening record apart.
+- Signing in with a different account keeps each account's listening record apart,
+  including when the new account's data arrives before its profile.
+- Signing out and uninstalling no longer delete the cache of a spotifyd you installed
+  yourself.
+- Soloist's own error text is logged with anything shaped like a key left out.
 - Sign-out now removes searches, pins and artwork as well.
 - Discovery rejects receiver paths with query strings and the cloud metadata address,
   and a slow receiver can no longer hang the player.
