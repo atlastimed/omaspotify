@@ -1851,16 +1851,24 @@ Item {
     saveLibraryCache()
   }
 
-  function loadProfile() {
-    if (currentUserId) return
+  // then runs once the account is known, or could not be learned.
+  function loadProfile(then) {
+    var next = typeof then === "function" ? then : null
+    if (currentUserId) {
+      if (next) next()
+      return
+    }
     var expected = dataSerial
     spotifyApi.request("GET", "/me", null, null, function(status, payload, error) {
-      if (expected !== root.dataSerial || error || !payload) return
-      var id = String(payload.id || "")
-      root.noteAccountOwner(id)
-      root.currentUserId = id
-      root.refreshPlaylistEdits()
-    }, { priority: "background" })
+      if (expected !== root.dataSerial) return
+      if (!error && payload) {
+        var id = String(payload.id || "")
+        root.noteAccountOwner(id)
+        root.currentUserId = id
+        root.refreshPlaylistEdits()
+      }
+      if (next) next()
+    }, { priority: next ? "interactive" : "background" })
   }
 
   function playlistById(id) {
@@ -4324,13 +4332,22 @@ Item {
     authManager.beginLogin()
   }
 
-  function finishLoginFlow() {
+  // A sign-in through the browser may be a different account. Whose it is comes
+  // first then, so nothing of theirs is filed under the account that was here.
+  function finishLoginFlow(accountMayHaveChanged) {
     loginFlowActive = false
     succeed("Connected to Spotify")
-    loadPlaybackState()
-    loadProfile()
-    openView(activeView, true)
-    loadSidebarPlaylists()
+    var loadTheirs = function() {
+      root.loadPlaybackState()
+      root.openView(root.activeView, true)
+      root.loadSidebarPlaylists()
+      root.ensureSavedTracksCrawl()
+    }
+    if (accountMayHaveChanged === true) loadProfile(loadTheirs)
+    else {
+      loadProfile()
+      loadTheirs()
+    }
   }
 
   function logout() {
@@ -4577,7 +4594,6 @@ Item {
 
   Component.onCompleted: {
     ensureStateDir.running = true
-    artworkCache.scan()
     settingsSync.start()
     daemonManager.refreshStatus()
   }
@@ -4585,10 +4601,11 @@ Item {
   Connections {
     target: root.shell
     ignoreUnknownSignals: true
-    function onShellConfigChanged() { root.syncSettings() }
+    // The host can still signal while a reload is taking this service apart.
+    function onShellConfigChanged() { if (root) root.syncSettings() }
     // Third-party plugins never see shellConfig; the host republishes their
     // slice as barConfig instead, so live setting edits arrive here.
-    function onBarConfigChanged() { root.syncSettings() }
+    function onBarConfigChanged() { if (root) root.syncSettings() }
   }
 
   Connections {
@@ -4597,10 +4614,10 @@ Item {
       // Reconnect may have chosen another account, which only /me can reveal.
       root.currentUserId = ""
       root.syncCurrentTrackSaved(true)
-      var continueSetup = root.loginFlowActive && (!root.daemon.playbackReady
+      var signedInByHand = root.loginFlowActive
+      var continueSetup = signedInByHand && (!root.daemon.playbackReady
         || !root.daemon.credentialsAvailable)
-      root.finishLoginFlow()
-      root.ensureSavedTracksCrawl()
+      root.finishLoginFlow(signedInByHand)
       if (continueSetup) {
         root.loginFlowActive = true
         root.succeed("Spotify connected · finishing playback on this computer")

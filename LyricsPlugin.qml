@@ -73,7 +73,8 @@ Item {
   signal promptRequested(string surface, string availability)
   signal opened(string surface)
 
-  onAvailabilityChanged: resumeIntent()
+  // Also fires as a reload takes this apart, when its functions are already gone.
+  onAvailabilityChanged: if (typeof resumeIntent === "function") resumeIntent()
 
   function currentSong() {
     return service ? service.currentLyricsSong : null

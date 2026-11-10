@@ -175,9 +175,13 @@ ShellRoot {
     { name: "the large caches wait for a panel", run: function(done) {
       top.check(!svc.lazyCachesWanted, "wanted before anything was opened")
       top.check(!svc.queryCacheReady && !svc.releaseCacheReady, "read before anything was opened")
+      top.check(!svc.artwork.scanned, "artwork was listed before anything was opened")
       svc.setUiVisible("full-panel", true)
-      top.waitUntil(function() { return svc.queryCacheReady && svc.releaseCacheReady }, 3000, function() {
+      top.waitUntil(function() {
+        return svc.queryCacheReady && svc.releaseCacheReady && svc.artwork.scanned
+      }, 3000, function() {
         top.check(svc.queryCacheReady && svc.releaseCacheReady, "never read after opening")
+        top.check(svc.artwork.scanned, "artwork was never listed after opening")
         svc.setUiVisible("full-panel", false)
         done()
       })
@@ -558,6 +562,34 @@ ShellRoot {
           top.waitUntil(function() { return !!svc.playDays["2026-09-14"] }, 9000, function() {
             top.check(svc.playDays["2026-09-14"] === 3, "the first owner's record did not come back")
             done()
+          })
+        })
+      })
+    } },
+
+    { name: "a new sign-in asks who it is before loading what is theirs", run: function(done) {
+      svc.currentUserId = ""
+      top.handler = function(x) { top.reply(x, 200, { id: "alice", display_name: "Alice" }) }
+      svc.loadProfile()
+      top.waitUntil(function() { return svc.currentUserId === "alice" }, 9000, function() {
+        top.log = []
+        var profile = null
+        top.handler = function(x) {
+          if (/\/v1\/me$/.test(x.url)) profile = x
+          else top.reply(x, 200, { items: [] })
+        }
+        // The account picked in the browser may not be the one that was here.
+        svc.loginFlowActive = true
+        svc.auth.loginSucceeded()
+        top.waitUntil(function() { return profile !== null }, 9000, function() {
+          top.later(400, function() {
+            top.check(top.requestsTo("recently-played") === 0 && top.requestsTo("/me/tracks") === 0,
+              "listening data was asked for before knowing whose it is: " + top.log.join(", "))
+            top.reply(profile, 200, { id: "bob", display_name: "Bob" })
+            top.waitUntil(function() { return svc.currentUserId === "bob" }, 3000, function() {
+              top.check(svc.currentUserId === "bob", "the new owner was not read")
+              done()
+            })
           })
         })
       })

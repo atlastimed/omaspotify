@@ -35,7 +35,12 @@ Item {
     + 'ls -1t | tail -n +"$((limit + 1))" | while IFS= read -r name; do rm -f -- "$name"; done\n'
     + 'ls -1\n'
 
-  onKeepingChanged: if (keeping) keep(priorityItems)
+  // The directory is first read when something wants artwork, not at shell start.
+  onKeepingChanged: {
+    if (!keeping) return
+    if (scanned) keep(priorityItems)
+    else scan()
+  }
 
   function artworkFor(url) {
     var text = String(url || "")
