@@ -158,7 +158,6 @@ Item {
             onHovered: function(on) {
               if (on) page.panel.setPanelCursor("page", "playlist-play")
             }
-            PanelKeyHint { panel: page.panel; region: "page"; action: "playlist-play" }
           }
 
           Button {
@@ -172,12 +171,6 @@ Item {
             hasCursor: page.panel.cursorShown("page", "playlist-more")
             onHovered: function(on) {
               if (on) page.panel.setPanelCursor("page", "playlist-more")
-            }
-            PanelKeyHint {
-              panel: page.panel
-              region: "page"
-              action: "playlist-more"
-              sequences: ["C"]
             }
             onClicked: {
               var point = playlistMoreActions.mapToItem(page.panel.windowContentItem,

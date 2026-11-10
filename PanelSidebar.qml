@@ -87,7 +87,7 @@ Item {
       onHovered: function(on) {
         if (on) part.panel.setPanelCursor("sidebar", "nav-setup")
       }
-      PanelKeyHint { panel: part.panel; region: "sidebar"; action: "nav-setup"; sequences: ["Ctrl+,"] }
+      PanelKeyHint { panel: part.panel; sequences: ["Ctrl+,"] }
     }
   }
 
@@ -133,8 +133,7 @@ Item {
         }
         PanelKeyHint {
           panel: part.panel
-          region: "sidebar"
-          action: "nav-" + navButton.modelData.id
+          placement: part.panel.compactWidth ? "corner" : "inset"
           sequences: part.panel.primaryNavigationShortcut(navButton.modelData.id)
         }
         NavGlyph {
@@ -185,7 +184,6 @@ Item {
       onHovered: function(on) {
         if (on) part.panel.setPanelCursor("sidebar", "nav-library")
       }
-      PanelKeyHint { panel: part.panel; region: "sidebar"; action: "nav-library" }
       NavGlyph {
         text: "󰋑"
         color: likedSongsButton.selected
@@ -210,7 +208,6 @@ Item {
       onHovered: function(on) {
         if (on) part.panel.setPanelCursor("sidebar", "nav-create")
       }
-      PanelKeyHint { panel: part.panel; region: "sidebar"; action: "nav-create" }
     }
   }
 
@@ -238,7 +235,6 @@ Item {
         + part.panel.nextLibraryFilterLabel()
       onClicked: part.panel.cycleLibraryFilter()
       onHovered: function(on) { if (on) part.panel.setPanelCursor("sidebar", "lib-filter") }
-      PanelKeyHint { panel: part.panel; region: "sidebar"; action: "lib-filter" }
     }
 
     Button {
@@ -256,7 +252,6 @@ Item {
         + part.panel.nextLibrarySortLabel()
       onClicked: part.panel.cycleLibrarySort()
       onHovered: function(on) { if (on) part.panel.setPanelCursor("sidebar", "lib-sort") }
-      PanelKeyHint { panel: part.panel; region: "sidebar"; action: "lib-sort" }
     }
 
     Button {
@@ -270,7 +265,6 @@ Item {
         + part.panel.nextLibraryViewLabel()
       onClicked: part.panel.cycleLibraryView()
       onHovered: function(on) { if (on) part.panel.setPanelCursor("sidebar", "lib-view") }
-      PanelKeyHint { panel: part.panel; region: "sidebar"; action: "lib-view" }
     }
   }
 
@@ -328,11 +322,11 @@ Item {
       onPointerMoved: function(point) { part.noteLibraryPointer(playlistGrid, gridCell.index, point) }
       Loader {
         anchors.fill: parent
-        active: part.panel.shortcutHintsActive
+        active: part.panel.shortcutHintsActive && gridCell.hasCursor
         sourceComponent: PanelKeyHint {
           panel: part.panel
-          navHint: part.panel.sidebarListRowHint(gridCell.index, playlistGrid.currentIndex,
-            playlistGrid.contentY, part.panel.cursorNav)
+          placement: gridCell.grid ? "corner" : "inset"
+          sequences: ["C"]
         }
       }
     }
@@ -398,11 +392,11 @@ Item {
       onPointerMoved: function(point) { part.noteLibraryPointer(playlistList, listRow.index, point) }
       Loader {
         anchors.fill: parent
-        active: part.panel.shortcutHintsActive
+        active: part.panel.shortcutHintsActive && listRow.hasCursor
         sourceComponent: PanelKeyHint {
           panel: part.panel
-          navHint: part.panel.sidebarListRowHint(listRow.index, playlistList.currentIndex,
-            playlistList.contentY, part.panel.cursorNav)
+          placement: listRow.grid ? "corner" : "inset"
+          sequences: ["C"]
         }
       }
     }
@@ -427,7 +421,7 @@ Item {
     focusable: false
     hasCursor: part.panel.cursorShown("sidebar", "nav-setup")
     tooltipText: part.panel.shortcutHint("Settings", "Ctrl+,")
-    PanelKeyHint { panel: part.panel; region: "sidebar"; action: "nav-setup"; sequences: ["Ctrl+,"] }
+    PanelKeyHint { panel: part.panel; sequences: ["Ctrl+,"] }
     onClicked: part.panel.chooseTab("setup")
     onHovered: function(on) {
       if (on) part.panel.setPanelCursor("sidebar", "nav-setup")

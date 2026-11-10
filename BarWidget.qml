@@ -28,8 +28,18 @@ BarWidget {
     String(root.setting("showMiniPlayer", "On")) !== "Off"
   readonly property bool vinylRecordEnabled:
     String(root.setting("showVinylRecord", "Off")) === "On"
+  // Tunemarchy is the bar player while it sits in this bar and is connected.
+  // Two Spotify entries side by side would only repeat each other.
+  readonly property bool companionInBar: !!spotify && spotify.companionAttached === true
+    && !!bar && Api.barLayoutHasWidget(bar.layoutConfig, "atlastimed.tunemarchy")
+  readonly property bool shown: root.setting("showBarWidget", true) !== false
+    && !companionInBar
+  // What the bar can spare before this entry would reach the next section.
+  readonly property real roomWidth: Style.bar.iconSlot + room.allowance
+  readonly property bool labelFits: Api.barLabelFits(roomWidth, button.labelChrome,
+    Style.space(48))
   readonly property bool iconOnly: !spotify || vertical || !spotify.hasMedia
-    || barText === ""
+    || barText === "" || !labelFits
   property bool popupOpen: false
   property bool contextMenuVisible: false
   property bool lyricsInstallPromptVisible: false
@@ -40,20 +50,26 @@ BarWidget {
   property bool miniCursorFromPointer: false
   property string miniCursor: "play"
   property real volumeBeforeMute: 0.5
-  property bool shortcutModeLatched: false
+  // Hint modifiers whose key went down here, and whether they have been held
+  // long enough to be a question rather than the start of a chord.
   property int heldModifierFlags: 0
-  property bool pendingShortcutLatch: false
+  property bool modifierHintsShown: false
+  property bool openedFromKeyboard: false
+  readonly property bool miniCursorShown: miniCursorActive && !miniCursorFromPointer
   readonly property bool shortcutHintsEnabled: spotify
     ? spotify.shortcutHintsEnabled
     : String(root.setting("shortcutHints", "On")) !== "Off"
-  readonly property bool shortcutHintsActive: shortcutHintsEnabled
-    && shortcutModeLatched && !miniShortcutHelpVisible
-    && !lyricsInstallPromptVisible
+  // Keycaps show while a modifier is held, and while the keyboard is steering.
   readonly property bool shortcutHintsInPopup: shortcutHintsEnabled
-    && shortcutModeLatched
-  readonly property bool hintCtrlHeld: (heldModifierFlags & Qt.ControlModifier) !== 0
-  readonly property bool hintShiftHeld: (heldModifierFlags & Qt.ShiftModifier) !== 0
-  readonly property bool hintAltHeld: (heldModifierFlags & Qt.AltModifier) !== 0
+    && (modifierHintsShown || miniCursorShown)
+  readonly property bool shortcutHintsActive: shortcutHintsInPopup
+    && !miniShortcutHelpVisible && !lyricsInstallPromptVisible
+  readonly property bool hintCtrlHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.ControlModifier) !== 0
+  readonly property bool hintShiftHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.ShiftModifier) !== 0
+  readonly property bool hintAltHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.AltModifier) !== 0
 
   readonly property bool opened: popupOpen
   readonly property var miniShortcutRows: spotify && spotify.showLyrics
@@ -73,7 +89,6 @@ BarWidget {
     { keys: "Ctrl+Shift+A", action: "Open the current artist" },
     { keys: "Ctrl+Shift+B", action: "Open the current album" },
     { keys: "O", action: "Open full player" },
-    { keys: "Ctrl+H", action: "Hide visible shortcut hints" },
     { keys: "Ctrl+/", action: "Toggle this reference" },
     { keys: "Scroll the bar icon", action: "Previous or next track" },
     { keys: "Middle-click the bar icon", action: "Play or pause" },
@@ -113,43 +128,21 @@ BarWidget {
   function close() {
     miniShortcutHelpVisible = false
     contextMenuVisible = false
-    clearShortcutMode()
+    heldModifierFlags = 0
     popupOpen = false
   }
 
-  function applySequenceModifiers(sequence) {
-    heldModifierFlags = shortcutModifiers.flagsForSequence(sequence)
-  }
-
-  function latchShortcutMode(sequence) {
-    if (!shortcutHintsEnabled) return
-    shortcutModeLatched = true
-    if (sequence) applySequenceModifiers(sequence)
-  }
-
-  function clearShortcutMode() {
-    shortcutModeLatched = false
-    heldModifierFlags = 0
-  }
-
-  function disableShortcutHints() {
-    clearShortcutMode()
-    if (spotify) spotify.persistSettings({ shortcutHints: "Off" })
-  }
-
   function noteHeldModifiers(event, pressed) {
-    if (!event) return
+    // A repeating key reports releases that never happened.
+    if (!event || event.isAutoRepeat) return
     heldModifierFlags = shortcutModifiers.flagsAfterEvent(event.modifiers,
       pressed, heldModifierFlags, event.key)
+    // Another key before the keycaps appear means a chord is being typed.
+    if (pressed && !modifierHintsShown && !shortcutModifiers.isModifierKey(event.key))
+      modifierHintDelay.stop()
   }
 
-
-
-
-
   function acceptMiniKey(event) {
-    latchShortcutMode()
-    if (event) heldModifierFlags = event.modifiers
     event.accepted = true
   }
   function closeForPopoutSwitch() {
@@ -167,25 +160,30 @@ BarWidget {
       "Omarchy Music app"))
   }
 
+  function fullPlayerOpen() {
+    var host = bar ? bar.shell : null
+    return !!host && typeof host.isPluginOpen === "function"
+      && host.isPluginOpen(moduleName) === true
+  }
+
   function toggleMiniPlayerShortcut() {
-    if (!bar || typeof bar.isBarWidgetOpen !== "function"
-        || typeof bar.hideBarWidget !== "function"
-        || typeof bar.summonBarWidget !== "function") return "unavailable"
-    if (bar.isBarWidgetOpen(moduleName))
-      return bar.hideBarWidget(moduleName) ? "closed" : "unavailable"
-    pendingShortcutLatch = true
-    var host = bar.shell
-    if (host && typeof host.isPluginOpen === "function"
-        && host.isPluginOpen(moduleName) && typeof host.hide === "function") {
-      host.hide(moduleName)
-      Qt.callLater(function() {
-        if (root.bar) root.bar.summonBarWidget(root.moduleName)
-      })
+    if (companionInBar) {
+      if (!bar || typeof bar.run !== "function") return "unavailable"
+      bar.run("omarchy-shell -q shell toggle atlastimed.tunemarchy '{}'")
       return "opened"
     }
-    var opened = bar.summonBarWidget(moduleName)
-    if (!opened) pendingShortcutLatch = false
-    return opened ? "opened" : "unavailable"
+    if (!shown || !miniPlayerEnabled) return toggleFullPlayerShortcut()
+    if (popupOpen) {
+      close()
+      return "closed"
+    }
+    openedFromKeyboard = true
+    if (fullPlayerOpen()) {
+      // Let the full player's window go before the popup takes the keyboard.
+      bar.shell.hide(moduleName)
+      Qt.callLater(function() { root.open() })
+    } else open()
+    return "opened"
   }
 
   function toggleFullPlayerShortcut() {
@@ -197,19 +195,15 @@ BarWidget {
       host.hide(moduleName)
       return "closed"
     }
-    if (bar && typeof bar.isBarWidgetOpen === "function"
-        && bar.isBarWidgetOpen(moduleName)
-        && typeof bar.hideBarWidget === "function") {
-      bar.hideBarWidget(moduleName)
+    var payload = JSON.stringify({ shortcutLatch: true })
+    if (popupOpen) {
+      close()
       Qt.callLater(function() {
-        if (root.bar && root.bar.shell)
-          root.bar.shell.summon(root.moduleName,
-            JSON.stringify({ shortcutLatch: true }))
+        if (root.bar && root.bar.shell) root.bar.shell.summon(root.moduleName, payload)
       })
       return "opened"
     }
-    return host.summon(moduleName, JSON.stringify({ shortcutLatch: true }))
-      ? "opened" : "unavailable"
+    return host.summon(moduleName, payload) ? "opened" : "unavailable"
   }
 
   function toggleConfiguredPlayerShortcut() {
@@ -223,7 +217,7 @@ BarWidget {
 
   function openFullPanel(payload) {
     var next = payload && typeof payload === "object" ? Api.shallowCopy(payload) : ({})
-    if (shortcutModeLatched) next.shortcutLatch = true
+    if (miniCursorShown) next.shortcutLatch = true
     close()
     if (!bar || !bar.shell) return
     var encoded = JSON.stringify(next)
@@ -391,7 +385,6 @@ BarWidget {
   function handleMiniKey(event) {
     root.noteHeldModifiers(event, true)
     if (shortcutModifiers.isModifierKey(event.key)) {
-      if (shortcutModifiers.isHintModifierKey(event.key)) root.latchShortcutMode()
       event.accepted = true
       return
     }
@@ -492,7 +485,7 @@ BarWidget {
     if (spotify) spotify.applySettings(settings)
   }
 
-  visible: root.setting("showBarWidget", true) !== false
+  visible: shown
   implicitWidth: visible ? button.implicitWidth : 0
   implicitHeight: visible ? button.implicitHeight : 0
 
@@ -502,7 +495,13 @@ BarWidget {
     if (spotify) spotify.registerPlayerSurface(root)
   }
   onMiniPlayerEnabledChanged: if (!miniPlayerEnabled) close()
-  onShortcutHintsEnabledChanged: if (!shortcutHintsEnabled) clearShortcutMode()
+  onShownChanged: if (!shown) close()
+  onHeldModifierFlagsChanged: {
+    if (heldModifierFlags === 0) {
+      modifierHintDelay.stop()
+      modifierHintsShown = false
+    } else if (!modifierHintsShown) modifierHintDelay.restart()
+  }
   onMiniKeyboardActionsChanged: ensureMiniCursor()
   onLyricsInstallPromptVisibleChanged: {
     if (lyricsInstallPromptVisible) {
@@ -516,13 +515,12 @@ BarWidget {
       miniCursor = miniKeyboardActions.indexOf("play") >= 0
         ? "play" : miniKeyboardActions[0]
       miniCursorActive = miniKeyboardActions.length > 0
-      miniCursorFromPointer = !pendingShortcutLatch
-      if (pendingShortcutLatch) latchShortcutMode()
-      pendingShortcutLatch = false
+      miniCursorFromPointer = !openedFromKeyboard
+      openedFromKeyboard = false
     } else {
       miniCursorActive = false
-      clearShortcutMode()
-      pendingShortcutLatch = false
+      heldModifierFlags = 0
+      openedFromKeyboard = false
     }
     if (spotify) spotify.setUiVisible(surfaceKey, popupOpen)
     if (!popupOpen && lyricsInstallPromptVisible
@@ -562,12 +560,15 @@ BarWidget {
     readonly property real fittedWidth: Math.ceil(barGlyph.width
       + barContent.spacing + barLabel.implicitWidth + scaledHorizontalMargin * 2)
     readonly property real barTextCap: root.spotify ? root.spotify.maxBarTextWidth : 240
+    // Everything in the slot that is not the words themselves.
+    readonly property real labelChrome: Math.ceil(barGlyph.width + barContent.spacing
+      + scaledHorizontalMargin * 2)
 
     fixedWidth: root.vertical ? root.barSize
       : (root.iconOnly ? Style.bar.iconSlot
         : Api.barSlotWidth(root.spotify && root.spotify.fixedBarWidth,
           barTextCap > 0 ? Style.space(barTextCap) : 0, fittedWidth,
-          root.barSize))
+          root.barSize, root.roomWidth))
     fixedHeight: root.vertical && root.iconOnly ? Style.bar.iconSlot : -1
     clip: true
 
@@ -620,6 +621,9 @@ BarWidget {
           Text {
             id: barLabel
             anchors.verticalCenter: parent.verticalCenter
+            // A title that does not fit ends in an ellipsis unless it scrolls.
+            width: scrollClip.scrolling ? implicitWidth : scrollClip.width
+            elide: scrollClip.scrolling ? Text.ElideNone : Text.ElideRight
             textFormat: Text.PlainText
             text: root.barText
             color: button.foreground
@@ -691,6 +695,21 @@ BarWidget {
       if (delta > 0) root.spotify.previous()
       else if (delta < 0) root.spotify.next()
     }
+  }
+
+  Timer {
+    id: modifierHintDelay
+    interval: 300
+    onTriggered: if (root.heldModifierFlags !== 0) root.modifierHintsShown = true
+  }
+
+  BarRoom {
+    id: room
+    widget: root
+    baseWidth: Style.bar.iconSlot
+    edge: root.fixedEdge
+    gap: Style.space(12)
+    active: root.shown && !root.vertical
   }
 
   KeyboardPanel {

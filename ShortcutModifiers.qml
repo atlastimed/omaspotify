@@ -23,17 +23,7 @@ QtObject {
     return isHintModifierKey(key) || key === Qt.Key_Meta
   }
 
-  function flagsForSequence(sequence) {
-    var parsed = Api.parseShortcutSequence(sequence)
-    var flags = 0
-    if (parsed.ctrl) flags |= Qt.ControlModifier
-    if (parsed.shift) flags |= Qt.ShiftModifier
-    if (parsed.alt) flags |= Qt.AltModifier
-    return flags
-  }
-
   function flagsAfterEvent(reportedFlags, pressed, previousFlags, key) {
-    return Api.shortcutModifierFlagsAfterEvent(reportedFlags, pressed,
-      previousFlags, flagFor(key))
+    return Api.heldHintModifiers(previousFlags, reportedFlags, pressed, flagFor(key))
   }
 }

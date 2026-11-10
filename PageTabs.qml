@@ -34,7 +34,6 @@ Flow {
       hasCursor: part.panel.cursorShown("page", action)
       onClicked: part.chosen(modelData.value)
       onHovered: function(on) { if (on) part.panel.setPanelCursor("page", tab.action) }
-      PanelKeyHint { panel: part.panel; region: "page"; action: tab.action }
     }
   }
 }

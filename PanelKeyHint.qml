@@ -7,8 +7,6 @@ import qs.Commons as Commons
 // panel explicitly instead of reading it from the surrounding scope.
 ShortcutHint {
   property var panel: null
-  property string region: ""
-  property string action: ""
 
   ctrlHeld: panel ? panel.hintCtrlHeld : false
   shiftHeld: panel ? panel.hintShiftHeld : false
@@ -16,6 +14,4 @@ ShortcutHint {
   active: panel ? panel.shortcutHintsActive : false
   foreground: panel ? panel.foreground : Commons.Color.foreground
   accent: panel ? panel.accent : Commons.Color.accent
-  navHint: panel && region && action && panel.shortcutHintsActive
-    ? panel.navHintFor(region, action) : ""
 }

@@ -37,15 +37,7 @@ Item {
   property bool keyboardSortSelected: false
   property bool keyboardMoreSelected: false
   property bool keyboardFilterScanSelected: false
-  property string keyboardFilterScanHint: ""
-  property string keyboardSortHint: ""
-  property string keyboardMoreHint: ""
   property bool keyboardAtList: false
-  property bool keyboardAtListPrev: false
-  property bool keyboardAtListNext: false
-  property bool keyboardListIsTab: false
-  property bool keyboardListIsBacktab: false
-  property bool keyboardNavModifiers: false
   property bool keyboardCtrlHeld: false
   property bool keyboardShiftHeld: false
   property bool keyboardAltHeld: false
@@ -77,7 +69,6 @@ Item {
     if (root.service) root.service.keepArtwork(visibleItems)
     applyModel()
   }
-  onListCurrentIndexChanged: if (cursorHost) cursorHost.scheduleCursorRefresh()
   readonly property bool playbackUsesVisibleOrder: Api.playbackUsesVisibleOrder(
     contextUri, filterText, sortKey)
   readonly property string playbackContextUri: Api.playbackContextForView(
@@ -221,22 +212,6 @@ Item {
 
   function blurList() {
     mediaList.focus = false
-  }
-
-  function rowNavHint(index) {
-    if (!keyboardHintsActive) return ""
-    return Api.cursorListRowHint({
-      rowIndex: index,
-      currentIndex: mediaList.currentIndex,
-      count: mediaList.count,
-      tabRowIndex: firstVisibleListIndex(),
-      atList: keyboardAtList,
-      previousIsCurrent: keyboardAtListPrev,
-      nextIsCurrent: keyboardAtListNext,
-      tabIsList: keyboardListIsTab,
-      backtabIsList: keyboardListIsBacktab,
-      modifiersHeld: keyboardNavModifiers
-    })
   }
 
   function requestMore() {
@@ -404,10 +379,6 @@ Item {
         focusable: false
         hasCursor: root.keyboardSortSelected
         onClicked: root.cycleSort()
-        ShortcutHint {
-          active: root.keyboardHintsActive && root.keyboardSortHint !== ""
-          navHint: root.keyboardSortHint
-        }
       }
 
       Text {
@@ -494,29 +465,17 @@ Item {
           ? (index < root.dragSourceIndex ? -1 : 1) : 0
         saved: root.service ? root.service.isSaved(modelData) : false
         artworkEnabled: !root.service || root.service.artworkEnabled
+        // The row the keyboard is on says how to reach its actions.
         Loader {
           anchors.fill: parent
-          active: root.keyboardHintsActive
+          active: root.keyboardHintsActive && row.hasCursor
           sourceComponent: ShortcutHint {
+            placement: "inset"
             ctrlHeld: root.keyboardCtrlHeld
             shiftHeld: root.keyboardShiftHeld
             altHeld: root.keyboardAltHeld
-            sequences: row.hasCursor ? ["C"] : []
-            active: root.keyboardHintsActive && (hint !== "" || row.hasCursor)
-            navHint: hint
-            readonly property string hint: {
-              mediaList.currentIndex
-              mediaList.count
-              mediaList.contentY
-              root.keyboardAtList
-              root.keyboardAtListPrev
-              root.keyboardAtListNext
-              root.keyboardListIsTab
-              root.keyboardListIsBacktab
-              root.keyboardNavModifiers
-              root.keyboardHintsActive
-              return root.rowNavHint(row.index)
-            }
+            sequences: ["C"]
+            active: true
           }
         }
         onPointerMoved: function(scenePoint) { root.notePointer(index, scenePoint) }
@@ -668,7 +627,6 @@ Item {
         text: scanner.paused ? "Continue scan" : "Cancel scan"
         enabled: !scanner.blocked && !scanner.waitingForCooldown
         hasCursor: root.keyboardFilterScanSelected
-        ShortcutHint { active: root.keyboardHintsActive; navHint: root.keyboardFilterScanHint }
         foreground: Commons.Color.foreground
         onClicked: scanner.paused ? scanner.resume() : scanner.cancel()
       }
@@ -684,10 +642,6 @@ Item {
       enabled: root.hasMore && !root.loading
       hasCursor: root.keyboardMoreSelected
       onClicked: root.loadMoreRequested()
-      ShortcutHint {
-        active: root.keyboardHintsActive && root.keyboardMoreHint !== ""
-        navHint: root.keyboardMoreHint
-      }
     }
   }
 

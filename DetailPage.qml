@@ -162,7 +162,6 @@ Item {
             onHovered: function(on) {
               if (on) page.panel.setPanelCursor("page", "detail-play")
             }
-            PanelKeyHint { panel: page.panel; region: "page"; action: "detail-play" }
           }
           Button {
             readonly property bool saved: page.service && page.service.isSaved(page.item)
@@ -178,7 +177,6 @@ Item {
             onHovered: function(on) {
               if (on) page.panel.setPanelCursor("page", "detail-save")
             }
-            PanelKeyHint { panel: page.panel; region: "page"; action: "detail-save" }
           }
           Button {
             id: detailMoreActions
@@ -191,12 +189,6 @@ Item {
             hasCursor: page.panel.cursorShown("page", "detail-more")
             onHovered: function(on) {
               if (on) page.panel.setPanelCursor("page", "detail-more")
-            }
-            PanelKeyHint {
-              panel: page.panel
-              region: "page"
-              action: "detail-more"
-              sequences: ["C"]
             }
             onClicked: {
               var point = detailMoreActions.mapToItem(page.panel.windowContentItem,
@@ -358,7 +350,6 @@ Item {
             onContextRequested: function(item, sceneX, sceneY) {
               page.panel.openMediaContext(item, sceneX, sceneY, [item], item.uri, 0)
             }
-            PanelKeyHint { panel: page.panel; region: "page"; action: "detail-thisis" }
           }
         }
 

@@ -37,7 +37,6 @@ Item {
         enabled: page.panel.service && !page.panel.service.queueLoading
         onClicked: page.panel.service.loadQueue()
         onHovered: function(on) { if (on) page.panel.setPanelCursor("page", "queue-refresh") }
-        PanelKeyHint { panel: page.panel; region: "page"; action: "queue-refresh" }
       }
     }
 

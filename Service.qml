@@ -16,7 +16,12 @@ Item {
   width: 0
   height: 0
 
-  CompanionBridge { service: root }
+  CompanionBridge {
+    id: companionBridge
+    service: root
+  }
+  // Tunemarchy holds one connection open for as long as it is loaded.
+  readonly property bool companionAttached: companionBridge.clients.length > 0
 
   property var shell: null
   property var manifest: null
@@ -3601,6 +3606,12 @@ Item {
   }
   function unregisterPlayerSurface(surface) {
     playerSurfaces = playerSurfaces.filter(function(item) { return item && item !== surface })
+  }
+  function closeMiniPlayers() {
+    for (var i = 0; i < playerSurfaces.length; i++) {
+      var surface = playerSurfaces[i]
+      if (surface && surface.popupOpen) surface.close()
+    }
   }
   function shortcutSurface() {
     var focused = Hyprland.focusedMonitor

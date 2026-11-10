@@ -111,7 +111,8 @@ ShellRoot {
 
   // With hints on, so the hint path runs too, then once more with them off.
   function walkCursor() {
-    panel.latchShortcutMode("Ctrl+Left")
+    panel.heldModifierFlags = Qt.ControlModifier
+    panel.modifierHintsShown = true
     panel.showKeyboardCursor()
     var regions = panel.panelCursorRegions()
     for (var r = 0; r < regions.length; r++) {
@@ -124,7 +125,7 @@ ShellRoot {
         moves++
       }
     }
-    panel.clearShortcutMode()
+    panel.resetKeyboardState()
     panel.refreshCursorState()
   }
 

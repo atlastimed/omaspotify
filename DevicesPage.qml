@@ -131,7 +131,6 @@ Item {
           hasCursor: page.panel.cursorShown("page", "devices-refresh")
           onClicked: page.service.loadDevices(null, undefined, true)
           onHovered: function(on) { if (on) page.panel.setPanelCursor("page", "devices-refresh") }
-          PanelKeyHint { panel: page.panel; region: "page"; action: "devices-refresh" }
         }
       }
 
@@ -146,7 +145,6 @@ Item {
         hasCursor: page.panel.cursorShown("page", "devices-start")
         onClicked: if (page.service) page.service.startEngine()
         onHovered: function(on) { if (on) page.panel.setPanelCursor("page", "devices-start") }
-        PanelKeyHint { panel: page.panel; region: "page"; action: "devices-start" }
       }
 
       Column {
@@ -243,7 +241,6 @@ Item {
               }
             }
 
-            PanelKeyHint { panel: page.panel; region: "page"; action: deviceRow.action }
           }
         }
       }

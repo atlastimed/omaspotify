@@ -71,8 +71,10 @@ Item {
   property string draftShortcutPlayer: "Omarchy Music app"
   property bool draftShortcutHints: true
   property bool draftShowLyrics: true
-  property bool shortcutModeLatched: false
+  // Hint modifiers whose key went down here, and whether they have been held
+  // long enough to be a question rather than the start of a chord.
   property int heldModifierFlags: 0
+  property bool modifierHintsShown: false
   property bool panelCursorActive: false
   // Hover moves the cursor without drawing it, so a highlight never lingers.
   property bool panelCursorFromPointer: false
@@ -147,10 +149,10 @@ Item {
     var item = window.activeFocusItem
     return !!item && ("acceptableInput" in item || "echoMode" in item)
   }
-  readonly property bool shortcutHintsActive: shortcutHintsEnabled
-    && shortcutModeLatched && !typingInField && !shortcutsBlocked
-  readonly property bool shortcutHintsInPopup: shortcutHintsEnabled
-    && shortcutModeLatched && !typingInField
+  // Keycaps show while a modifier is held, and while the keyboard is steering.
+  readonly property bool shortcutHintsInPopup: shortcutHintsEnabled && !typingInField
+    && (modifierHintsShown || keyboardCursorShown)
+  readonly property bool shortcutHintsActive: shortcutHintsInPopup && !shortcutsBlocked
   readonly property var windowContentItem: window.contentItem
   readonly property real windowWidth: window.width
   readonly property real windowHeight: window.height
@@ -166,12 +168,12 @@ Item {
   readonly property bool keyboardCursorShown: panelCursorVisible && !panelCursorFromPointer
   readonly property bool pageRefreshing: service && (service.homeLoading
     || service.devicesLoading || service.queueLoading || service.detailLoading)
-  // Worked out once per cursor change, so the hints on screen share one answer.
-  property var cursorNav: ({ tab: {}, back: {}, regionActions: [], sidebarIndex: -1,
-    sidebarCount: 0, pageIndex: -1, pageCount: 0 })
-  readonly property bool hintCtrlHeld: (heldModifierFlags & Qt.ControlModifier) !== 0
-  readonly property bool hintShiftHeld: (heldModifierFlags & Qt.ShiftModifier) !== 0
-  readonly property bool hintAltHeld: (heldModifierFlags & Qt.AltModifier) !== 0
+  readonly property bool hintCtrlHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.ControlModifier) !== 0
+  readonly property bool hintShiftHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.ShiftModifier) !== 0
+  readonly property bool hintAltHeld: modifierHintsShown
+    && (heldModifierFlags & Qt.AltModifier) !== 0
   readonly property bool popupCursorOpen: sleepPopup.opened || mediaContextMenu.opened
   readonly property bool panelCursorVisible: panelCursorActive && !typingInField
     && (!shortcutsBlocked || popupCursorOpen)
@@ -740,47 +742,20 @@ Item {
     return shortcut ? text + " · " + shortcut : text
   }
 
-  function applySequenceModifiers(sequence) {
-    heldModifierFlags = shortcutModifiers.flagsForSequence(sequence)
-  }
-
-  function latchShortcutMode(sequence) {
-    if (!shortcutHintsEnabled) return
-    shortcutModeLatched = true
-    if (sequence) applySequenceModifiers(sequence)
-    scheduleCursorRefresh()
-  }
-
-  function clearShortcutMode() {
-    shortcutModeLatched = false
+  function resetKeyboardState() {
     heldModifierFlags = 0
+    modifierHintsShown = false
     panelCursorActive = false
   }
 
-  function disableShortcutHints() {
-    draftShortcutHints = false
-    if (service) service.persistSettings({ shortcutHints: "Off" })
-    else clearShortcutMode()
-  }
-
-
-
-
-
-  function noteHeldModifiers(event, pressed) {
-    if (!event) return
+  function noteModifierKey(event, pressed) {
+    // A repeating key reports releases that never happened.
+    if (!event || event.isAutoRepeat) return
     heldModifierFlags = shortcutModifiers.flagsAfterEvent(event.modifiers,
       pressed, heldModifierFlags, event.key)
-  }
-
-  function considerShortcutModeKey(event, pressed) {
-    noteHeldModifiers(event, pressed)
-    if (!pressed || typingInField) return
-    if (shortcutModifiers.isHintModifierKey(event.key) || event.key === Qt.Key_Tab
-        || event.key === Qt.Key_Backtab || event.key === Qt.Key_F6
-        || (event.modifiers & (Qt.ControlModifier | Qt.ShiftModifier
-          | Qt.AltModifier)) !== 0)
-      latchShortcutMode()
+    // Another key before the keycaps appear means a chord is being typed.
+    if (pressed && !modifierHintsShown && !shortcutModifiers.isModifierKey(event.key))
+      modifierHintDelay.stop()
   }
 
   function cursorOn(region, action) {
@@ -872,7 +847,6 @@ Item {
 
   function applyCursorDestination(dest) {
     if (!dest || !dest.region) return
-    latchShortcutMode()
     showKeyboardCursor()
     var fromRegion = panelCursorRegion
     var fromAction = panelCursorAction
@@ -889,70 +863,6 @@ Item {
 
   function applyTabDestination(back) {
     applyCursorDestination(tabDestination(back))
-  }
-
-  function navHintFor(region, action) {
-    if (!shortcutHintsEnabled || !shortcutModeLatched) return ""
-    var nav = cursorNav
-    var listAction = ""
-    var listIndex = -1
-    var listCount = 0
-    if (region === "sidebar") {
-      listAction = "sidebar-playlists"
-      listIndex = nav.sidebarIndex
-      listCount = nav.sidebarCount
-    } else if (region === "page") {
-      listAction = Api.isCursorListAction(panelCursorAction) ? panelCursorAction : ""
-      listIndex = nav.pageIndex
-      listCount = nav.pageCount
-    }
-    return Api.cursorNavHint({
-      region: region,
-      action: action,
-      currentRegion: panelCursorRegion,
-      currentAction: panelCursorAction,
-      regionActions: nav.regionActions,
-      tabRegion: nav.tab.region,
-      tabAction: nav.tab.action,
-      backtabRegion: nav.back.region,
-      backtabAction: nav.back.action,
-      listAction: listAction,
-      listIndex: listIndex,
-      listCount: listCount,
-      cursorActive: panelCursorVisible,
-      modifiersHeld: hintCtrlHeld || hintShiftHeld || hintAltHeld
-    })
-  }
-
-  function sidebarPlaylistNavHint(index) {
-    if (!panelCursorVisible || !shortcutHintsActive) return ""
-    var actions = sidebarCursorActions()
-    var prev = Api.moveCursorAction(actions, "sidebar-playlists", -1)
-    var next = Api.moveCursorAction(actions, "sidebar-playlists", 1)
-    var tab = tabDestination(false)
-    var back = tabDestination(true)
-    return Api.cursorListRowHint({
-      rowIndex: index,
-      currentIndex: sidebarListView.currentIndex,
-      count: sidebarListView.count,
-      tabRowIndex: firstVisibleIndexOf(sidebarListView),
-      atList: panelCursorRegion === "sidebar"
-        && panelCursorAction === "sidebar-playlists",
-      previousIsCurrent: panelCursorRegion === "sidebar"
-        && panelCursorAction === prev && prev !== "sidebar-playlists",
-      nextIsCurrent: panelCursorRegion === "sidebar"
-        && panelCursorAction === next && next !== "sidebar-playlists",
-      tabIsList: tab.region === "sidebar" && tab.action === "sidebar-playlists",
-      backtabIsList: back.region === "sidebar"
-        && back.action === "sidebar-playlists",
-      modifiersHeld: hintCtrlHeld || hintShiftHeld || hintAltHeld
-    })
-  }
-
-  // Runs on every cursor move, so it never walks into the rows of a list.
-  // The extra arguments are only there to redo this when one of them changes.
-  function sidebarListRowHint(index) {
-    return sidebarPlaylistNavHint(index)
   }
 
   function findNamedItems(item, name, found) {
@@ -1159,7 +1069,6 @@ Item {
   }
 
   function movePanelCursorRegion(delta) {
-    latchShortcutMode()
     showKeyboardCursor()
     var regions = panelCursorRegions()
     panelCursorRegion = Api.moveCursorAction(regions, panelCursorRegion, delta)
@@ -1193,7 +1102,6 @@ Item {
   }
 
   function movePanelCursor(delta) {
-    latchShortcutMode()
     showKeyboardCursor()
     ensurePanelCursor()
     var from = panelCursorAction
@@ -1235,49 +1143,19 @@ Item {
   }
 
   function refreshCursorState() {
-    var latched = shortcutHintsEnabled && shortcutModeLatched
-    var hintsOn = shortcutHintsActive
+    // A queued refresh can land while the panel is being torn down.
+    if (typeof pageCollections !== "function") return
     var collections = pageCollections()
-    var tab = latched ? tabDestination(false) : ({})
-    var back = latched ? tabDestination(true) : ({})
-    var current = latched ? collectionForListAction(
-      Api.isCursorListAction(panelCursorAction) ? panelCursorAction : "list") : null
-    if (latched) cursorNav = {
-      tab: tab,
-      back: back,
-      regionActions: regionCursorActions(panelCursorRegion),
-      sidebarIndex: sidebarListView.currentIndex,
-      sidebarCount: sidebarListView.count,
-      pageIndex: current ? current.listCurrentIndex : -1,
-      pageCount: current ? current.listCount : 0
-    }
-    var actions = hintsOn ? pageCursorActions() : []
     var shown = keyboardCursorShown
     for (var i = 0; i < collections.length; i++) {
       var collection = collections[i]
-      var id = collection.keyboardListId || "list"
-      var prev = hintsOn ? Api.moveCursorAction(actions, id, -1) : ""
-      var next = hintsOn ? Api.moveCursorAction(actions, id, 1) : ""
       collection.cursorHost = root
       collection.keyboardCursorShown = shown
-      collection.keyboardHintsActive = hintsOn
+      collection.keyboardHintsActive = shortcutHintsActive
       collection.keyboardSortSelected = cursorShown("page", "sort")
       collection.keyboardMoreSelected = cursorShown("page", "more")
       collection.keyboardFilterScanSelected = cursorShown("page", "filter-scan")
-      collection.keyboardFilterScanHint = hintsOn ? navHintFor("page", "filter-scan") : ""
-      collection.keyboardSortHint = hintsOn ? navHintFor("page", "sort") : ""
-      collection.keyboardMoreHint = hintsOn ? navHintFor("page", "more") : ""
-      collection.keyboardAtList = cursorOn("page", id)
-      collection.keyboardAtListPrev = hintsOn && cursorOn("page", prev)
-        && !Api.isCursorListAction(prev)
-      collection.keyboardAtListNext = hintsOn && cursorOn("page", next)
-        && !Api.isCursorListAction(next)
-      collection.keyboardListIsTab = hintsOn && tab.region === "page"
-        && tab.action === id
-      collection.keyboardListIsBacktab = hintsOn && back.region === "page"
-        && back.action === id
-      collection.keyboardNavModifiers = hintCtrlHeld || hintShiftHeld
-        || hintAltHeld
+      collection.keyboardAtList = cursorOn("page", collection.keyboardListId || "list")
       collection.keyboardCtrlHeld = hintCtrlHeld
       collection.keyboardShiftHeld = hintShiftHeld
       collection.keyboardAltHeld = hintAltHeld
@@ -1285,7 +1163,6 @@ Item {
   }
 
   function activatePanelCursor() {
-    latchShortcutMode()
     showKeyboardCursor()
     ensurePanelCursor()
     var action = panelCursorAction
@@ -1521,7 +1398,6 @@ Item {
 
   function moveContextMenuCursor(delta) {
     if (!mediaContextMenu.opened || !delta) return false
-    latchShortcutMode()
     showKeyboardCursor()
     panelCursorRegion = "popup"
     panelCursorAction = Api.moveCursorAction(contextMenuCursorActions(),
@@ -1538,7 +1414,6 @@ Item {
       || key === Qt.Key_F6
     var move = contextMenuMoveDelta(event)
     if (tabbing) {
-      latchShortcutMode()
       showKeyboardCursor()
       panelCursorRegion = "popup"
       panelCursorAction = Api.moveCursorAction(contextMenuCursorActions(),
@@ -1548,12 +1423,10 @@ Item {
     }
     if (move) return moveContextMenuCursor(move)
     if (key === Qt.Key_Return || key === Qt.Key_Enter) {
-      latchShortcutMode()
       activatePanelCursor()
       return true
     }
     if (key === Qt.Key_Home || key === Qt.Key_End) {
-      latchShortcutMode()
       showKeyboardCursor()
       panelCursorRegion = "popup"
       var actions = contextMenuCursorActions()
@@ -1597,7 +1470,6 @@ Item {
 
     if (ctrl && !shift && !alt && (key === Qt.Key_Up || key === Qt.Key_Down)
         && service && service.volumeSupported) {
-      latchShortcutMode(key === Qt.Key_Up ? "Ctrl+Up" : "Ctrl+Down")
       adjustVolume(key === Qt.Key_Up ? 0.05 : -0.05)
       return true
     }
@@ -1610,7 +1482,6 @@ Item {
       if (key === Qt.Key_Down || key === Qt.Key_Up
           || text === "j" || text === "k" || key === Qt.Key_Left
           || key === Qt.Key_Right || text === "h" || text === "l") {
-        latchShortcutMode()
         showKeyboardCursor()
         panelCursorRegion = "popup"
         var sleepDelta = (key === Qt.Key_Up
@@ -1628,7 +1499,6 @@ Item {
     }
 
     if (tabbing) {
-      latchShortcutMode()
       if (!panelCursorActive) {
         showKeyboardCursor()
         ensurePanelCursor("footer")
@@ -1651,7 +1521,6 @@ Item {
         && (vertical || horizontal) && (panelCursorActive
         || key === Qt.Key_Up || key === Qt.Key_Down || key === Qt.Key_Left
         || key === Qt.Key_Right)) {
-      latchShortcutMode()
       var leftByPointer = panelCursorActive && panelCursorFromPointer
       showKeyboardCursor()
       ensurePanelCursor()
@@ -1684,7 +1553,6 @@ Item {
       return true
     }
     if (menuKey && openCurrentContextMenu()) {
-      latchShortcutMode()
       return true
     }
     if (panelCursorActive && !ctrl && !alt && !shift
@@ -1744,7 +1612,6 @@ Item {
       { action: "Raise volume 5%", keys: "Ctrl+Up" },
       { action: "Lower volume 5%", keys: "Ctrl+Down" },
       { section: "WINDOW", action: "Arm close / close", keys: "Esc, Esc" },
-      { action: "Hide visible shortcut hints", keys: "Ctrl+H" },
       { action: "Show this reference", keys: "Ctrl+/" }
     ]
     if (!service || !service.showLyrics)
@@ -1968,9 +1835,7 @@ Item {
     searchClock = Date.now()
     var payload = ({})
     try { payload = JSON.parse(String(payloadJson || "{}")) || ({}) } catch (e) {}
-    if (shell && shell.bar
-        && typeof shell.bar.hideBarWidget === "function")
-      shell.bar.hideBarWidget(pluginId)
+    if (service) service.closeMiniPlayers()
     var requestedTab = String(payload.tab || "")
     var requestedDetail = requestedTab === "detail" && payload.detailItem
       ? payload.detailItem : null
@@ -1997,11 +1862,11 @@ Item {
     }
     closingFromHost = false
     opened = true
+    resetKeyboardState()
     if (payload.shortcutLatch) {
-      latchShortcutMode()
       showKeyboardCursor()
       ensurePanelCursor("footer")
-    } else clearShortcutMode()
+    }
     syncDraftSettings()
     if (service) {
       service.setUiVisible("full-panel", true)
@@ -2020,7 +1885,7 @@ Item {
 
   function close() {
     persistUiState()
-    clearShortcutMode()
+    resetKeyboardState()
     closingFromHost = true
     opened = false
     if (service) {
@@ -2141,7 +2006,6 @@ Item {
   // Web API token and playback credential finish in separate event turns;
   // listening only to those nested objects can miss the final combined edge
   // while the panel loader is being remapped by the browser.
-  onShortcutHintsEnabledChanged: if (!shortcutHintsEnabled) clearShortcutMode()
   onCurrentTabChanged: {
     root.rememberCurrentContentTab()
     if (panelCursorActive) ensurePanelCursor()
@@ -2152,9 +2016,13 @@ Item {
   onPanelCursorVisibleChanged: scheduleCursorRefresh()
   onPanelCursorFromPointerChanged: scheduleCursorRefresh()
   onShortcutHintsActiveChanged: scheduleCursorRefresh()
-  onShortcutModeLatchedChanged: scheduleCursorRefresh()
-  onHeldModifierFlagsChanged: scheduleCursorRefresh()
-  onPlaylistShortcutIndexChanged: scheduleCursorRefresh()
+  onModifierHintsShownChanged: scheduleCursorRefresh()
+  onHeldModifierFlagsChanged: {
+    if (heldModifierFlags === 0) {
+      modifierHintDelay.stop()
+      modifierHintsShown = false
+    } else if (!modifierHintsShown) modifierHintDelay.restart()
+  }
   onSearchFieldFocusedChanged: scheduleCursorRefresh()
   onArtistScopedSearchActiveChanged: scheduleCursorRefresh()
   onFullyConnectedChanged: Qt.callLater(function() { root.updateLoginGate() })
@@ -2520,13 +2388,10 @@ Item {
       anchors.fill: parent
       focus: true
       Keys.priority: Keys.BeforeItem
-      onActiveFocusChanged: if (!activeFocus) {
-        root.heldModifierFlags = 0
-        root.shortcutModeLatched = false
-      }
+      onActiveFocusChanged: if (!activeFocus) root.heldModifierFlags = 0
       Keys.onShortcutOverride: function(event) {
+        root.noteModifierKey(event, true)
         if (shortcutModifiers.isHintModifierKey(event.key) && !root.typingInField) {
-          root.considerShortcutModeKey(event, true)
           event.accepted = true
           return
         }
@@ -2543,7 +2408,7 @@ Item {
           event.accepted = true
       }
       Keys.onPressed: function(event) {
-        root.considerShortcutModeKey(event, true)
+        root.noteModifierKey(event, true)
         if (shortcutModifiers.isHintModifierKey(event.key) && !root.typingInField) {
           event.accepted = true
           return
@@ -2558,12 +2423,11 @@ Item {
         if (root.handlePanelCursorKey(event)) event.accepted = true
       }
       Keys.onReleased: function(event) {
-        root.noteHeldModifiers(event, false)
+        root.noteModifierKey(event, false)
         if (shortcutModifiers.isHintModifierKey(event.key) && !root.typingInField)
           event.accepted = true
       }
       Keys.onEscapePressed: function(event) {
-        root.latchShortcutMode()
         if (root.dismissTransientPopup()) {
           root.disarmEscapeClose()
           event.accepted = true
@@ -2710,7 +2574,7 @@ Item {
                   hasCursor: root.cursorShown("header", "back")
                   onClicked: root.goBack()
                   onHovered: function(on) { if (on) root.setPanelCursor("header", "back") }
-                  KeyHint { region: "header"; action: "back"; sequences: ["Alt+Left"] }
+                  KeyHint { sequences: ["Alt+Left"] }
                 }
 
                 Text {
@@ -2738,18 +2602,6 @@ Item {
                 spacing: Style.space(1)
 
                 Button {
-                  id: shortcutHintsDismissButton
-                  visible: root.shortcutHintsActive && !root.extraNarrowWidth
-                  anchors.verticalCenter: parent.verticalCenter
-                  text: "Ctrl+H · Hide hints"
-                  foreground: root.foreground
-                  fontSize: Style.font.caption
-                  focusable: false
-                  tooltipText: "Hide shortcut hints until re-enabled in Settings · Ctrl+H"
-                  onClicked: root.disableShortcutHints()
-                }
-
-                Button {
                   id: shortcutHelpButton
                   visible: !root.extraNarrowWidth
                   anchors.verticalCenter: parent.verticalCenter
@@ -2761,7 +2613,7 @@ Item {
                   hasCursor: root.cursorShown("header", "help")
                   onClicked: root.toggleShortcutHelp()
                   onHovered: function(on) { if (on) root.setPanelCursor("header", "help") }
-                  KeyHint { region: "header"; action: "help"; sequences: ["Ctrl+/"] }
+                  KeyHint { sequences: ["Ctrl+/"] }
                 }
 
                 Button {
@@ -2778,7 +2630,6 @@ Item {
                   onHovered: function(on) {
                     if (on) root.setPanelCursor("header", "refresh")
                   }
-                  KeyHint { region: "header"; action: "refresh" }
                   onClicked: root.refreshCurrentView()
                 }
 
@@ -2799,7 +2650,7 @@ Item {
                   hasCursor: root.cursorShown("header", "close")
                   onClicked: root.requestClose()
                   onHovered: function(on) { if (on) root.setPanelCursor("header", "close") }
-                  KeyHint { region: "header"; action: "close"; sequences: ["Esc"] }
+                  KeyHint { sequences: ["Esc"] }
                 }
               }
             }
@@ -2845,21 +2696,18 @@ Item {
                   var shift = (event.modifiers & Qt.ShiftModifier) !== 0
                   var alt = (event.modifiers & Qt.AltModifier) !== 0
                   if (event.key === Qt.Key_Escape) {
-                    root.latchShortcutMode()
                     if (root.dismissSearch()) {
                       event.accepted = true
                       return
                     }
                   }
                   if (ctrl && !shift && !alt && event.key === Qt.Key_F) {
-                    root.latchShortcutMode("Ctrl+F")
                     root.activateSearch()
                     event.accepted = true
                     return
                   }
                   if (!ctrl && !shift && !alt
                       && (event.key === Qt.Key_Slash || event.text === "/")) {
-                    root.latchShortcutMode("/")
                     root.activateSearch()
                     event.accepted = true
                   }
@@ -2872,7 +2720,7 @@ Item {
                       + root.activeSearchScope.label
                     : "Search all of Spotify · Ctrl+F or /"
                 }
-                KeyHint { region: "header"; action: "search"; sequences: ["/", "Ctrl+F"] }
+                KeyHint { sequences: ["/", "Ctrl+F"] }
               }
 
               Text {
@@ -2928,13 +2776,12 @@ Item {
                     : root.shortcutHint("Search only in "
                       + root.activeSearchScope.label, "Ctrl+F or /")
                   onClicked: root.toggleSearchScope()
+                  // Only while typing: pressing the key again changes the scope.
                   KeyHint {
-                    region: "header"
-                    action: "scope"
                     sequences: ["/", "Ctrl+F"]
-                    active: root.shortcutHintsEnabled && root.shortcutModeLatched
-                      && !root.shortcutsBlocked
-                      && (root.shortcutHintsActive || unifiedSearchField.activeFocus)
+                    active: root.shortcutHintsEnabled && !root.shortcutsBlocked
+                      && unifiedSearchField.activeFocus
+                      && (root.modifierHintsShown || unifiedSearchField.text === "")
                   }
                 }
               }
@@ -3031,6 +2878,12 @@ Item {
     interval: Api.SEARCH_DEBOUNCE_MS
     repeat: false
     onTriggered: root.runUnifiedSearch()
+  }
+
+  Timer {
+    id: modifierHintDelay
+    interval: 300
+    onTriggered: if (root.heldModifierFlags !== 0) root.modifierHintsShown = true
   }
 
   Timer {

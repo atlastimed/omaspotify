@@ -122,7 +122,6 @@ Item {
           hasCursor: page.panel.cursorShown("page", "retry-search")
           onClicked: if (page.service) page.service.retrySearch(page.panel.searchType)
           onHovered: function(on) { if (on) page.panel.setPanelCursor("page", "retry-search") }
-          PanelKeyHint { panel: page.panel; region: "page"; action: "retry-search" }
         }
       }
     }
@@ -154,7 +153,6 @@ Item {
           hasCursor: page.panel.cursorShown("page", "history-clear")
           onClicked: page.service.clearSearchHistory()
           onHovered: function(on) { if (on) page.panel.setPanelCursor("page", "history-clear") }
-          PanelKeyHint { panel: page.panel; region: "page"; action: "history-clear" }
         }
       }
 
@@ -178,7 +176,6 @@ Item {
             onHovered: function(on) {
               if (on) page.panel.setPanelCursor("page", "history-" + historyChip.index)
             }
-            PanelKeyHint { panel: page.panel; region: "page"; action: "history-" + historyChip.index }
           }
         }
       }

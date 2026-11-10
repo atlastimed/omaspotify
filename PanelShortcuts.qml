@@ -13,7 +13,6 @@ Item {
     enabled: part.panel.searchBarVisible && !part.panel.shortcutsBlocked
       && !part.panel.textInputFocused()
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.activateSearch()
     }
   }
@@ -22,7 +21,6 @@ Item {
     enabled: part.panel.searchBarVisible && !part.panel.shortcutsBlocked
       && !part.panel.searchFieldFocused
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.activateSearch()
     }
   }
@@ -30,7 +28,6 @@ Item {
     sequence: "C"
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.openCurrentContextMenu()
     }
   }
@@ -38,7 +35,6 @@ Item {
     sequence: "Menu"
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.openCurrentContextMenu()
     }
   }
@@ -46,7 +42,6 @@ Item {
     sequence: "Shift+F10"
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.openCurrentContextMenu()
     }
   }
@@ -55,7 +50,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked
       && (part.panel.currentTab === "detail" || part.panel.navigationStack.length > 0)
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.goBack()
     }
   }
@@ -63,7 +57,6 @@ Item {
     sequence: "Ctrl+,"
     enabled: part.panel.accountConnected && !part.panel.shortcutsBlocked
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.chooseTab("setup")
     }
   }
@@ -71,7 +64,6 @@ Item {
     sequence: "Alt+Shift+H"
     enabled: part.panel.accountConnected && !part.panel.shortcutsBlocked
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.chooseTab("home")
     }
   }
@@ -79,7 +71,6 @@ Item {
     sequence: "Alt+Shift+Q"
     enabled: part.panel.accountConnected && !part.panel.shortcutsBlocked
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.chooseTab("queue")
     }
   }
@@ -87,7 +78,6 @@ Item {
     sequence: "Alt+Shift+I"
     enabled: part.panel.accountConnected && !part.panel.shortcutsBlocked
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.chooseTab("stats")
     }
   }
@@ -95,7 +85,6 @@ Item {
     sequence: "Alt+Shift+N"
     enabled: part.panel.accountConnected && !part.panel.shortcutsBlocked
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.toggleNowPlayingExpanded()
     }
   }
@@ -103,7 +92,6 @@ Item {
     sequence: "Alt+Shift+D"
     enabled: part.panel.accountConnected && !part.panel.shortcutsBlocked
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.chooseTab("devices")
     }
   }
@@ -112,7 +100,6 @@ Item {
     enabled: part.panel.accountConnected && !part.panel.shortcutsBlocked
       && part.panel.service && part.panel.service.currentArtistContextAvailable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.openCurrentArtist()
     }
   }
@@ -121,7 +108,6 @@ Item {
     enabled: part.panel.accountConnected && !part.panel.shortcutsBlocked
       && part.panel.service && part.panel.service.currentAlbumContextAvailable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.openCurrentAlbum()
     }
   }
@@ -130,7 +116,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.lyricsAvailable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.openLyrics()
     }
   }
@@ -139,7 +124,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.playbackStartable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       if (part.panel.service) part.panel.service.togglePlayback()
     }
   }
@@ -148,7 +132,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.playbackControllable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       if (part.panel.service) part.panel.service.next()
     }
   }
@@ -157,7 +140,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.playbackControllable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       if (part.panel.service) part.panel.service.previous()
     }
   }
@@ -166,7 +148,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.volumeSupported
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.toggleMute()
     }
   }
@@ -175,7 +156,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.nowPlayingExpanded
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.cycleEqualizerMode()
     }
   }
@@ -184,7 +164,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.currentTab !== "login"
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.toggleNowPlayingExpanded()
     }
   }
@@ -193,7 +172,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.playbackControllable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.service.setShuffle(!part.panel.service.shuffle)
     }
   }
@@ -202,7 +180,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.playbackControllable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.service.cycleRepeat()
     }
   }
@@ -211,7 +188,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.playbackControllable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.seekBy(-10)
     }
   }
@@ -220,7 +196,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.playbackControllable
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.seekBy(10)
     }
   }
@@ -230,7 +205,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.volumeSupported
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.adjustVolume(0.05)
     }
   }
@@ -240,7 +214,6 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.service && part.panel.service.volumeSupported
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.adjustVolume(-0.05)
     }
   }
@@ -249,13 +222,7 @@ Item {
     enabled: !part.panel.textInputFocused()
       && (!part.panel.shortcutsBlocked || part.panel.shortcutHelpOpen)
     onActivated: {
-      part.panel.latchShortcutMode(sequence)
       part.panel.toggleShortcutHelp()
     }
-  }
-  Shortcut {
-    sequence: "Ctrl+H"
-    enabled: part.panel.shortcutHintsActive
-    onActivated: part.panel.disableShortcutHints()
   }
 }

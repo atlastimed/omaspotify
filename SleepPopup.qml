@@ -10,9 +10,6 @@ Popup {
 
   property var panel: null
 
-  component KeyHint: PanelKeyHint {
-    panel: popup.panel
-  }
   parent: popup.panel.windowContentItem
   x: Math.max(Style.space(8), popup.panel.windowWidth - width - Style.space(24))
   y: Math.max(Style.space(8), popup.panel.windowHeight - height - Style.space(130))
@@ -70,7 +67,6 @@ Popup {
         leftAlign: true
         hasCursor: popup.panel.cursorShown("popup", "sleep-" + modelData)
         onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-" + minutesButton.modelData) }
-        KeyHint { region: "popup"; action: "sleep-" + minutesButton.modelData }
         onClicked: {
           if (popup.panel.service) popup.panel.service.setSleepMinutes(modelData)
           popup.close()
@@ -85,7 +81,6 @@ Popup {
       leftAlign: true
       hasCursor: popup.panel.cursorShown("popup", "sleep-track")
       onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-track") }
-      KeyHint { region: "popup"; action: "sleep-track" }
       onClicked: {
         if (popup.panel.service) popup.panel.service.sleepAfterTrack()
         popup.close()
@@ -99,7 +94,6 @@ Popup {
       leftAlign: true
       hasCursor: popup.panel.cursorShown("popup", "sleep-context")
       onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-context") }
-      KeyHint { region: "popup"; action: "sleep-context" }
       onClicked: {
         if (popup.panel.service) popup.panel.service.sleepAfterContext()
         popup.close()
@@ -114,7 +108,6 @@ Popup {
       leftAlign: true
       hasCursor: popup.panel.cursorShown("popup", "sleep-cancel")
       onHovered: function(on) { if (on) popup.panel.setPanelCursor("popup", "sleep-cancel") }
-      KeyHint { region: "popup"; action: "sleep-cancel" }
       onClicked: {
         popup.panel.service.cancelSleepTimer(true)
         popup.close()

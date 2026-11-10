@@ -17,5 +17,4 @@ Button {
   focusable: false
   hasCursor: part.panel.cursorShown("page", cursorId)
   onHovered: function(on) { if (on) part.panel.setPanelCursor("page", part.cursorId) }
-  PanelKeyHint { panel: part.panel; region: "page"; action: part.cursorId }
 }

@@ -47,6 +47,5 @@ Column {
     onHoveredChanged: if (hovered) part.panel.setPanelCursor("page", part.cursorId)
     onTextEdited: part.textEdited()
     onEditingFinished: part.editingFinished()
-    PanelKeyHint { panel: part.panel; region: "page"; action: part.cursorId }
   }
 }

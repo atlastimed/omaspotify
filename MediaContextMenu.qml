@@ -15,10 +15,6 @@ Popup {
     return contextMenuContent ? contextMenuContent.children : []
   }
 
-  component KeyHint: PanelKeyHint {
-    panel: popup.panel
-  }
-
   component ContextMenuButton: Button {
     id: ctxBtn
     property string contextAction: ""
@@ -29,11 +25,6 @@ Popup {
     focusable: false
     onHovered: function(on) {
       if (on && contextAction) popup.panel.setPanelCursor("popup", contextAction)
-    }
-    KeyHint {
-      region: "popup"
-      action: ctxBtn.contextAction
-      active: popup.panel.shortcutHintsInPopup
     }
   }
 
@@ -62,7 +53,6 @@ Popup {
   onOpened: {
     popup.panel.popupReturnRegion = popup.panel.panelCursorRegion
     popup.panel.popupReturnAction = popup.panel.panelCursorAction
-    popup.panel.latchShortcutMode()
     popup.panel.panelCursorActive = true
     popup.panel.panelCursorRegion = "popup"
     var actions = popup.panel.contextMenuCursorActions()

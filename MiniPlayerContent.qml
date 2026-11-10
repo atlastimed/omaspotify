@@ -35,16 +35,10 @@ Item {
       : contentColumn.implicitHeight)
   focus: true
   Keys.priority: Keys.BeforeItem
-  onActiveFocusChanged: if (!activeFocus) {
-    mini.widget.heldModifierFlags = 0
-    mini.widget.shortcutModeLatched = false
-  }
+  onActiveFocusChanged: if (!activeFocus) mini.widget.heldModifierFlags = 0
   Keys.onShortcutOverride: function(event) {
-    if (shortcutModifiers.isHintModifierKey(event.key)) {
-      mini.widget.noteHeldModifiers(event, true)
-      mini.widget.latchShortcutMode()
-      event.accepted = true
-    }
+    mini.widget.noteHeldModifiers(event, true)
+    if (shortcutModifiers.isHintModifierKey(event.key)) event.accepted = true
   }
   Keys.onPressed: function(event) { mini.widget.handleMiniKey(event) }
   Keys.onReleased: function(event) {
@@ -55,15 +49,7 @@ Item {
   Shortcut {
     sequence: "Ctrl+/"
     enabled: mini.widget.popupOpen && !mini.widget.lyricsInstallPromptVisible
-    onActivated: {
-      mini.widget.latchShortcutMode("Ctrl+/")
-      mini.widget.toggleMiniShortcutHelp()
-    }
-  }
-  Shortcut {
-    sequence: "Ctrl+H"
-    enabled: mini.widget.shortcutHintsActive
-    onActivated: mini.widget.disableShortcutHints()
+    onActivated: mini.widget.toggleMiniShortcutHelp()
   }
 
   Column {
@@ -100,26 +86,6 @@ Item {
     width: parent.width
     visible: !mini.widget.miniShortcutHelpVisible && !mini.widget.contextMenuVisible
     spacing: Style.space(10)
-
-  Row {
-    width: parent.width
-    visible: mini.widget.shortcutHintsActive
-
-    Item {
-      width: Math.max(0, parent.width - miniHideHintsButton.width)
-      height: 1
-    }
-
-    Button {
-      id: miniHideHintsButton
-      text: "Ctrl+H · Hide hints"
-      foreground: mini.widget.foreground
-      fontSize: Style.font.caption
-      focusable: false
-      tooltipText: "Hide shortcut hints until re-enabled in Settings · Ctrl+H"
-      onClicked: mini.widget.disableShortcutHints()
-    }
-  }
 
   Column {
     width: parent.width
@@ -427,6 +393,7 @@ Item {
         }
         KeyHint {
           id: miniArtistHint
+          placement: "inset"
           sequences: ["Ctrl+Shift+A"]
         }
       }
@@ -471,6 +438,7 @@ Item {
         }
         KeyHint {
           id: miniAlbumHint
+          placement: "inset"
           sequences: ["Ctrl+Shift+B"]
         }
       }
@@ -514,6 +482,7 @@ Item {
         onHoveredChanged: if (hovered) mini.widget.setMiniCursor("seek")
       }
       KeyHint {
+        placement: "above"
         sequences: ["Shift+Left", "Shift+Right"]
         active: mini.widget.shortcutHintsActive && mini.widget.spotify
           && mini.widget.spotify.playbackControllable
@@ -676,6 +645,7 @@ Item {
       onHoveredChanged: if (hovered) mini.widget.setMiniCursor("volume")
     }
     KeyHint {
+      placement: "above"
       sequences: ["M", "Ctrl+Up", "Ctrl+Down"]
       active: mini.widget.shortcutHintsActive && mini.widget.spotify
         && mini.widget.spotify.volumeSupported

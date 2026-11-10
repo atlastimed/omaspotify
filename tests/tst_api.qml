@@ -52,6 +52,40 @@ TestCase {
       false, false), "")
   }
 
+  function test_barSlotWidth_neverOutgrowsTheRoomInTheBar() {
+    compare(Api.barSlotWidth(false, 240, 400, 26, 150), 150)
+    compare(Api.barSlotWidth(true, 240, 180, 26, 150), 150)
+    compare(Api.barSlotWidth(false, 0, 400, 26, 150), 150)
+    compare(Api.barSlotWidth(false, 240, 100, 26, 150), 100)
+    // Unmeasured room is no limit at all.
+    compare(Api.barSlotWidth(false, 240, 400, 26, Infinity), 240)
+    compare(Api.barSlotWidth(false, 240, 400, 26, undefined), 240)
+    compare(Api.barSlotWidth(false, 240, 400, 26, 5), 26)
+  }
+
+  function test_barLabelFits_needsRoomForMoreThanAFewLetters() {
+    verify(Api.barLabelFits(Infinity, 40, 48))
+    verify(Api.barLabelFits(undefined, 40, 48))
+    verify(Api.barLabelFits(88, 40, 48))
+    verify(!Api.barLabelFits(87, 40, 48))
+    verify(!Api.barLabelFits(0, 40, 48))
+  }
+
+  function test_barLayoutHasWidget_looksInEverySection() {
+    var layout = {
+      left: [{ id: "omarchy.menu" }, { id: "atlastimed.tunemarchy" }],
+      center: [{ id: "omarchy.clock" }],
+      right: [null, "junk", { id: "omarchy.power" }],
+      tray: [{ id: "local.tucked" }]
+    }
+    verify(Api.barLayoutHasWidget(layout, "atlastimed.tunemarchy"))
+    verify(Api.barLayoutHasWidget(layout, "local.tucked"))
+    verify(!Api.barLayoutHasWidget(layout, "omarchy.media"))
+    verify(!Api.barLayoutHasWidget(layout, ""))
+    verify(!Api.barLayoutHasWidget(null, "omarchy.clock"))
+    verify(!Api.barLayoutHasWidget({ left: "nope" }, "omarchy.clock"))
+  }
+
   function test_idleShutdown_onlyRunsForAnEmptyReceiver() {
     verify(Api.idleShutdownShouldRun(true, false, false, 15))
     verify(!Api.idleShutdownShouldRun(true, true, false, 15))
@@ -2458,25 +2492,37 @@ TestCase {
     compare(Api.shortcutHintCaption("Shift+F10", shift, true), "F10")
     compare(Api.shortcutHintCaption("Shift+F10", none, true), "")
     compare(Api.shortcutHintCaption("Menu", none, true), "Menu")
-    compare(Api.shortcutOverlayLabel("Shift+F10", shift, true, "↵"), "↵ F10")
-    compare(Api.shortcutOverlayLabel("Shift+F10", shift, true, ""), "F10")
     compare(Api.shortcutHintCaption("C", none, true), "C")
-    compare(Api.shortcutOverlayLabel("C", none, true, "↵"), "↵ C")
     compare(Api.shortcutHintCaption("Ctrl+,", ctrl, true), ",")
     compare(Api.shortcutHintCaption("Ctrl+/", ctrl, true), "/")
     compare(Api.shortcutHintCaption("Esc", none, true), "Esc")
     compare(Api.shortcutHintCaption("Space", none, false), "")
-    compare(Api.shortcutOverlayLabel("Space", none, true, "Tab"), "Tab Space")
-    compare(Api.shortcutOverlayLabel(["/", "Ctrl+F"], none, true, "Tab"), "Tab /")
-    compare(Api.shortcutOverlayLabel("Space", none, true, ""), "Space")
-    compare(Api.shortcutOverlayLabel("Space", none, true, "↵"), "↵ Space")
-    compare(Api.shortcutOverlayLabel("Ctrl+S", none, true, ""), "")
-    compare(Api.shortcutOverlayLabel("Space", none, false, "Tab"), "")
-    compare(Api.shortcutModifierFlagsAfterEvent(0, false, 3, 0), 3)
-    compare(Api.shortcutModifierFlagsAfterEvent(3, true, 0, 1), 3)
-    compare(Api.shortcutModifierFlagsAfterEvent(3, false, 3, 1), 2)
-    compare(Api.shortcutModifierFlagsAfterEvent(1, false, 1, 1), 0)
-    compare(Api.shortcutModifierFlagsAfterEvent(3, true, 0, 0), 3)
+  }
+
+  function test_heldHintModifiers_followOnlyKeysSeenGoingDown() {
+    var ctrl = 1, shift = 2
+    // A modifier key going down or up is the only thing that sets or clears it.
+    compare(Api.heldHintModifiers(0, ctrl, true, ctrl), ctrl)
+    compare(Api.heldHintModifiers(ctrl, ctrl | shift, true, shift), ctrl | shift)
+    compare(Api.heldHintModifiers(ctrl | shift, shift, false, ctrl), shift)
+    compare(Api.heldHintModifiers(ctrl, 0, false, ctrl), 0)
+    // A chord typed by a tool that never sent the modifier key shows nothing.
+    compare(Api.heldHintModifiers(0, ctrl, true, 0), 0)
+    // An ordinary key going down tells the truth about a release that was missed.
+    compare(Api.heldHintModifiers(ctrl | shift, ctrl, true, 0), ctrl)
+    compare(Api.heldHintModifiers(ctrl, 0, true, 0), 0)
+    // Its release says nothing reliable, so nothing changes.
+    compare(Api.heldHintModifiers(ctrl, 0, false, 0), ctrl)
+  }
+
+  function test_mixColors_blendsTowardTheSecond() {
+    var mixed = Api.mixColors(Qt.rgba(0, 0, 0, 1), Qt.rgba(1, 0.5, 0, 1), 0.5)
+    fuzzyCompare(mixed.r, 0.5, 0.01)
+    fuzzyCompare(mixed.g, 0.25, 0.01)
+    fuzzyCompare(mixed.b, 0, 0.01)
+    fuzzyCompare(mixed.a, 1, 0.01)
+    fuzzyCompare(Api.mixColors(Qt.rgba(0, 0, 0, 1), Qt.rgba(1, 1, 1, 1), 2).r, 1, 0.01)
+    fuzzyCompare(Api.mixColors(Qt.rgba(0, 0, 0, 1), Qt.rgba(1, 1, 1, 1), -1).r, 0, 0.01)
   }
 
   function test_searchShortcutAction_startsGlobalThenTogglesScope() {
@@ -2500,108 +2546,7 @@ TestCase {
     compare(Api.listIndexAfterMove(3, -1, 1), 0)
   }
 
-  function test_cursorNavHint_marksTabAndArrowDestinations() {
-    var query = {
-      currentRegion: "footer",
-      currentAction: "play",
-      regionActions: ["previous", "play", "next"],
-      tabRegion: "sidebar",
-      tabAction: "nav-home",
-      backtabRegion: "page",
-      backtabAction: "list",
-      modifiersHeld: false
-    }
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "footer", action: "play"
-    })), "↵")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "footer", action: "next"
-    })), "↓")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "footer", action: "previous"
-    })), "↑")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "sidebar", action: "nav-home"
-    })), "Tab")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "page", action: "list"
-    })), "⇧Tab")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "footer", action: "next", modifiersHeld: true
-    })), "")
-    compare(Api.cursorNavHint(Api.assign(Api.assign({}, query), {
-      region: "sidebar", action: "nav-home", modifiersHeld: true
-    })), "Tab")
-    compare(Api.cursorNavHint({
-      region: "popup",
-      action: "sleep-30",
-      currentRegion: "popup",
-      currentAction: "sleep-15",
-      regionActions: ["sleep-15", "sleep-30", "sleep-cancel"],
-      tabRegion: "popup",
-      tabAction: "sleep-30"
-    }), "Tab")
-    compare(Api.cursorNavHint({
-      region: "footer",
-      action: "play",
-      currentRegion: "footer",
-      currentAction: "play",
-      tabRegion: "footer",
-      tabAction: "play",
-      cursorActive: false
-    }), "Tab")
-  }
-
-  function test_cursorListRowHint_marksTheRowsArrowsWouldPress() {
-    var list = {
-      count: 5,
-      currentIndex: 3,
-      atList: true,
-      modifiersHeld: false
-    }
-    compare(Api.cursorListRowHint(Api.assign({ rowIndex: 3 }, list)), "↵")
-    compare(Api.cursorListRowHint(Api.assign({ rowIndex: 2 }, list)), "↑")
-    compare(Api.cursorListRowHint(Api.assign({ rowIndex: 4 }, list)), "↓")
-    compare(Api.cursorListRowHint(Api.assign({ rowIndex: 0 }, list)), "")
-    compare(Api.cursorListRowHint({
-      rowIndex: 0, count: 5, currentIndex: 3, previousIsCurrent: true
-    }), "↓")
-    compare(Api.cursorListRowHint({
-      rowIndex: 4, count: 5, currentIndex: 3, nextIsCurrent: true
-    }), "↑")
-    compare(Api.cursorNavHint({
-      region: "sidebar",
-      action: "nav-settings",
-      currentRegion: "sidebar",
-      currentAction: "sidebar-playlists",
-      regionActions: ["nav-playlists", "sidebar-playlists", "nav-settings"],
-      listAction: "sidebar-playlists",
-      listIndex: 3,
-      listCount: 8
-    }), "")
-    compare(Api.cursorNavHint({
-      region: "sidebar",
-      action: "nav-settings",
-      currentRegion: "sidebar",
-      currentAction: "sidebar-playlists",
-      regionActions: ["nav-playlists", "sidebar-playlists", "nav-settings"],
-      listAction: "sidebar-playlists",
-      listIndex: 7,
-      listCount: 8
-    }), "↓")
-    compare(Api.cursorListRowHint({
-      rowIndex: 3, count: 8, currentIndex: 3, tabIsList: true, tabRowIndex: 1
-    }), "")
-    compare(Api.cursorListRowHint({
-      rowIndex: 1, count: 8, currentIndex: 3, tabIsList: true, tabRowIndex: 1
-    }), "Tab")
-    compare(Api.cursorListRowHint({
-      rowIndex: 1, count: 8, currentIndex: 3, tabIsList: true, tabRowIndex: 1,
-      modifiersHeld: true
-    }), "Tab")
-    compare(Api.cursorListRowHint({
-      rowIndex: 3, count: 5, currentIndex: 3, atList: true, tabIsList: true
-    }), "↵")
+  function test_listHintRowIndex_staysInsideTheList() {
     compare(Api.listHintRowIndex(8, 1), 1)
     compare(Api.listHintRowIndex(8, -1), 0)
     compare(Api.listHintRowIndex(0, 0), -1)

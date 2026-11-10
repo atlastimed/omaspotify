@@ -66,7 +66,6 @@ Item {
           if (page.feed.error) page.panel.service.retryReleaseFeed()
           else page.feed.load()
         }
-        PanelKeyHint { panel: page.panel; region: "page"; action: "releases-more" }
       }
     }
 

@@ -148,7 +148,6 @@ Item {
               hasCursor: part.panel.cursorShown("footer", "like")
               onClicked: if (part.service) part.service.toggleCurrentTrackSaved()
               onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "like") }
-              PanelKeyHint { panel: part.panel; region: "footer"; action: "like" }
             }
 
             Button {
@@ -163,7 +162,6 @@ Item {
               hasCursor: part.panel.cursorShown("footer", "context")
               onClicked: part.panel.openNowPlayingContext()
               onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "context") }
-              PanelKeyHint { panel: part.panel; region: "footer"; action: "context"; sequences: ["C"] }
             }
           }
         }
@@ -210,8 +208,7 @@ Item {
           PanelKeyHint {
             id: currentArtistHint
             panel: part.panel
-            region: "footer"
-            action: "artist"
+            placement: "inset"
             sequences: ["Ctrl+Shift+A"]
           }
         }
@@ -253,8 +250,7 @@ Item {
           PanelKeyHint {
             id: currentAlbumHint
             panel: part.panel
-            region: "footer"
-            action: "album"
+            placement: "inset"
             sequences: ["Ctrl+Shift+B"]
           }
         }
@@ -294,7 +290,7 @@ Item {
           enabled: part.service && part.service.playbackControllable
           onClicked: if (part.service) part.service.setShuffle(!part.service.shuffle)
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "shuffle") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "shuffle"; sequences: ["Ctrl+S"] }
+          PanelKeyHint { panel: part.panel; sequences: ["Ctrl+S"] }
         }
         TransportButton {
           glyphText: "󰒮"
@@ -305,7 +301,7 @@ Item {
           enabled: part.service && part.service.playbackControllable
           onClicked: if (part.service) part.service.previous()
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "previous") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "previous"; sequences: ["Ctrl+Left"] }
+          PanelKeyHint { panel: part.panel; sequences: ["Ctrl+Left"] }
         }
         TransportButton {
           glyphText: "󰵛"
@@ -316,7 +312,6 @@ Item {
           enabled: part.service && part.service.playbackControllable
           onClicked: if (part.service) part.service.skipBySeconds(-15)
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "back15") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "back15" }
         }
         TransportButton {
           anchors.verticalCenter: parent.verticalCenter
@@ -333,7 +328,7 @@ Item {
           enabled: part.service && part.service.playbackStartable
           onClicked: if (part.service) part.service.togglePlayback()
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "play") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "play"; sequences: ["Space"] }
+          PanelKeyHint { panel: part.panel; sequences: ["Space"] }
         }
         TransportButton {
           glyphText: "󰵙"
@@ -344,7 +339,6 @@ Item {
           enabled: part.service && part.service.playbackControllable
           onClicked: if (part.service) part.service.skipBySeconds(30)
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "forward30") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "forward30" }
         }
         TransportButton {
           glyphText: "󰒭"
@@ -355,7 +349,7 @@ Item {
           enabled: part.service && part.service.playbackControllable
           onClicked: if (part.service) part.service.next()
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "next") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "next"; sequences: ["Ctrl+Right"] }
+          PanelKeyHint { panel: part.panel; sequences: ["Ctrl+Right"] }
         }
         TransportButton {
           visible: !part.narrow
@@ -368,7 +362,7 @@ Item {
           enabled: part.service && part.service.playbackControllable
           onClicked: if (part.service) part.service.cycleRepeat()
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "repeat") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "repeat"; sequences: ["Ctrl+R"] }
+          PanelKeyHint { panel: part.panel; sequences: ["Ctrl+R"] }
         }
       }
 
@@ -418,8 +412,7 @@ Item {
 
             PanelKeyHint {
               panel: part.panel
-              region: "footer"
-              action: "seek"
+              placement: "above"
               sequences: ["Shift+Left", "Shift+Right"]
               active: part.panel.shortcutHintsActive && part.service
                 && part.service.playbackControllable
@@ -525,8 +518,7 @@ Item {
             }
             PanelKeyHint {
               panel: part.panel
-              region: "footer"
-              action: "volume"
+              placement: "above"
               sequences: ["M", "Ctrl+Up", "Ctrl+Down"]
               active: part.panel.shortcutHintsActive && part.service
                 && part.service.volumeSupported
@@ -559,7 +551,7 @@ Item {
             ? "Playing on " + part.service.playbackDeviceName : "Choose a device", "Alt+Shift+D")
           onClicked: part.panel.chooseTab("devices")
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "devices") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "devices"; sequences: ["Alt+Shift+D"] }
+          PanelKeyHint { panel: part.panel; sequences: ["Alt+Shift+D"] }
         }
 
         Button {
@@ -576,7 +568,6 @@ Item {
           tooltipText: part.service ? part.service.sleepStatusText() : "Sleep timer"
           onClicked: part.panel.openSleepPopup()
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "sleep") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "sleep" }
         }
 
         Button {
@@ -593,7 +584,7 @@ Item {
           tooltipText: part.panel.shortcutHint("Open lyrics in Omasing", "Ctrl+Shift+L")
           onClicked: part.panel.openLyrics()
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "lyrics") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "lyrics"; sequences: ["Ctrl+Shift+L"] }
+          PanelKeyHint { panel: part.panel; sequences: ["Ctrl+Shift+L"] }
         }
 
         Button {
@@ -611,7 +602,7 @@ Item {
             ? "Back to browsing" : "Now playing view", "E")
           onClicked: part.panel.toggleNowPlayingExpanded()
           onHovered: function(on) { if (on) part.panel.setPanelCursor("footer", "expand") }
-          PanelKeyHint { panel: part.panel; region: "footer"; action: "expand"; sequences: ["E"] }
+          PanelKeyHint { panel: part.panel; sequences: ["E"] }
         }
       }
     }

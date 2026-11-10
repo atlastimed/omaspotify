@@ -1180,16 +1180,16 @@ function shortcutModifiersMatch(sequence, held) {
   return parsed.ctrl === ctrl && parsed.shift === shift && parsed.alt === alt
 }
 
-function shortcutModifierFlagsAfterEvent(reportedFlags, pressed, previousFlags,
-    changedModifierFlag) {
-  var reported = Number(reportedFlags) || 0
+// Which hint modifiers are down. Only a modifier key seen going down counts, so
+// a chord sent without one, or a release that never arrived, cannot leave hints
+// stuck on. Flags are Qt's keyboard modifier bits.
+function heldHintModifiers(previousFlags, reportedFlags, pressed, changedModifierFlag) {
   var previous = Number(previousFlags) || 0
   var changed = Number(changedModifierFlag) || 0
-  if (changed !== 0)
-    return pressed === true ? (reported | changed) : (reported & ~changed)
-  // Some Qt key-release events omit modifiers that are still physically held.
-  // A non-modifier release cannot change that state, so retain the last value.
-  return pressed === true ? reported : previous
+  if (changed !== 0) return pressed === true ? (previous | changed) : (previous & ~changed)
+  // Some key releases leave out modifiers that are still held, so only a press
+  // is trusted to say one has gone.
+  return pressed === true ? (previous & (Number(reportedFlags) || 0)) : previous
 }
 
 // Keys that move the keyboard cursor or press what it is on.
@@ -1229,15 +1229,6 @@ function shortcutHintCaption(sequences, held, active) {
     labels.push(label)
   }
   return labels.join(" ")
-}
-
-function shortcutOverlayLabel(sequences, held, active, navHint) {
-  if (active === false) return ""
-  var nav = String(navHint || "")
-  var chord = shortcutHintCaption(sequences, held, true)
-  if (nav && chord && nav !== chord) return nav + " " + chord
-  if (nav) return nav
-  return chord
 }
 
 function repeatModeLabel(mode) {
@@ -1389,6 +1380,14 @@ function backendLoadFields(body, trackUri) {
 // panel's own content with no compositor blur of their own. Glass themes set
 // the popup colour to a low alpha meant for separate blurred windows, which
 // leaves these unreadable. Keep the hue, floor the alpha.
+// share of the way from one colour to the other, fully opaque.
+function mixColors(first, second, share) {
+  var t = Math.max(0, Math.min(1, Number(share) || 0))
+  return Qt.rgba(first.r + (second.r - first.r) * t,
+    first.g + (second.g - first.g) * t,
+    first.b + (second.b - first.b) * t, 1)
+}
+
 function opaqueSurface(color, minimumAlpha) {
   var floor = Math.max(0, Math.min(1, Number(minimumAlpha) || 0))
   if (!color || color.a === undefined) return color
@@ -1398,13 +1397,36 @@ function opaqueSurface(color, minimumAlpha) {
 // Width of the bar slot for a label that measures `fitted` px. A cap trims
 // long titles; a fixed slot also pads short ones so the widget, and everything
 // laid out after it, keeps its place when the song changes.
-function barSlotWidth(fixed, cap, fitted, minimum) {
+// room is what the bar has left for the slot before it reaches the next
+// section. Unmeasured, it is no limit.
+function barSlotWidth(fixed, cap, fitted, minimum, room) {
   var capped = Number(cap) || 0
   var natural = Math.max(0, Number(fitted) || 0)
   var width = capped > 0
     ? (fixed === true ? capped : Math.min(capped, natural))
     : natural
+  var limit = Number(room)
+  if (isFinite(limit)) width = Math.min(width, Math.max(0, limit))
   return Math.max(Number(minimum) || 0, width)
+}
+
+// A label squeezed to a few letters says less than the icon alone.
+function barLabelFits(room, chrome, minimumText) {
+  var limit = Number(room)
+  if (!isFinite(limit)) return true
+  return limit >= (Number(chrome) || 0) + (Number(minimumText) || 0)
+}
+
+function barLayoutHasWidget(layout, id) {
+  var wanted = String(id || "")
+  if (!wanted || !layout || typeof layout !== "object") return false
+  for (var section in layout) {
+    var entries = layout[section]
+    if (!Array.isArray(entries)) continue
+    for (var i = 0; i < entries.length; i++)
+      if (entries[i] && entries[i].id === wanted) return true
+  }
+  return false
 }
 
 // The desktop app keeps the last play loaded in its footer, so Play always has
@@ -1911,43 +1933,6 @@ function moveCursorAction(actions, current, delta) {
   return list[(index + step + list.length) % list.length]
 }
 
-function cursorNavHint(query) {
-  var spec = query && typeof query === "object" ? query : {}
-  var region = String(spec.region || "")
-  var action = String(spec.action || "")
-  if (!region || !action) return ""
-  if (region === String(spec.tabRegion || "")
-      && action === String(spec.tabAction || ""))
-    return "Tab"
-  if (region === String(spec.backtabRegion || "")
-      && action === String(spec.backtabAction || ""))
-    return "⇧Tab"
-  if (spec.cursorActive === false) return ""
-  if (spec.modifiersHeld === true) return ""
-  var currentRegion = String(spec.currentRegion || "")
-  var current = String(spec.currentAction || "")
-  var listAction = String(spec.listAction || "")
-  var listIndex = Math.floor(Number(spec.listIndex))
-  var listCount = Math.max(0, Math.floor(Number(spec.listCount) || 0))
-  var atList = listAction !== "" && current === listAction
-  if (region === currentRegion && action === current) {
-    if (atList) return ""
-    return "↵"
-  }
-  if (region === currentRegion) {
-    var neighbors = cursorActionList(spec.regionActions)
-    if (action === moveCursorAction(neighbors, current, -1)) {
-      if (atList && listIndex > 0) return ""
-      return "↑"
-    }
-    if (action === moveCursorAction(neighbors, current, 1)) {
-      if (atList && listIndex >= 0 && listIndex < listCount - 1) return ""
-      return "↓"
-    }
-  }
-  return ""
-}
-
 function isCursorListAction(action) {
   var value = String(action || "")
   return value === "list" || value.indexOf("list-") === 0
@@ -2064,30 +2049,6 @@ function tabCursorDestination(query) {
       pageLanding: spec.pageLanding
     })
   }
-}
-
-function cursorListRowHint(query) {
-  var spec = query && typeof query === "object" ? query : {}
-  var row = Math.floor(Number(spec.rowIndex))
-  var count = Math.max(0, Math.floor(Number(spec.count) || 0))
-  var current = Math.floor(Number(spec.currentIndex))
-  if (count <= 0 || row < 0 || row >= count) return ""
-  if (!(current >= 0 && current < count)) current = 0
-  var tabRow = listHintRowIndex(count, spec.tabRowIndex)
-  if (spec.atList !== true) {
-    if (spec.tabIsList === true && row === tabRow) return "Tab"
-    if (spec.backtabIsList === true && row === tabRow) return "⇧Tab"
-  }
-  if (spec.modifiersHeld === true) return ""
-  if (spec.atList === true) {
-    if (row === current) return "↵"
-    if (row === current - 1) return "↑"
-    if (row === current + 1) return "↓"
-    return ""
-  }
-  if (spec.previousIsCurrent === true && row === 0) return "↓"
-  if (spec.nextIsCurrent === true && row === count - 1) return "↑"
-  return ""
 }
 
 function listIndexAfterMove(count, current, delta) {

@@ -172,11 +172,17 @@ ShellRoot {
     { shot: "context-menu", tab: "home", settled: function() {
       panel.openMediaContext(service.recentTracks[1], 320, 220, service.recentTracks, "", 1)
     }, after: function() { panel.dismissTransientPopup() } },
+    // Ctrl held: the chords it starts.
     { shot: "hints", tab: "home", settled: function() {
-      panel.latchShortcutMode("Ctrl+Left")
+      panel.heldModifierFlags = Qt.ControlModifier
+      panel.modifierHintsShown = true
+    }, after: function() { panel.resetKeyboardState() } },
+    // Steering by keyboard: the cursor, and the keys that need no modifier.
+    { shot: "hints-keyboard", tab: "home", settled: function() {
       panel.showKeyboardCursor()
       panel.ensurePanelCursor("page")
-    }, after: function() { panel.clearShortcutMode() } },
+      panel.movePanelCursor(1)
+    }, after: function() { panel.resetKeyboardState() } },
     { shot: "error", tab: "home", settled: function() {
       service.fail("Spotify could not complete this request. Try again in a moment.")
     }, after: function() { service.lastError = "" } },
