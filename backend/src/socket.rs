@@ -1,6 +1,9 @@
 use std::{
     fs, io,
-    os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    os::{
+        fd::AsRawFd,
+        unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt},
+    },
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -136,28 +139,32 @@ pub fn claim(path: &Path) -> Result<InstanceLock> {
         .with_context(|| format!("failed to create socket directory {}", parent.display()))?;
     let mut lock_path = path.as_os_str().to_owned();
     lock_path.push(".lock");
-    let lock_path = PathBuf::from(lock_path);
+    let Some(instance) = lock(Path::new(&lock_path))? else {
+        anyhow::bail!("another backend is already running for {}", path.display())
+    };
+    // A backend from before the lock existed still gives itself away by answering.
+    if std::os::unix::net::UnixStream::connect(path).is_ok() {
+        anyhow::bail!("another backend is already serving {}", path.display());
+    }
+    Ok(instance)
+}
+
+/// Takes the lock file at `path`, or nothing while another process holds it.
+pub fn lock(path: &Path) -> Result<Option<InstanceLock>> {
     let file = fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(false)
         .mode(0o600)
-        .open(&lock_path)
-        .with_context(|| format!("failed to open {}", lock_path.display()))?;
+        .open(path)
+        .with_context(|| format!("failed to open {}", path.display()))?;
     match file.try_lock() {
-        Ok(()) => {}
-        Err(fs::TryLockError::WouldBlock) => {
-            anyhow::bail!("another backend is already running for {}", path.display())
-        }
+        Ok(()) => Ok(Some(InstanceLock { _file: file })),
+        Err(fs::TryLockError::WouldBlock) => Ok(None),
         Err(fs::TryLockError::Error(error)) => {
-            return Err(error).with_context(|| format!("failed to lock {}", lock_path.display()));
+            Err(error).with_context(|| format!("failed to lock {}", path.display()))
         }
     }
-    // A backend from before the lock existed still gives itself away by answering.
-    if std::os::unix::net::UnixStream::connect(path).is_ok() {
-        anyhow::bail!("another backend is already serving {}", path.display());
-    }
-    Ok(InstanceLock { _file: file })
 }
 
 /// A leftover socket is replaced, but one with a backend behind it is not ours to take.
@@ -259,12 +266,25 @@ async fn client_loop(stream: UnixStream, state: StateStore, commands: EngineSend
     })?;
     write_encoded(&mut writer, &initial).await?;
 
+    // One request runs at a time, and at most one more is read while it does.
+    let mut running = None;
+    let mut waiting = None;
+    let mut finished = false;
     loop {
+        if running.is_none() {
+            match waiting.take() {
+                Some(line) => running = Some(Box::pin(handle_line(line, &state, &commands))),
+                None if finished => break,
+                None => {}
+            }
+        }
         tokio::select! {
-            line = lines.next_line() => {
-                let line = match line {
-                    Ok(Some(line)) => line,
-                    Ok(None) => break,
+            line = lines.next_line(), if !finished && waiting.is_none() => {
+                match line {
+                    Ok(Some(line)) => waiting = Some(line),
+                    // A client that only stopped sending is still owed its answer.
+                    Ok(None) if hung_up(writer.as_ref()) => break,
+                    Ok(None) => finished = true,
                     Err(FrameError::TooLong) => {
                         log::warn!("backend client sent an oversized request; closing");
                         let refusal = ServerMessage::failure(
@@ -278,8 +298,10 @@ async fn client_loop(stream: UnixStream, state: StateStore, commands: EngineSend
                         break;
                     }
                     Err(FrameError::Io(error)) => return Err(error.into()),
-                };
-                let message = handle_line(&line, &state, &commands).await;
+                }
+            }
+            Some(message) = async { Some(running.as_mut()?.await) }, if running.is_some() => {
+                running = None;
                 write_message(&mut writer, &message).await?;
             }
             changed = states.changed() => {
@@ -299,8 +321,20 @@ async fn client_loop(stream: UnixStream, state: StateStore, commands: EngineSend
     Ok(())
 }
 
+/// True once the client has closed its end, rather than only finished sending.
+fn hung_up(stream: &UnixStream) -> bool {
+    let mut poll = libc::pollfd {
+        fd: stream.as_raw_fd(),
+        events: 0,
+        revents: 0,
+    };
+    // SAFETY: poll only reads and writes the one entry it is given.
+    let ready = unsafe { libc::poll(&mut poll, 1, 0) };
+    ready > 0 && poll.revents & libc::POLLHUP != 0
+}
+
 async fn handle_line<'a>(
-    line: &str,
+    line: String,
     state: &StateStore,
     commands: &EngineSender,
 ) -> ServerMessage<'a> {
@@ -311,7 +345,7 @@ async fn handle_line<'a>(
         )
     };
     // Read the id first, so a request we cannot use is still refused under it.
-    let value: serde_json::Value = match serde_json::from_str(line) {
+    let value: serde_json::Value = match serde_json::from_str(&line) {
         Ok(value) => value,
         Err(error) => return invalid(0, error),
     };
@@ -440,7 +474,7 @@ mod tests {
     async fn answer(line: &str) -> serde_json::Value {
         let state = StateStore::new(crate::protocol::BackendState::default());
         let (commands, _receiver) = tokio::sync::mpsc::channel(1);
-        serde_json::to_value(handle_line(line, &state, &commands).await).unwrap()
+        serde_json::to_value(handle_line(line.into(), &state, &commands).await).unwrap()
     }
 
     #[tokio::test]
@@ -479,6 +513,107 @@ mod tests {
         assert_eq!(pong["id"], 11);
         assert_eq!(pong["ok"], true);
         assert_eq!(pong["result"]["pong"], true);
+    }
+
+    struct Client {
+        lines: tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
+        writer: tokio::net::unix::OwnedWriteHalf,
+        state: StateStore,
+        requests: tokio::sync::mpsc::Receiver<crate::engine::EngineRequest>,
+        served: tokio::task::JoinHandle<Result<()>>,
+    }
+
+    impl Client {
+        // Connected, with the opening snapshot already read.
+        async fn connected() -> Self {
+            let (ours, theirs) = UnixStream::pair().unwrap();
+            let state = StateStore::new(crate::protocol::BackendState::default());
+            let (commands, requests) = tokio::sync::mpsc::channel(1);
+            let served = tokio::spawn(client_loop(theirs, state.clone(), commands));
+            let (reader, writer) = ours.into_split();
+            let mut client = Self {
+                lines: BufReader::new(reader).lines(),
+                writer,
+                state,
+                requests,
+                served,
+            };
+            assert_eq!(client.next_message().await["event"], "state_changed");
+            client
+        }
+
+        async fn send(&mut self, line: &str) {
+            self.writer.write_all(line.as_bytes()).await.unwrap();
+            self.writer.write_all(b"\n").await.unwrap();
+        }
+
+        async fn next_message(&mut self) -> serde_json::Value {
+            let line = tokio::time::timeout(Duration::from_secs(1), self.lines.next_line())
+                .await
+                .expect("the backend sent nothing")
+                .unwrap()
+                .unwrap();
+            serde_json::from_str(&line).unwrap()
+        }
+    }
+
+    const NEXT: &str = r#"{"v":1,"id":5,"command":"next"}"#;
+
+    #[tokio::test]
+    async fn a_client_waiting_for_an_answer_still_hears_about_changes() {
+        let mut client = Client::connected().await;
+        client.send(NEXT).await;
+        let _unanswered = client.requests.recv().await.unwrap();
+        client.state.update(|state| {
+            state.shuffle = true;
+            true
+        });
+        let event = client.next_message().await;
+        assert_eq!(event["event"], "state_changed");
+        assert_eq!(event["state"]["shuffle"], true);
+    }
+
+    #[tokio::test]
+    async fn a_client_that_leaves_while_waiting_gives_up_its_place() {
+        let mut client = Client::connected().await;
+        client.send(NEXT).await;
+        let _unanswered = client.requests.recv().await.unwrap();
+        drop((client.lines, client.writer));
+        tokio::time::timeout(Duration::from_secs(1), client.served)
+            .await
+            .expect("the place was still held")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_client_that_has_only_finished_sending_still_gets_its_answer() {
+        let mut client = Client::connected().await;
+        client.send(NEXT).await;
+        client.writer.shutdown().await.unwrap();
+        let request = client.requests.recv().await.unwrap();
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!client.served.is_finished());
+        let _ = request.reply.unwrap().send(Ok(serde_json::json!({})));
+        let answer = client.next_message().await;
+        assert_eq!(answer["id"], 5);
+        assert_eq!(answer["ok"], true);
+        tokio::time::timeout(Duration::from_secs(1), client.served)
+            .await
+            .expect("the place was still held")
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn requests_sent_together_are_answered_in_order() {
+        let mut client = Client::connected().await;
+        client.send(NEXT).await;
+        client.send(r#"{"v":1,"id":6,"command":"ping"}"#).await;
+        let request = client.requests.recv().await.unwrap();
+        let _ = request.reply.unwrap().send(Ok(serde_json::json!({})));
+        assert_eq!(client.next_message().await["id"], 5);
+        assert_eq!(client.next_message().await["id"], 6);
     }
 
     #[tokio::test]

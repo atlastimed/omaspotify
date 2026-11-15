@@ -27,6 +27,7 @@ use crate::{
         BackendState, Command, Lifecycle, PlaybackStatus, PositionAnchor, ProtocolError,
         RepeatMode, Track,
     },
+    socket::InstanceLock,
     state::StateStore,
 };
 
@@ -37,6 +38,10 @@ const TOGGLE_INTENT_WINDOW: Duration = Duration::from_secs(2);
 /// A command's acknowledgement deadline.
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(5);
 const STOP_GRACE: Duration = Duration::from_millis(1500);
+const START_TIMEOUT: Duration = Duration::from_secs(90);
+
+type Api =
+    tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
 
 fn state_dir() -> PathBuf {
     std::env::var_os("XDG_STATE_HOME")
@@ -55,10 +60,7 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
         .context("backend has no runtime directory")?
         .join("soloist-runtime.py");
     let directory = state_dir();
-    // Left behind by a crash, these could point at whatever now owns that port.
-    for endpoint in ["ws.addr", "ws.port"] {
-        let _ = std::fs::remove_file(directory.join(endpoint));
-    }
+    let instance = claim_directory(&directory)?;
     let mut process = Process::new("/usr/bin/python3");
     process
         .arg(helper)
@@ -77,40 +79,7 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
         });
     }
     let mut child = process.spawn()?;
-    let deadline = Instant::now() + Duration::from_secs(90);
-    let ws_config = WebSocketConfig::default()
-        .max_message_size(Some(2 * 1024 * 1024))
-        .max_frame_size(Some(2 * 1024 * 1024));
-    let socket = loop {
-        if let Some(status) = child.try_wait()? {
-            if let Some(failure) = failure_for_exit(status) {
-                return Err(failure.into());
-            }
-            bail!("Soloist stopped before its local API became ready ({status})")
-        }
-        if let (Ok(address), Ok(port)) = (
-            std::fs::read_to_string(directory.join("ws.addr")),
-            std::fs::read_to_string(directory.join("ws.port")),
-        ) && address.trim() == "127.0.0.1"
-            && let Ok(port) = port.trim().parse::<u16>()
-            && port > 0
-        {
-            // The previous receiver may have left its endpoint files behind.
-            // Retry both discovery and connection until the new receiver is ready.
-            if let Ok(Ok((socket, _))) = tokio::time::timeout(
-                Duration::from_secs(2),
-                connect_async_with_config(format!("ws://127.0.0.1:{port}"), Some(ws_config), false),
-            )
-            .await
-            {
-                break socket;
-            }
-        }
-        if Instant::now() >= deadline {
-            bail!("Soloist did not open its loopback API")
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    };
+    let socket = connect(&mut child, &directory, START_TIMEOUT).await?;
     state.update(|s| {
         s.engine = "soloist".into();
         s.lifecycle = Lifecycle::Ready;
@@ -120,6 +89,8 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
     let (shutdown, shutdown_rx) = watch::channel(false);
     let (done_tx, done) = oneshot::channel();
     tokio::spawn(async move {
+        // Kept until Soloist has gone, so another adapter cannot start one beside it.
+        let _instance = instance;
         let result = drive(
             socket,
             receiver,
@@ -149,6 +120,69 @@ pub async fn start(config: BackendConfig, state: StateStore) -> Result<EngineRun
         shutdown,
         done: Some(done),
     })
+}
+
+/// Soloist keeps one state directory whatever the socket, so it has a lock of its own.
+fn claim_directory(directory: &Path) -> Result<InstanceLock> {
+    use std::os::unix::fs::DirBuilderExt;
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(directory)
+        .with_context(|| format!("failed to create {}", directory.display()))?;
+    let Some(instance) = crate::socket::lock(&directory.join("adapter.lock"))? else {
+        bail!("another adapter is already running Soloist")
+    };
+    // Left behind by a crash, these could point at whatever now owns that port.
+    for endpoint in ["ws.addr", "ws.port"] {
+        let _ = std::fs::remove_file(directory.join(endpoint));
+    }
+    Ok(instance)
+}
+
+/// A start that fails still asks Soloist to leave, so it can remove its endpoint files.
+async fn connect(child: &mut Child, directory: &Path, patience: Duration) -> Result<Api> {
+    let api = api_when_ready(child, directory, Instant::now() + patience).await;
+    if api.is_err() {
+        stop_child(child).await;
+    }
+    api
+}
+
+async fn api_when_ready(child: &mut Child, directory: &Path, deadline: Instant) -> Result<Api> {
+    let ws_config = WebSocketConfig::default()
+        .max_message_size(Some(2 * 1024 * 1024))
+        .max_frame_size(Some(2 * 1024 * 1024));
+    loop {
+        if let Some(status) = child.try_wait()? {
+            if let Some(failure) = failure_for_exit(status) {
+                return Err(failure.into());
+            }
+            bail!("Soloist stopped before its local API became ready ({status})")
+        }
+        if let (Ok(address), Ok(port)) = (
+            std::fs::read_to_string(directory.join("ws.addr")),
+            std::fs::read_to_string(directory.join("ws.port")),
+        ) && address.trim() == "127.0.0.1"
+            && let Ok(port) = port.trim().parse::<u16>()
+            && port > 0
+        {
+            // The previous receiver may have left its endpoint files behind.
+            // Retry both discovery and connection until the new receiver is ready.
+            if let Ok(Ok((socket, _))) = tokio::time::timeout(
+                Duration::from_secs(2),
+                connect_async_with_config(format!("ws://127.0.0.1:{port}"), Some(ws_config), false),
+            )
+            .await
+            {
+                return Ok(socket);
+            }
+        }
+        if Instant::now() >= deadline {
+            bail!("Soloist did not open its loopback API")
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 /// The helper exits 77 for a missing key and 75 for a build it cannot renew;
@@ -609,8 +643,9 @@ where
                             if ["playback_changed", "playback_state"].contains(&kind) {
                                 toggle_intent = None;
                             }
-                            if kind == "playback_state" {
-                                query_deadline = None;
+                            if kind == "playback_state" && query_deadline.take().is_some() {
+                                // An answer to our question shows Soloist is still listening.
+                                command_timed_out = false;
                             }
                             state.update(|s| {
                                 let changed = apply_event(s, &event, &mut position);
@@ -701,6 +736,50 @@ mod tests {
         assert!(!directory.join("volume.tmp").exists());
         std::fs::remove_dir_all(directory).unwrap();
     }
+    fn test_directory(name: &str) -> PathBuf {
+        let directory =
+            std::env::temp_dir().join(format!("omaspotify-soloist-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        directory
+    }
+
+    #[test]
+    fn a_second_adapter_is_refused_and_leaves_the_first_ones_endpoint_alone() {
+        let directory = test_directory("claim");
+        let first = claim_directory(&directory).unwrap();
+        std::fs::write(directory.join("ws.port"), "4070\n").unwrap();
+        assert!(claim_directory(&directory).is_err());
+        assert!(directory.join("ws.port").exists());
+        drop(first);
+        drop(claim_directory(&directory).unwrap());
+        assert!(!directory.join("ws.port").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_start_that_fails_still_asks_soloist_to_leave_before_killing_it() {
+        let directory = test_directory("failed-start");
+        // Stands in for the child process only: it notes being asked to stop.
+        let mut child = Process::new("/bin/sh")
+            .arg("-c")
+            .arg(r#"trap 'touch "$0/asked"; exit 0' TERM; touch "$0/ready"; while :; do sleep 0.05; done"#)
+            .arg(&directory)
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !directory.join("ready").exists() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let failed = connect(&mut child, &directory, Duration::from_millis(50)).await;
+        assert!(failed.is_err());
+        assert!(directory.join("asked").exists());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn track_change_does_not_inherit_previous_position() {
         let mut s = BackendState::default();
@@ -1255,7 +1334,6 @@ mod tests {
         assert_eq!(f.next_command().await["command"], "skip_next");
         assert_eq!(result.await.unwrap().unwrap_err().code, "timeout");
         assert_eq!(f.next_command().await["command"], "get_state");
-        f.push(snapshot).await;
         assert!(!f.task.is_finished());
 
         let result = f.ask(Command::Next).await;
@@ -1263,6 +1341,25 @@ mod tests {
         assert_eq!(result.await.unwrap().unwrap_err().code, "timeout");
         assert!(f.task.await.unwrap().is_err());
         std::fs::remove_dir_all(f.directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn an_answered_question_shows_soloist_is_still_listening() {
+        let mut f = Fixture::with_timeout("still-listening", Duration::from_millis(250)).await;
+        f.log_in().await;
+        for _ in 0..2 {
+            let result = f.ask(Command::Next).await;
+            assert_eq!(f.next_command().await["command"], "skip_next");
+            assert_eq!(result.await.unwrap().unwrap_err().code, "timeout");
+            assert_eq!(f.next_command().await["command"], "get_state");
+            f.push(json!({"type":"playback_state","status":"paused"}))
+                .await;
+            f.wait_for(|s| s.playback == PlaybackStatus::Paused).await;
+            f.push(json!({"type":"playback_changed","status":"stopped"}))
+                .await;
+            f.wait_for(|s| s.playback == PlaybackStatus::Stopped).await;
+        }
+        f.finish().await;
     }
 
     #[tokio::test]
