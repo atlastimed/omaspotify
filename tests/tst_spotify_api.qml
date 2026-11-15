@@ -111,6 +111,25 @@ TestCase {
     verify(requests[limit + 1].url.indexOf("/search") >= 0)
   }
 
+  function test_deleteWithBody_goesThroughTheRequestThatKeepsIt() {
+    var api = createTemporaryObject(apiComponent, testCase)
+    verify(api)
+    var kept = []
+    api.bodyRequestFactory = function() {
+      var xhr = testCase.newRequest()
+      xhr.send = function(body) { kept.push(body) }
+      return xhr
+    }
+    api.request("DELETE", "/playlists/p/items", null, { positions: [2] }, function() {})
+    compare(kept.length, 1, "Qt drops the body of a DELETE, so it must not go that way")
+    compare(JSON.parse(kept[0]).positions[0], 2)
+    // A DELETE with nothing to carry, and every other method, go out as before.
+    api.request("DELETE", "/me/library", { uris: "spotify:track:a" }, null, function() {})
+    api.request("PUT", "/playlists/p/items", null, { range_start: 0 }, function() {})
+    compare(kept.length, 1)
+    compare(requests.length, 3)
+  }
+
   function test_searchRequestsOnlyTheSelectedType() {
     var api = createTemporaryObject(apiComponent, testCase)
     verify(api)

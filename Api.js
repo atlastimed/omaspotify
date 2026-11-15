@@ -2416,6 +2416,22 @@ function playlistPositionAt(items, index) {
     ? Math.floor(explicitPosition) : visibleIndex
 }
 
+// Where Spotify holds a row: the position it was loaded at, else where it is shown.
+function playlistRowPosition(item, items, index) {
+  var own = item ? item.playlistPosition : undefined
+  var position = Number(own)
+  if (own !== null && own !== undefined && isFinite(position) && position >= 0)
+    return Math.floor(position)
+  return playlistPositionAt(items, index)
+}
+
+// The song a one-row answer holds, under either name Spotify has given the field.
+function playlistEntryUri(payload) {
+  var rows = payload && Array.isArray(payload.items) ? payload.items : []
+  var song = rows.length && rows[0] ? (rows[0].item || rows[0].track) : null
+  return song && song.uri ? String(song.uri) : ""
+}
+
 function playlistReorderBodyForItems(items, sourceIndex, destinationIndex,
     itemCount, snapshotId) {
   var rows = Array.isArray(items) ? items : []

@@ -42,6 +42,9 @@ Item {
   property var timedJobs: []
   property int activeTimeoutMs: 15000
   property var xhrFactory: function() { return new XMLHttpRequest() }
+  // Qt's XMLHttpRequest drops the body of a DELETE. The service supplies one
+  // that keeps it; without one the request goes out as before.
+  property var bodyRequestFactory: null
   property var now: function() { return Date.now() }
 
   function removeTimedJob(job) {
@@ -274,7 +277,7 @@ Item {
       watchDeadlines()
       var xhr = null
       try {
-        xhr = xhrFactory()
+        xhr = root.needsBodyRequest(job) ? bodyRequestFactory() : xhrFactory()
         handle.xhr = xhr
         xhr.onreadystatechange = function() {
           if (xhr.readyState !== XMLHttpRequest.DONE || handle.xhr !== xhr) return
@@ -338,6 +341,12 @@ Item {
         finishJob(job, 0, null, "Something went wrong while contacting Spotify", null)
       }
     })
+  }
+
+  function needsBodyRequest(job) {
+    return typeof bodyRequestFactory === "function"
+      && String(job.method || "GET").toUpperCase() === "DELETE"
+      && job.body !== undefined && job.body !== null
   }
 
   function callbackIfCurrent(job, status, payload, error, xhr) {

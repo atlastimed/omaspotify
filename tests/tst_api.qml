@@ -1874,6 +1874,25 @@ TestCase {
     compare(Api.playlistReorderBody(0, 4, 4, "snapshot"), null)
   }
 
+  function test_playlistRowPosition_prefersWhereSpotifyHoldsTheRow() {
+    var rows = [{ uri: "a", playlistPosition: 3 }, { uri: "b" }]
+    compare(Api.playlistRowPosition(rows[0], rows, 0), 3)
+    // A sorted view shows the row somewhere else; the row still knows.
+    compare(Api.playlistRowPosition(rows[0], rows, 1), 3)
+    compare(Api.playlistRowPosition(rows[1], rows, 1), 1)
+    compare(Api.playlistRowPosition({ uri: "c", playlistPosition: 0 }, [], -1), 0)
+    compare(Api.playlistRowPosition({ uri: "c" }, rows, -1), -1)
+    compare(Api.playlistRowPosition(null, rows, 9), -1)
+  }
+
+  function test_playlistEntryUri_readsEitherFieldName() {
+    compare(Api.playlistEntryUri({ items: [{ item: { uri: "spotify:track:a" } }] }), "spotify:track:a")
+    compare(Api.playlistEntryUri({ items: [{ track: { uri: "spotify:track:b" } }] }), "spotify:track:b")
+    compare(Api.playlistEntryUri({ items: [{ item: null }] }), "")
+    compare(Api.playlistEntryUri({ items: [] }), "")
+    compare(Api.playlistEntryUri(null), "")
+  }
+
   function test_playlistReorder_preservesRawPositionsAcrossHiddenItems() {
     var rows = [
       { name: "one", playlistPosition: 0 },
