@@ -30,6 +30,10 @@ state changes:
 {"type":"event","v":1,"event":"state_changed","state":{"lifecycle":"ready"}}
 ```
 
+A snapshot can arrive between a request and its response, so a client matches
+the response by its id and never by what arrives next. A client that
+disconnects gives up its place at once, whatever it was waiting for.
+
 The abbreviated example omits the remaining state fields. A real snapshot also
 contains backend and protocol versions, session status, current client,
 playback status, track metadata, position in milliseconds, native 16-bit
