@@ -237,8 +237,11 @@ Item {
       normalizeVolume: draftNormalizeVolume ? "On" : "Off",
       volumeLevel: draftVolumeLevel
     }
+    // The client id has its own button; saving something else must not undo typing.
+    var typedClientId = draftClientId
     service.persistSettings(values)
     syncDraftSettings()
+    draftClientId = typedClientId
     if (showStatus !== false) service.succeed("Settings saved")
   }
 
@@ -457,7 +460,7 @@ Item {
     }
     if (action === "blur") {
       releaseSearchFocus()
-      return false
+      return true
     }
     return false
   }
@@ -566,8 +569,20 @@ Item {
     syncUnifiedSearchField()
   }
 
+  // What the panel holds for the account that just left. Without this, closing
+  // the panel wrote its searches and open playlist back into the session file.
+  function forgetAccountUiState() {
+    searchText = ""
+    artistSearchText = ""
+    scrollPositions = ({})
+    navigationStack = []
+    restoredPlaylistId = ""
+    restoredPlaylist = null
+    restoredPlaylistItemCount = 0
+  }
+
   function persistUiState() {
-    if (!service) return
+    if (!service || (!accountConnected && !sessionPending)) return
     var selected = service.selectedPlaylist || restoredPlaylist
     var selectedItemCount = service.selectedPlaylist
       ? service.playlistRememberedItemCount : restoredPlaylistItemCount
@@ -1991,6 +2006,7 @@ Item {
       universalSearchActive = false
       searchInContext = true
       openedForLogin = true
+      forgetAccountUiState()
       return
     }
     if (openedForLogin || currentTab === "login") {
@@ -2248,6 +2264,13 @@ Item {
     if (!service || !item || !contextPlaylist) return -1
     var source = sourceItems === undefined
       ? contextPlaylistItems() : Api.arrayValues(sourceItems)
+    // The row knows where Spotify holds it; counting copies in a sorted or
+    // filtered view can land on its twin.
+    var held = Api.playlistRowPosition(item, [], -1)
+    if (held >= 0)
+      for (var at = 0; at < source.length; at++)
+        if (source[at] && source[at].uri === item.uri
+            && Api.playlistRowPosition(source[at], [], -1) === held) return at
     var occurrence = 0
     for (var shown = 0; shown < contextSourceIndex; shown++)
       if (contextSourceItems[shown] && contextSourceItems[shown].uri === item.uri) occurrence++

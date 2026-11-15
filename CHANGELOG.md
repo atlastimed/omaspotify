@@ -1,3 +1,37 @@
+## Unreleased
+
+Found by driving the real player with a real account, then fixed and run again.
+
+- Removing a song from a playlist works. It always failed with "No uris provided":
+  Qt's request object sends DELETE without its body, and Spotify takes a playlist
+  removal no other way. That one kind of request now goes through curl, with the
+  token on stdin.
+- Removing one copy of a song that is in a playlist twice leaves the other. Asked by
+  song, Spotify removes every copy, so the row is removed by its position, after
+  reading that position back to check the same song is still there.
+- The sidebar no longer loses every playlist for six hours. Spotify answered the
+  library with an empty list and no error, and it was taken as the truth. An empty
+  answer for a list that had rows is now kept out and asked for again; a second one
+  is believed.
+- Refresh on an open playlist reads its songs again, not only the list of playlists.
+- The shell log no longer fills with "sectionOf is not a function". The bar entry
+  queued a measurement that ran after the bar had unloaded it.
+- A playlist opened from search or an artist page loads past its first hundred songs.
+- A playlist longer than 200 songs reopened within five minutes shows all of them,
+  not the 200 that were kept on disk.
+- Move up and Move down act on the row you picked when a sorted view shows two
+  copies of a song.
+- Escape in an empty search field leaves the field and nothing else. It also went
+  back a page.
+- A client ID being typed is not wiped by changing another setting.
+- Signing out no longer writes the last search and open playlist back into the
+  session file when the player closes.
+- One device on the network answering nonsense can no longer make every nearby
+  speaker vanish from Devices.
+- A stalled Soloist download gives up by its deadline instead of a minute after it.
+- Removing the plugin without `XDG_RUNTIME_DIR` set looks in `/run/user`, where the
+  backend does, not `/tmp`.
+
 ## 2.3.0 — Full review
 
 A complete review of the plugin, backend, install scripts and CI, with fixes

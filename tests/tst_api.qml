@@ -1874,6 +1874,21 @@ TestCase {
     compare(Api.playlistReorderBody(0, 4, 4, "snapshot"), null)
   }
 
+  function test_detailPageContainer_doesNotUnwrapALaterPage() {
+    var first = { name: "p", items: { items: [1, 2], next: "more", offset: 0 } }
+    compare(Api.detailPageContainer(first, "playlist").next, "more")
+    // The second page of a playlist is the page: its "items" is the rows.
+    var later = { items: [3, 4], next: "", offset: 100 }
+    compare(Api.detailPageContainer(later, "playlist").offset, 100)
+    compare(Api.detailPageContainer(later, "playlist").items.length, 2)
+    compare(Api.detailPageContainer({ tracks: { items: [1], offset: 0 } }, "playlist").items.length, 1)
+    compare(Api.detailPageContainer({ tracks: { items: [1, 2, 3] } }, "album").items.length, 3)
+    compare(Api.detailPageContainer({ items: [9] }, "album").items.length, 1)
+    compare(Api.detailPageContainer({ episodes: { items: [1] } }, "show").items.length, 1)
+    compare(Api.detailPageContainer({ chapters: { items: [1] } }, "audiobook").items.length, 1)
+    compare(Object.keys(Api.detailPageContainer(null, "playlist")).length, 0)
+  }
+
   function test_playlistRowPosition_prefersWhereSpotifyHoldsTheRow() {
     var rows = [{ uri: "a", playlistPosition: 3 }, { uri: "b" }]
     compare(Api.playlistRowPosition(rows[0], rows, 0), 3)

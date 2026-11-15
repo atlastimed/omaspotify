@@ -944,6 +944,8 @@ function cappedPageSnapshot(snapshot, limit) {
     var cursor = cut[i] === "items" ? "next" : cut[i] + "Next"
     if (out.hasOwnProperty(cursor)) out[cursor] = ""
   }
+  // Without its cursor the page cannot be paged on, so it is never the whole answer.
+  if (cut.length) out.trimmed = true
   return out
 }
 
@@ -2358,6 +2360,19 @@ function playlistItemUris(items) {
       uris.push(String(item.uri))
   }
   return uris
+}
+
+// A first answer wraps its rows in a named page; a later page is that page
+// itself, whose own "items" is the rows and must not be taken for the wrapper.
+function detailPageContainer(payload, type) {
+  var source = payload || {}
+  var names = { album: ["tracks"], playlist: ["items", "tracks"], show: ["episodes"],
+    audiobook: ["chapters"] }[String(type || "")] || []
+  for (var i = 0; i < names.length; i++) {
+    var inner = source[names[i]]
+    if (inner && typeof inner === "object" && !Array.isArray(inner)) return inner
+  }
+  return source
 }
 
 // Playlist objects are replaced when their snapshots refresh. Resolve the

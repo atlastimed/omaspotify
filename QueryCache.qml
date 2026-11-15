@@ -28,14 +28,18 @@ Item {
 
   signal changed()
 
+  // A trimmed page is drawn first and then always read again: taken as
+  // current, its missing cursor would hide every row past the cut.
   function freshness(key) {
-    return Api.queryCacheState(entries[String(key || "")], now(), staleMs)
+    var entry = entries[String(key || "")]
+    var state = Api.queryCacheState(entry, now(), staleMs)
+    return state === "fresh" && entry.data.trimmed === true ? "stale" : state
   }
 
   function read(key) {
     var entry = entries[String(key || "")]
-    return Api.queryCacheState(entry, now(), maxAgeMs) === "missing"
-      ? null : entry.data
+    return Api.queryCacheState(entry, now(), maxAgeMs) === "fresh"
+      ? entry.data : null
   }
 
   function write(key, data) {

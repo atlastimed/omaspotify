@@ -108,6 +108,26 @@ class ConnectHelperTests(unittest.TestCase):
         self.assertEqual(len(calls), 1)
         self.assertEqual([item["name"] for item in devices], ["Speaker"])
 
+    def test_a_receiver_answering_nonsense_does_not_hide_the_others(self) -> None:
+        # Enough hostile records to reach every worker, then one real speaker.
+        browse = "\n".join(
+            [f'=;eth0;IPv4;Bad{n};_spotify-connect._tcp;local;bad{n}.local;192.168.1.{n + 20};5353;"CPath=/zc"'
+             for n in range(10)]
+            + ['=;eth0;IPv4;Real;_spotify-connect._tcp;local;real.local;192.168.1.9;5353;"CPath=/zc"']
+        )
+
+        def fake_request_json(address: str, *_rest: object) -> object:
+            if address == "192.168.1.9":
+                return {"status": 101, "deviceID": "0123456789abcdef", "remoteName": "Real"}
+            # int() of an infinite float raises OverflowError; a list has no get().
+            return {"status": float("inf")} if int(address.rsplit(".", 1)[1]) % 2 else ["status"]
+
+        with mock.patch.object(helper, "browse_spotify_connect", return_value=browse), \
+                mock.patch.object(helper, "request_json", side_effect=fake_request_json):
+            devices = helper.discover_receivers()
+
+        self.assertEqual([item["name"] for item in devices], ["Real"])
+
     def test_a_silent_receiver_does_not_hold_up_the_others(self) -> None:
         browse = "\n".join([
             '=;eth0;IPv4;Slow;_spotify-connect._tcp;local;a.local;192.168.1.8;5353;"CPath=/zc"',

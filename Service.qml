@@ -2960,13 +2960,7 @@ Item {
   }
 
   function detailPageFromPayload(payload, type, parent) {
-    var container = payload || {}
-    if (type === "album") container = payload && payload.tracks ? payload.tracks : container
-    else if (type === "playlist")
-      container = payload && (payload.items || payload.tracks) ? (payload.items || payload.tracks) : container
-    else if (type === "show") container = payload && payload.episodes ? payload.episodes : container
-    else if (type === "audiobook")
-      container = payload && payload.chapters ? payload.chapters : container
+    var container = Api.detailPageContainer(payload, type)
     var nextPlaylistPosition = Math.max(0,
       Math.floor(Number(container.offset) || 0))
     return Api.normalizePage(container, function(value) {
