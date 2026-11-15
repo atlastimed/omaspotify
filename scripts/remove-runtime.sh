@@ -14,7 +14,8 @@ fi
 config_root=${XDG_CONFIG_HOME:-"$HOME/.config"}
 cache_root=${XDG_CACHE_HOME:-"$HOME/.cache"}
 state_root=${XDG_STATE_HOME:-"$HOME/.local/state"}
-session_runtime_root=${XDG_RUNTIME_DIR:-/tmp}
+# Where the backend itself falls back to, never a directory shared with other users.
+session_runtime_root=${XDG_RUNTIME_DIR:-/run/user/$(id -u)}
 backend_unit_file="$config_root/systemd/user/omaspotify.service"
 config_dir="$config_root/omaspotify"
 legacy_cache_dir="$cache_root/spotifyd"

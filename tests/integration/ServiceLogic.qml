@@ -72,7 +72,8 @@ ShellRoot {
       setRequestHeader: function() {},
       getResponseHeader: function() { return "" },
       abort: function() { x.aborted = true },
-      send: function() {
+      send: function(body) {
+        x.body = body === undefined ? null : body
         top.log.push(x.method + " " + x.url.replace("https://api.spotify.com/v1", ""))
         if (top.handler) top.handler(x)
       }
@@ -158,6 +159,7 @@ ShellRoot {
   function reset() {
     svc.api.cancelAll()
     svc.api.xhrFactory = makeXhr
+    svc.api.bodyRequestFactory = makeXhr
     svc.auth.loggedOut()
     login()
     log = []
@@ -315,7 +317,6 @@ ShellRoot {
         if (x.url.indexOf("/me/playlists") >= 0) top.held.push(x)
         else top.emptyLibrary(x)
       }
-      svc.savedAlbums = top.albums(2)
       svc.startLibraryFill()
       top.waitUntil(function() { return top.held.length > 0 }, 4000, function() {
         top.later(400, function() {
@@ -360,6 +361,39 @@ ShellRoot {
       top.waitUntil(function() { return !svc.libraryFillRunning }, 8000, function() {
         top.check(svc.savedAlbums.length === 2, "kept " + svc.savedAlbums.length + " albums")
         done()
+      })
+    } },
+
+    { name: "a library that comes back empty is asked again before it is believed", run: function(done) {
+      var lists = []
+      for (var i = 0; i < 3; i++) lists.push(Api.normalizeContext(top.apiRow("playlist", i), 96))
+      svc.playlists = lists
+      top.handler = top.emptyLibrary
+      svc.startLibraryFill()
+      top.waitUntil(function() { return !svc.libraryFillRunning }, 8000, function() {
+        top.check(svc.playlists.length === 3, "one empty answer left " + svc.playlists.length)
+        top.check(!svc.libraryCacheCurrent(), "a doubted answer was stamped fresh")
+        svc.startLibraryFill()
+        top.waitUntil(function() { return !svc.libraryFillRunning }, 8000, function() {
+          top.check(svc.playlists.length === 0, "a second empty answer left " + svc.playlists.length)
+          top.check(svc.libraryCacheCurrent(), "the believed answer was not stamped")
+          done()
+        })
+      })
+    } },
+
+    { name: "refreshing an open playlist reads its songs again", run: function(done) {
+      svc.currentUserId = "me"
+      var playlist = Api.normalizeContext({ type: "playlist", id: "p", uri: "spotify:playlist:p",
+        name: "Mine", owner: { id: "me" }, snapshot_id: "s" }, 96)
+      svc.selectedPlaylist = playlist
+      svc.playlistItems = []
+      top.handler = top.emptyLibrary
+      svc.refreshView("playlists")
+      top.waitUntil(function() { return top.requestsTo("/playlists/p/items") > 0 }, 3000, function() {
+        top.check(top.requestsTo("/playlists/p/items") > 0, "the open playlist was not asked for")
+        svc.selectedPlaylist = null
+        top.waitUntil(function() { return !svc.libraryFillRunning }, 8000, done)
       })
     } },
 
@@ -660,21 +694,65 @@ ShellRoot {
       })
     } },
 
-    { name: "removing a repeated song says how many went", run: function(done) {
+    { name: "removing one copy of a repeated song leaves the other", run: function(done) {
+      svc.currentUserId = "me"
+      var playlist = Api.normalizeContext({ type: "playlist", id: "p", uri: "spotify:playlist:p",
+        name: "Mine", owner: { id: "me" }, snapshot_id: "s" }, 96)
+      function row(id, position) {
+        var song = Api.normalizeTrack({ type: "track", id: id, uri: "spotify:track:" + id, name: id,
+          artists: [], album: {} }, 96)
+        song.playlistPosition = position
+        return song
+      }
+      svc.selectedPlaylist = playlist
+      svc.playlistItems = [row("t", 0), row("u", 1), row("t", 2)]
+      var sent = null
+      top.handler = function(x) {
+        if (x.method === "DELETE") {
+          sent = JSON.parse(x.body)
+          top.reply(x, 200, { snapshot_id: "s2" })
+        } else if (x.url.indexOf("offset=2") >= 0 && x.url.indexOf("limit=1") >= 0)
+          top.reply(x, 200, { items: [{ item: { uri: "spotify:track:t" } }] })
+        else top.reply(x, 200, { items: [], total: 0, next: null })
+      }
+      // The index is where the row is shown; the row knows where Spotify holds it.
+      svc.removePlaylistItem(svc.playlistItems[2], 0, playlist)
+      top.later(50, function() {
+        top.check(sent !== null, "nothing was removed: " + svc.lastError)
+        top.check(sent && JSON.stringify(sent.positions) === "[2]",
+          "asked for " + JSON.stringify(sent))
+        top.check(sent && sent.items === undefined && sent.tracks === undefined,
+          "named the song, which removes every copy")
+        top.check(svc.statusMessage === "Removed from playlist", "said: " + svc.statusMessage)
+        top.check(!svc.playlistActionBusy, "still busy")
+        svc.selectedPlaylist = null
+        done()
+      })
+    } },
+
+    { name: "a row that moved somewhere else is not removed", run: function(done) {
       svc.currentUserId = "me"
       var playlist = Api.normalizeContext({ type: "playlist", id: "p", uri: "spotify:playlist:p",
         name: "Mine", owner: { id: "me" }, snapshot_id: "s" }, 96)
       var song = Api.normalizeTrack({ type: "track", id: "t", uri: "spotify:track:t", name: "t",
         artists: [], album: {} }, 96)
+      song.playlistPosition = 4
       svc.selectedPlaylist = playlist
-      svc.playlistItems = [song, song]
+      svc.playlistItems = [song]
+      var removals = 0
       top.handler = function(x) {
-        if (x.method === "DELETE") top.reply(x, 200, { snapshot_id: "s2" })
+        if (x.method === "DELETE") {
+          removals++
+          top.reply(x, 200, { snapshot_id: "s2" })
+        } else if (x.url.indexOf("offset=4") >= 0)
+          top.reply(x, 200, { items: [{ item: { uri: "spotify:track:other" } }] })
         else top.reply(x, 200, { items: [], total: 0, next: null })
       }
       svc.removePlaylistItem(song, 0, playlist)
       top.later(50, function() {
-        top.check(svc.statusMessage.indexOf("2") >= 0, "said: " + svc.statusMessage)
+        top.check(removals === 0, "removed whatever was at that position")
+        top.check(svc.lastError.indexOf("changed") >= 0, "said: " + svc.lastError)
+        top.check(!svc.playlistActionBusy, "still busy")
         svc.selectedPlaylist = null
         done()
       })

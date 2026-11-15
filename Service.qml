@@ -198,6 +198,7 @@ Item {
   property bool libraryFillRunning: false
   property int libraryFillPending: 0
   property bool libraryFillFailed: false
+  property var emptyFillDoubted: ({})
   property bool savedTracksCrawling: false
   property double savedTracksMark: 0
   property double savedTracksNewest: 0
@@ -1714,6 +1715,8 @@ Item {
     retryApiRequests()
     loadPlaybackState()
     if (view === "library" || view === "playlists") refreshLibraryNow()
+    // The open playlist is what Refresh is pointed at, not only the list of them.
+    if (view === "playlists" && selectedPlaylist) reloadPlaylist(selectedPlaylist)
     openView(view, true)
   }
 
@@ -1836,6 +1839,16 @@ Item {
     var spec = fill.spec
     if (fill.showProgress) root[spec.loading] = false
     var rows = laidOutFill(fill)
+    // Spotify has answered a full library with an empty one and no error. One
+    // such answer keeps what we had and is asked again; a second is believed.
+    var doubted = complete && rows.length === 0 && root[spec.items].length > 0
+      && emptyFillDoubted[fill.kind] !== true
+    if (complete) emptyFillDoubted[fill.kind] = doubted
+    if (doubted) {
+      console.warn("Spotify returned an empty " + fill.kind + " list; keeping "
+        + root[spec.items].length + " known and asking again later")
+      complete = false
+    }
     // A complete answer replaces the list, so what was removed elsewhere goes.
     // After a failure, pages that did arrive are kept with what we already had.
     if (complete) root[spec.items] = rows
@@ -2842,24 +2855,41 @@ Item {
       openDetail(detailItem, "", restoredDetailItemCount)
   }
 
+  // Asked by song, Spotify removes every copy of it, so a row is removed by its
+  // position. Nothing ties that position to the playlist as we last saw it, so
+  // the row is read back first and left alone if something else is there now.
   function removePlaylistItem(item, index, playlist) {
     var target = playlist || selectedPlaylist
     if (!item || !item.uri || !playlistEditable(target) || playlistActionBusy) return
-    playlistActionBusy = true
-    var body = { items: [{ uri: item.uri }] }
-    if (target.snapshotId) body.snapshot_id = target.snapshotId
-    // Spotify removes by song, not by row, so say so when that was more than one.
     var rows = selectedPlaylist && selectedPlaylist.id === target.id ? playlistItems : detailItems
-    var copies = rows.filter(function(row) { return row && row.uri === item.uri }).length
-    spotifyApi.request("DELETE", "/playlists/" + encodeURIComponent(String(target.id)) + "/items",
-      null, body, function(status, payload, error) {
-        root.playlistActionBusy = false
-        if (error) { root.fail(error); return }
-        root.updatePlaylistSnapshot(target.id, payload && payload.snapshot_id)
-        root.succeed(copies > 1 ? "Removed all " + copies + " copies from playlist"
-          : "Removed from playlist")
-        root.reloadPlaylist(target)
-      })
+    var position = Api.playlistRowPosition(item, rows, index)
+    if (position < 0) {
+      fail("Could not tell which row to remove. Refresh the playlist and try again.")
+      return
+    }
+    var path = "/playlists/" + encodeURIComponent(String(target.id)) + "/items"
+    var expected = dataSerial
+    playlistActionBusy = true
+    spotifyApi.request("GET", path,
+      { offset: position, limit: 1, fields: "items(item(uri),track(uri))" }, null,
+      function(status, payload, error) {
+        if (expected !== root.dataSerial) return
+        if (error || Api.playlistEntryUri(payload) !== String(item.uri)) {
+          root.playlistActionBusy = false
+          root.fail(error || "This playlist changed somewhere else, so nothing was removed. It has been reloaded.")
+          if (!error) root.reloadPlaylist(target)
+          return
+        }
+        spotifyApi.request("DELETE", path, null, { positions: [position] },
+          function(removeStatus, removed, removeError) {
+            if (expected !== root.dataSerial) return
+            root.playlistActionBusy = false
+            if (removeError) { root.fail(removeError); return }
+            root.updatePlaylistSnapshot(target.id, removed && removed.snapshot_id)
+            root.succeed("Removed from playlist")
+            root.reloadPlaylist(target)
+          })
+      }, { priority: "interactive" })
   }
 
   function requestPlaylistItemReorder(sourceIndex, destinationIndex, playlist, count,
@@ -2930,13 +2960,7 @@ Item {
   }
 
   function detailPageFromPayload(payload, type, parent) {
-    var container = payload || {}
-    if (type === "album") container = payload && payload.tracks ? payload.tracks : container
-    else if (type === "playlist")
-      container = payload && (payload.items || payload.tracks) ? (payload.items || payload.tracks) : container
-    else if (type === "show") container = payload && payload.episodes ? payload.episodes : container
-    else if (type === "audiobook")
-      container = payload && payload.chapters ? payload.chapters : container
+    var container = Api.detailPageContainer(payload, type)
     var nextPlaylistPosition = Math.max(0,
       Math.floor(Number(container.offset) || 0))
     return Api.normalizePage(container, function(value) {
@@ -4422,6 +4446,7 @@ Item {
     libraryFillRunning = false
     libraryFillPending = 0
     libraryFillFailed = false
+    emptyFillDoubted = ({})
     radioContextSelected = false
     playlists = []
     playlistsLoaded = false
@@ -5145,9 +5170,15 @@ Item {
     scopes: ["streaming"]
   }
 
+  Component {
+    id: curlRequest
+    CurlRequest {}
+  }
+
   SpotifyApi {
     id: spotifyApi
     auth: authManager
+    bodyRequestFactory: function() { return curlRequest.createObject(root) }
   }
 
   SpotifyConnectManager {

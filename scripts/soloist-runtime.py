@@ -126,7 +126,9 @@ def lock_for(lock, deadline):
 
 
 def download_archive(url, destination, deadline):
-    with urllib.request.urlopen(url, timeout=60) as response, destination.open("wb") as output:
+    # A stalled connection must give up by the deadline too, not a minute after it.
+    patience = max(1.0, min(60.0, deadline - time.monotonic()))
+    with urllib.request.urlopen(url, timeout=patience) as response, destination.open("wb") as output:
         # No executable downloads may redirect away from Spotify's CDN.
         if not response.url.startswith("https://soloist-builds.spotifycdn.com/"):
             raise ValueError("Unexpected Soloist download destination")

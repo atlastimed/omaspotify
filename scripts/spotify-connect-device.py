@@ -433,7 +433,12 @@ def discover_receivers(include_volume: bool = False) -> list[dict[str, Any]]:
                 record = next(pending, None)
             if record is None:
                 return
-            device = probe_receiver(record, include_volume)
+            try:
+                device = probe_receiver(record, include_volume)
+            except Exception:
+                # Anything on the network can answer. One bad reply must not
+                # end this worker and leave the real speakers unprobed.
+                device = None
             if device is not None:
                 with lock:
                     found.append(device)

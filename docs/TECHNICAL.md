@@ -81,6 +81,17 @@ is capped at two of the four slots, spaced apart, and stands aside for three
 seconds after anything you open, so a page you are waiting on is never behind
 the crawl.
 
+Qt's `XMLHttpRequest` sends a DELETE without its body, and Spotify accepts a
+playlist removal only as one. `CurlRequest.qml` stands in for that single case:
+the same few members the transport uses, backed by `curl -q --config -`, so the
+token and body arrive on stdin and never appear in a command line. Everything
+else still goes through `XMLHttpRequest`.
+
+Removing by song removes every copy of it, so a playlist row is removed by its
+position alone. Spotify does not document that form and does not check a
+position against a snapshot, so the row is read back first and nothing is
+removed if a different song is there now.
+
 The rate limit belongs to your configured client ID and is shared with any other
 clients you configure to use that same developer app. On a
 429 the app honours `Retry-After` for everything, and the gap between background

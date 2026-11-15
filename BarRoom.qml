@@ -27,8 +27,16 @@ Item {
 
   property var watched: []
   property Item section: null
-  property bool queued: false
   property int attempts: 0
+
+  // A timer, not Qt.callLater: a delayed call still runs after the bar has
+  // unloaded this item, when its own functions can no longer be found. A
+  // timer stops with the item, and starting a running one changes nothing.
+  Timer {
+    id: soon
+    interval: 0
+    onTriggered: room.measure()
+  }
 
   Timer {
     id: search
@@ -96,13 +104,10 @@ Item {
   }
 
   function schedule() {
-    if (queued) return
-    queued = true
-    Qt.callLater(room.measure)
+    soon.start()
   }
 
   function measure() {
-    queued = false
     if (!active || !widget) {
       allowance = Infinity
       return
@@ -143,5 +148,9 @@ Item {
   onBaseWidthChanged: schedule()
   onEdgeChanged: schedule()
   Component.onCompleted: schedule()
-  Component.onDestruction: unwatch()
+  Component.onDestruction: {
+    soon.stop()
+    search.stop()
+    unwatch()
+  }
 }

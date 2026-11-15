@@ -114,6 +114,16 @@ TestCase {
     cache.write("a", { item: { id: "a" }, items: [1, 2, 3], next: "cursor" })
     compare(cache.read("a").items.length, 2)
     compare(cache.read("a").next, "")
+    // Its cursor is gone, so it is drawn and then asked for again.
+    compare(cache.freshness("a"), "stale")
+    cache.write("b", { item: { id: "b" }, items: [1, 2], next: "cursor" })
+    compare(cache.freshness("b"), "fresh")
     cache.itemLimit = 200
+  }
+
+  function test_aPageTooOldToTrustIsNotDrawnInALongSession() {
+    cache.write("a", { item: { id: "a" }, items: [1] })
+    clock += cache.maxAgeMs + 1
+    compare(cache.read("a"), null)
   }
 }

@@ -944,6 +944,8 @@ function cappedPageSnapshot(snapshot, limit) {
     var cursor = cut[i] === "items" ? "next" : cut[i] + "Next"
     if (out.hasOwnProperty(cursor)) out[cursor] = ""
   }
+  // Without its cursor the page cannot be paged on, so it is never the whole answer.
+  if (cut.length) out.trimmed = true
   return out
 }
 
@@ -2360,6 +2362,19 @@ function playlistItemUris(items) {
   return uris
 }
 
+// A first answer wraps its rows in a named page; a later page is that page
+// itself, whose own "items" is the rows and must not be taken for the wrapper.
+function detailPageContainer(payload, type) {
+  var source = payload || {}
+  var names = { album: ["tracks"], playlist: ["items", "tracks"], show: ["episodes"],
+    audiobook: ["chapters"] }[String(type || "")] || []
+  for (var i = 0; i < names.length; i++) {
+    var inner = source[names[i]]
+    if (inner && typeof inner === "object" && !Array.isArray(inner)) return inner
+  }
+  return source
+}
+
 // Playlist objects are replaced when their snapshots refresh. Resolve the
 // backing collection by stable ID and never fall through to an unrelated
 // detail page.
@@ -2414,6 +2429,22 @@ function playlistPositionAt(items, index) {
   return explicitValue !== null && explicitValue !== undefined
     && isFinite(explicitPosition) && explicitPosition >= 0
     ? Math.floor(explicitPosition) : visibleIndex
+}
+
+// Where Spotify holds a row: the position it was loaded at, else where it is shown.
+function playlistRowPosition(item, items, index) {
+  var own = item ? item.playlistPosition : undefined
+  var position = Number(own)
+  if (own !== null && own !== undefined && isFinite(position) && position >= 0)
+    return Math.floor(position)
+  return playlistPositionAt(items, index)
+}
+
+// The song a one-row answer holds, under either name Spotify has given the field.
+function playlistEntryUri(payload) {
+  var rows = payload && Array.isArray(payload.items) ? payload.items : []
+  var song = rows.length && rows[0] ? (rows[0].item || rows[0].track) : null
+  return song && song.uri ? String(song.uri) : ""
 }
 
 function playlistReorderBodyForItems(items, sourceIndex, destinationIndex,
