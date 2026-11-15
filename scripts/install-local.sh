@@ -46,7 +46,8 @@ command -v omarchy >/dev/null 2>&1 || {
 omarchy plugin validate "$source_root"
 "$source_root/scripts/setup.sh"
 
-plugins_root="${XDG_CONFIG_HOME:-"$HOME/.config"}/omarchy/plugins"
+# Omarchy reads this directory whatever XDG_CONFIG_HOME says.
+plugins_root="$HOME/.config/omarchy/plugins"
 target="$plugins_root/io.github.atlastimed.omaspotify"
 # This directory is shared with other plugins, so it is never tightened.
 mkdir -p -- "$plugins_root"

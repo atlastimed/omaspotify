@@ -24,7 +24,12 @@ Item {
   property string errorCode: ""
   property string errorMessage: ""
   property int nextId: 1
+  // Commands waiting for their answer: the callback and when to stop waiting.
   property var pending: ({})
+  // Longer than the backend's own longest wait, so this only ends a command
+  // the backend will never answer. Without it the click that sent it did nothing.
+  property int commandTimeoutMs: 20000
+  property var now: function() { return Date.now() }
   property int reconnectAttempt: 0
 
   readonly property string socketPath: {
@@ -44,9 +49,24 @@ Item {
     pending = ({})
     var message = String(reason || "Playback on this computer is unavailable")
     for (var id in waiters) {
-      var callback = waiters[id]
+      var callback = waiters[id] ? waiters[id].callback : null
       if (typeof callback === "function") callback(false, null, message)
     }
+  }
+
+  function expirePending(timestamp) {
+    var current = Number(timestamp)
+    var kept = ({})
+    var late = []
+    for (var id in pending) {
+      if (pending[id] && pending[id].deadlineAt <= current) late.push(pending[id].callback)
+      else kept[id] = pending[id]
+    }
+    if (late.length === 0) return
+    pending = kept
+    for (var i = 0; i < late.length; i++)
+      if (typeof late[i] === "function")
+        late[i](false, null, "Playback on this computer did not answer")
   }
 
   function sendCommand(name, fields, callback) {
@@ -61,7 +81,8 @@ Item {
     Api.assign(payload, fields || {})
     var nextPending = ({})
     for (var existing in pending) nextPending[existing] = pending[existing]
-    nextPending[String(id)] = typeof callback === "function" ? callback : null
+    nextPending[String(id)] = { callback: typeof callback === "function" ? callback : null,
+      deadlineAt: now() + commandTimeoutMs }
     pending = nextPending
     socket.write(JSON.stringify(payload) + "\n")
     socket.flush()
@@ -90,8 +111,8 @@ Item {
     }
     if (message.type !== "response") return
     var id = String(message.id || "")
-    var callback = pending[id]
-    if (callback === undefined) return
+    if (pending[id] === undefined) return
+    var callback = pending[id].callback
     var nextPending = ({})
     for (var key in pending) if (key !== id) nextPending[key] = pending[key]
     pending = nextPending
@@ -123,6 +144,14 @@ Item {
       sessionConnected = false
       resetPending("Playback on this computer disconnected")
     }
+  }
+
+  // Runs only while something is waiting, so an idle player has no timer.
+  Timer {
+    interval: 1000
+    repeat: true
+    running: Object.keys(root.pending).length > 0
+    onTriggered: root.expirePending(root.now())
   }
 
   Component {

@@ -71,6 +71,11 @@ impl Fader {
         let _ = tokio::time::timeout(FADE_TIMEOUT, silent.wait_for(|silent| *silent)).await;
     }
 
+    // Undoes a fade out whose pause never happened.
+    pub fn fade_in(&self) {
+        self.ramp().rising = true;
+    }
+
     fn ramp(&self) -> MutexGuard<'_, Ramp> {
         self.0.ramp.lock().unwrap_or_else(PoisonError::into_inner)
     }

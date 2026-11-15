@@ -242,8 +242,9 @@ lone_norm_status=$?
 set -e
 [[ $lone_norm_status -eq 3 ]]
 
-# An out-of-range pregain or a non-boolean flag must be refused.
-for bad_norm in 'true 40' 'maybe 0'; do
+# An out-of-range pregain, a non-boolean flag, or a number the config cannot hold
+# with a leading zero must be refused.
+for bad_norm in 'true 40' 'maybe 0' 'true 07' 'true 08' 'true -00'; do
   set +e
   # shellcheck disable=SC2086 # Splitting this into separate lines is the point.
   printf '%s\n' 'Desk speakers' 320 ${bad_norm} |
@@ -252,6 +253,9 @@ for bad_norm in 'true 40' 'maybe 0'; do
   set -e
   [[ $bad_norm_status -eq 3 ]]
 done
+printf '%s\n' 'Desk speakers' 320 true -10 |
+  XDG_CONFIG_HOME="$test_root/config" "$source_root/scripts/configure-playback.sh"
+grep -qx 'normalisation_pregain_db = -10' "$test_root/config/omaspotify/playback.conf"
 
 printf '%s\n' "Renamed speakers" |
   XDG_CONFIG_HOME="$test_root/config" "$source_root/scripts/configure-playback.sh"
@@ -310,6 +314,13 @@ printf '%s\n' \
   'printf "%s\n" "$*" >>"${TEST_OMARCHY_LOG:?}"' \
   'if [ "$*" = "plugin remove io.github.atlastimed.omaspotify --yes" ]; then' \
   '  rm -f -- "$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify"' \
+  'fi' \
+  'if [ "$*" = "plugin list --json" ]; then' \
+  '  if [ -e "$HOME/.config/omarchy/plugins/io.github.atlastimed.omaspotify" ]; then' \
+  '    echo "[{\"id\":\"io.github.atlastimed.omaspotify\"}]"' \
+  '  else' \
+  '    echo "[]"' \
+  '  fi' \
   'fi' \
   'exit 0' >"$mock_bin/omarchy"
 chmod 755 "$mock_bin/cargo" "$mock_bin/systemctl" \
@@ -667,6 +678,35 @@ PATH="$mock_bin:$PATH" \
   "$source_root/scripts/return-from-auth.sh"
 refute grep -q 'send_shortcut' "$handoff_hypr_log"
 
+# Omarchy reads plugins from ~/.config wherever XDG_CONFIG_HOME points, so the
+# local link has to go there to be found.
+install_home="$test_root/install-home"
+mkdir -p "$install_home"
+: >"$omarchy_log"
+PATH="$mock_bin:$PATH" \
+HOME="$install_home" \
+XDG_CONFIG_HOME="$test_root/install-config" \
+XDG_CACHE_HOME="$runtime_cache" \
+XDG_STATE_HOME="$runtime_state" \
+OMASPOTIFY_RUNTIME_DIR="$test_root/install-runtime" \
+CARGO_TARGET_DIR="$mock_target" \
+OMASPOTIFY_BUILD_FROM_SOURCE=1 \
+TEST_OMARCHY_LOG="$omarchy_log" \
+TEST_SHELL_LOG="$handoff_shell_log" \
+  "$source_root/scripts/install-local.sh" >/dev/null
+[[ $install_home/.config/omarchy/plugins/io.github.atlastimed.omaspotify -ef $source_root ]]
+[[ ! -e $test_root/install-config/omarchy ]]
+grep -qx 'plugin enable io.github.atlastimed.omaspotify --section left' "$omarchy_log"
+
+# Signing in to playback uses the backend from wherever setup installed it.
+auth_runtime="$test_root/auth-runtime"
+mkdir -p "$auth_runtime"
+printf '%s\n' '#!/bin/sh' 'printf "%s\n" "$*"' >"$auth_runtime/omaspotify-backend"
+chmod 755 "$auth_runtime/omaspotify-backend"
+[[ $(HOME="$install_home" XDG_CONFIG_HOME="$test_root/install-config" \
+  OMASPOTIFY_RUNTIME_DIR="$auth_runtime" "$source_root/scripts/playback-auth.sh") \
+  == "authenticate --config-path $test_root/install-config/omaspotify/playback.conf --oauth-port 8000" ]]
+
 grep -qx 'umask 077' "$source_root/scripts/playback-auth.sh"
 [[ -x $source_root/scripts/setup-playback.sh ]]
 [[ -x $source_root/scripts/backend-source-id.sh ]]
@@ -730,10 +770,10 @@ refute grep -q 'Conflicts=' "$source_root/systemd/omaspotify.service"
 env -u XDG_CONFIG_HOME -u OMASPOTIFY_RUNTIME_DIR HOME="$test_root/home" \
   "$source_root/scripts/render-unit.sh" |
   grep -qxF -- "ExecStart=\"$test_root/home/.local/lib/omaspotify/omaspotify-backend\" --config-path=\"$test_root/home/.config/omaspotify/playback.conf\""
-# Paths with spaces, ampersands or percent signs still make a valid unit line.
-env -u XDG_CONFIG_HOME -u OMASPOTIFY_RUNTIME_DIR HOME="$test_root/odd & home 100%" \
+# Paths with spaces, ampersands, percent or dollar signs still make a valid unit line.
+env -u XDG_CONFIG_HOME -u OMASPOTIFY_RUNTIME_DIR HOME="$test_root/odd & \$HOME 100%" \
   "$source_root/scripts/render-unit.sh" |
-  grep -qxF -- "ExecStart=\"$test_root/odd & home 100%%/.local/lib/omaspotify/omaspotify-backend\" --config-path=\"$test_root/odd & home 100%%/.config/omaspotify/playback.conf\""
+  grep -qxF -- "ExecStart=\"$test_root/odd & \$\$HOME 100%%/.local/lib/omaspotify/omaspotify-backend\" --config-path=\"$test_root/odd & \$\$HOME 100%%/.config/omaspotify/playback.conf\""
 grep -qx 'Environment=PULSE_LATENCY_MSEC=250' \
   "$source_root/systemd/omaspotify.service"
 grep -qx 'Environment=TOKIO_WORKER_THREADS=2' \

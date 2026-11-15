@@ -30,7 +30,9 @@ use tokio::sync::{mpsc, oneshot, watch};
 use crate::{
     config::BackendConfig,
     fade::Fader,
-    protocol::{Command, Lifecycle, PlaybackStatus, ProtocolError, RepeatMode, Track},
+    protocol::{
+        Command, Lifecycle, PlaybackStatus, PositionAnchor, ProtocolError, RepeatMode, Track,
+    },
     state::StateStore,
 };
 
@@ -472,18 +474,20 @@ async fn run_commands(
 ) {
     while let Some(request) = receiver.recv().await {
         let list = track_list_of(&request.command);
+        let spirc = || {
+            current_spirc.borrow().clone().ok_or_else(|| {
+                ProtocolError::new("engine_reconnecting", "playback is reconnecting to Spotify")
+            })
+        };
         let result = softly(
             &fader,
             &state,
             request.command,
-            |command| match current_spirc.borrow().clone() {
-                Some(spirc) => execute(&spirc, command)
+            || spirc().map(drop),
+            |command| {
+                execute(&*spirc()?, command)
                     .map(|()| serde_json::json!({}))
-                    .map_err(|error| ProtocolError::new("engine_error", error.to_string())),
-                None => Err(ProtocolError::new(
-                    "engine_reconnecting",
-                    "playback is reconnecting to Spotify",
-                )),
+                    .map_err(|error| ProtocolError::new("engine_error", error.to_string()))
             },
         )
         .await;
@@ -497,14 +501,17 @@ async fn run_commands(
 }
 
 // Pausing fades out first and resuming fades in, so neither starts or stops abruptly.
+// A pause that cannot be sent is refused before the fade, so the sound is left alone.
 async fn softly<R, E>(
     fader: &Fader,
     state: &StateStore,
     command: Command,
+    ready: impl FnOnce() -> Result<(), E>,
     execute: impl FnOnce(Command) -> Result<R, E>,
 ) -> Result<R, E> {
     match (command, state.with(|current| current.playback)) {
         (Command::Pause | Command::Toggle, PlaybackStatus::Playing) => {
+            ready()?;
             fader.fade_out().await;
             let result = execute(Command::Pause);
             if result.is_ok() {
@@ -513,6 +520,8 @@ async fn softly<R, E>(
                 let paused =
                     changes.wait_for(|current| current.playback != PlaybackStatus::Playing);
                 let _ = tokio::time::timeout(PAUSE_SETTLE_TIMEOUT, paused).await;
+            } else {
+                fader.fade_in();
             }
             result
         }
@@ -671,12 +680,27 @@ fn replace_error(
     changed
 }
 
+// Notes when the position was true, so it can be read between the once-a-second updates.
+fn replace_position(
+    state: &mut crate::protocol::BackendState,
+    position_ms: u32,
+    moving: bool,
+) -> bool {
+    state.position_anchor = Some(PositionAnchor {
+        ms: position_ms,
+        at: Instant::now(),
+        speed: if moving { 1.0 } else { 0.0 },
+    });
+    replace_if_changed(&mut state.position_ms, position_ms)
+}
+
 fn apply_event(state: &mut crate::protocol::BackendState, event: PlayerEvent) -> bool {
     match event {
         PlayerEvent::Stopped { .. } => {
             let mut changed = replace_if_changed(&mut state.playback, PlaybackStatus::Stopped);
             changed |= replace_if_changed(&mut state.position_ms, 0);
             changed |= replace_if_changed(&mut state.track, None);
+            state.position_anchor = None;
             changed
         }
         PlayerEvent::Loading { position_ms, .. } => {
@@ -684,18 +708,17 @@ fn apply_event(state: &mut crate::protocol::BackendState, event: PlayerEvent) ->
             // Initial loads still expose Loading until audio actually starts.
             let playback_changed = state.playback == PlaybackStatus::Stopped
                 && replace_if_changed(&mut state.playback, PlaybackStatus::Loading);
-            let mut changed =
-                replace_if_changed(&mut state.position_ms, position_ms) || playback_changed;
+            let mut changed = replace_position(state, position_ms, false) || playback_changed;
             changed |= replace_error(state, "", "");
             changed
         }
         PlayerEvent::Playing { position_ms, .. } => {
             let playback_changed = replace_if_changed(&mut state.playback, PlaybackStatus::Playing);
-            replace_if_changed(&mut state.position_ms, position_ms) || playback_changed
+            replace_position(state, position_ms, true) || playback_changed
         }
         PlayerEvent::Paused { position_ms, .. } => {
             let playback_changed = replace_if_changed(&mut state.playback, PlaybackStatus::Paused);
-            replace_if_changed(&mut state.position_ms, position_ms) || playback_changed
+            replace_position(state, position_ms, false) || playback_changed
         }
         PlayerEvent::Unavailable { track_id, .. } => replace_error(
             state,
@@ -710,10 +733,10 @@ fn apply_event(state: &mut crate::protocol::BackendState, event: PlayerEvent) ->
         PlayerEvent::VolumeChanged { volume } => replace_if_changed(&mut state.volume, volume),
         PlayerEvent::PositionCorrection { position_ms, .. }
         | PlayerEvent::PositionChanged { position_ms, .. } => {
-            replace_if_changed(&mut state.position_ms, position_ms)
+            replace_position(state, position_ms, true)
         }
         PlayerEvent::Seeked { position_ms, .. } => {
-            replace_if_changed(&mut state.position_ms, position_ms);
+            replace_position(state, position_ms, true);
             state.seek_sequence = state.seek_sequence.wrapping_add(1);
             true
         }
@@ -1216,10 +1239,16 @@ mod tests {
     // Runs a command the way the queue does, noting what reached librespot.
     async fn run(fader: &Fader, state: &StateStore, command: Command) -> Command {
         let mut sent = None;
-        softly(fader, state, command, |command| {
-            sent = Some(command);
-            Ok::<_, ()>(())
-        })
+        softly(
+            fader,
+            state,
+            command,
+            || Ok(()),
+            |command| {
+                sent = Some(command);
+                Ok::<_, ()>(())
+            },
+        )
         .await
         .unwrap();
         sent.unwrap()
@@ -1283,6 +1312,87 @@ mod tests {
         assert_eq!(run(&fader, &state, Command::Next).await, Command::Next);
         write_frames(sink.as_mut(), 10);
         assert!(recorder.frames().iter().all(|gain| *gain == 1.0));
+    }
+
+    #[tokio::test]
+    async fn a_pause_that_cannot_be_sent_leaves_the_sound_alone() {
+        let (fader, state, mut sink, recorder) = fading_setup(PlaybackStatus::Playing);
+        let refused = softly(
+            &fader,
+            &state,
+            Command::Pause,
+            || Err("reconnecting"),
+            |_| Ok(()),
+        )
+        .await;
+        assert_eq!(refused, Err("reconnecting"));
+        write_frames(sink.as_mut(), FADE_FRAMES + 1);
+        assert!(recorder.frames().iter().all(|gain| *gain == 1.0));
+    }
+
+    #[tokio::test]
+    async fn a_pause_that_fails_after_the_fade_brings_the_sound_back() {
+        let (fader, state, mut sink, recorder) = fading_setup(PlaybackStatus::Playing);
+        let pausing = tokio::spawn({
+            let (fader, state) = (fader.clone(), state.clone());
+            async move {
+                softly(
+                    &fader,
+                    &state,
+                    Command::Toggle,
+                    || Ok(()),
+                    |_| Err::<(), _>("gone"),
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        write_frames(sink.as_mut(), FADE_FRAMES + 1);
+        assert_eq!(pausing.await.unwrap(), Err("gone"));
+        write_frames(sink.as_mut(), FADE_FRAMES + 1);
+        assert_eq!(recorder.frames().last(), Some(&1.0));
+    }
+
+    #[test]
+    fn the_position_can_be_read_between_updates_but_not_after_a_stop() {
+        let mut state = BackendState::default();
+        let (play_request_id, track_id) = (1, test_uri());
+        let events = [
+            PlayerEvent::Playing {
+                play_request_id,
+                track_id: track_id.clone(),
+                position_ms: 10_000,
+            },
+            PlayerEvent::PositionChanged {
+                play_request_id,
+                track_id: track_id.clone(),
+                position_ms: 11_000,
+            },
+            PlayerEvent::Seeked {
+                play_request_id,
+                track_id: track_id.clone(),
+                position_ms: 30_000,
+            },
+            PlayerEvent::Paused {
+                play_request_id,
+                track_id: track_id.clone(),
+                position_ms: 30_500,
+            },
+        ];
+        for event in events {
+            apply_event(&mut state, event);
+            let anchor = state.position_anchor.expect("no anchor was kept");
+            assert_eq!(anchor.ms, state.position_ms);
+        }
+        assert_eq!(state.position_ms, 30_500);
+        apply_event(
+            &mut state,
+            PlayerEvent::Stopped {
+                play_request_id,
+                track_id,
+            },
+        );
+        assert!(state.position_anchor.is_none());
     }
 
     #[test]

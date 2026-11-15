@@ -211,6 +211,20 @@ TestCase {
       ["constructor", "hasOwnProperty", "toString", "abc"])
   }
 
+  function test_redact_coversHowOtherProgramsPrintSecrets() {
+    function hidden(text) { return Api.redact(text).indexOf("s3cr3t") < 0 }
+    verify(hidden('TokenResponse { access_token: "s3cr3t", expires_in: 3600 }'), "Rust debug output")
+    verify(hidden("{'refresh_token': 's3cr3t'}"), "single quotes")
+    verify(hidden('body was "{\\"access_token\\":\\"s3cr3t\\"}"'), "JSON inside a string")
+    verify(hidden('{"id_token":"s3cr3t"}'), "an id token")
+    verify(hidden("request failed (code=s3cr3t)"), "in brackets")
+    verify(hidden("Authorization: Basic s3cr3t"), "basic credentials")
+    // Ordinary words keep their meaning.
+    compare(Api.redact("error code: 404"), "error code: 404")
+    compare(Api.redact("Invalid authorization code: expired"), "Invalid authorization code: expired")
+    compare(Api.redact("password reset"), "password reset")
+  }
+
   function test_redact_coversBareTokensAndOtherSeparators() {
     verify(Api.redact("error=x;refresh_token=abc123").indexOf("abc123") < 0)
     verify(Api.redact("failed, access_token=abc123").indexOf("abc123") < 0)

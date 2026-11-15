@@ -28,6 +28,7 @@ import hmac
 import signal
 import socket
 import sys
+import threading
 import time
 import urllib.parse
 
@@ -43,6 +44,8 @@ MAX_STATE_BYTES = 256
 LISTEN_BACKLOG = 8
 # One client gets this long in total, however slowly it keeps sending.
 PER_CONNECTION_TIMEOUT = 2.0
+# The caller answers an accepted redirect at once. This is for one that never does.
+RESPONSE_TIMEOUT = 10.0
 
 TOO_LONG = (
     b"HTTP/1.1 431 Request Header Fields Too Large\r\n"
@@ -110,9 +113,21 @@ def request_line_state(line):
     return (values.get("state") or [""])[0]
 
 
-def read_response(stream, limit=MAX_RESPONSE_BYTES):
+def read_response(stream, limit=MAX_RESPONSE_BYTES, timeout=RESPONSE_TIMEOUT):
     """One base64 line from the caller, decoded. None if it never arrives."""
-    line = stream.readline(limit + 1)
+    lines = []
+
+    def read():
+        try:
+            lines.append(stream.readline(limit + 1))
+        except (OSError, ValueError):
+            pass
+
+    # A read has no deadline of its own, so it runs where it can be left behind.
+    reader = threading.Thread(target=read, daemon=True)
+    reader.start()
+    reader.join(timeout)
+    line = lines[0] if lines else ""
     if not line or len(line) > limit:
         return None
     try:
@@ -172,7 +187,7 @@ def serve(port, path, timeout, stdin=None, stdout=None, ready=None):
                     continue
                 stdout.write(line + "\n")
                 stdout.flush()
-                response = read_response(stdin)
+                response = read_response(stdin, timeout=RESPONSE_TIMEOUT)
                 if response:
                     # Only the real redirect is worth waiting on.
                     _send(connection, response, linger=0.5)

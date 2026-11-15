@@ -758,6 +758,28 @@ ShellRoot {
       })
     } },
 
+    { name: "a backend that never answers ends the command", run: function(done) {
+      var answers = []
+      var held = ({})
+      held["7"] = { callback: function(ok, result, reason) { answers.push("late:" + ok + ":" + reason) },
+        deadlineAt: 1000 }
+      held["8"] = { callback: function(ok) { answers.push("early:" + ok) }, deadlineAt: 5000 }
+      svc.backend.pending = held
+      svc.backend.expirePending(999)
+      top.check(answers.length === 0, "ended before its time: " + answers)
+      svc.backend.expirePending(1000)
+      top.check(answers.length === 1 && answers[0].indexOf("late:false:") === 0,
+        "the late command got: " + answers)
+      top.check(svc.backend.pending["8"] !== undefined && svc.backend.pending["7"] === undefined,
+        "the wrong command was dropped")
+      // An answer arriving after all is ignored, and the other still lands.
+      svc.backend.handleLine('{"type":"response","id":7,"ok":true}')
+      svc.backend.handleLine('{"type":"response","id":8,"ok":true}')
+      top.check(answers.length === 2 && answers[1] === "early:true", "then: " + answers)
+      top.check(Object.keys(svc.backend.pending).length === 0, "something was left waiting")
+      done()
+    } },
+
     { name: "unrelated discovery does not answer device waiters", run: function(done) {
       var answered = 0
       svc.deviceLoadWaiters = [function() { answered++ }]

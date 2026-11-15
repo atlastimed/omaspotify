@@ -7,12 +7,13 @@ source_root=$(CDPATH='' cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 runtime_dir=${OMASPOTIFY_RUNTIME_DIR:-"$HOME/.local/lib/omaspotify"}
 config_root=${XDG_CONFIG_HOME:-"$HOME/.config"}
 
-# Quoted for systemd, which also expands % specifiers inside the quotes.
+# Quoted for systemd, which also expands % specifiers and $NAME inside the quotes.
 systemd_quote() {
   local value=$1
   value=${value//\\/\\\\}
   value=${value//\"/\\\"}
   value=${value//%/%%}
+  value=${value//\$/\$\$}
   printf '"%s"' "$value"
 }
 

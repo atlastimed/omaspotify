@@ -55,19 +55,11 @@ enum Action {
 async fn main() -> std::process::ExitCode {
     let cli = Cli::parse();
     let daemon = cli.action.is_none();
-    let socket = cli
-        .socket_path
-        .clone()
-        .unwrap_or_else(config::default_socket_path);
     match launch(cli).await {
         Ok(()) => std::process::ExitCode::SUCCESS,
         Err(error) => {
-            let kind = error
-                .downcast_ref::<failure::Failure>()
-                .copied()
-                .unwrap_or(failure::Failure::Transient);
+            let kind = failure_kind(&error);
             if daemon {
-                let _ = failure::record(&socket, kind);
                 eprintln!("Playback failed: {kind}: {error:#}");
             } else {
                 eprintln!("{error:#}");
@@ -77,32 +69,54 @@ async fn main() -> std::process::ExitCode {
     }
 }
 
+fn failure_kind(error: &anyhow::Error) -> failure::Failure {
+    error
+        .downcast_ref::<failure::Failure>()
+        .copied()
+        .unwrap_or(failure::Failure::Transient)
+}
+
 async fn launch(cli: Cli) -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
     let config_path = cli.config_path.unwrap_or_else(config::default_config_path);
-    let mut config =
-        BackendConfig::load(&config_path).context(failure::Failure::InvalidConfiguration)?;
-    if let Some(device_name) = cli.device_name {
-        config.device_name = device_name_override(&device_name)?;
-    }
+    let device_name = cli.device_name;
+    let load = move || -> Result<BackendConfig> {
+        let mut config =
+            BackendConfig::load(&config_path).context(failure::Failure::InvalidConfiguration)?;
+        if let Some(device_name) = &device_name {
+            config.device_name = device_name_override(device_name)?;
+        }
+        Ok(config)
+    };
 
     match cli.action {
         Some(Action::Check) => {
-            println!("{}", serde_json::to_string(&config.summary())?);
-            return Ok(());
+            println!("{}", serde_json::to_string(&load()?.summary())?);
+            Ok(())
         }
         Some(Action::Authenticate { oauth_port }) => {
-            return engine::authenticate(&config, oauth_port).await;
+            engine::authenticate(&load()?, oauth_port).await
         }
-        None => {}
+        None => {
+            let socket_path = cli.socket_path.unwrap_or_else(config::default_socket_path);
+            let daemon = async { run(load()?, socket_path.clone(), cli.soloist).await };
+            as_the_only_backend(&socket_path, daemon).await
+        }
     }
+}
 
-    run(
-        config,
-        cli.socket_path.unwrap_or_else(config::default_socket_path),
-        cli.soloist,
-    )
-    .await
+/// Only the backend that holds the socket's lock may say why it failed to start.
+async fn as_the_only_backend(
+    socket_path: &std::path::Path,
+    daemon: impl Future<Output = Result<()>>,
+) -> Result<()> {
+    // Taken before anything starts, so a second backend cannot disturb a running one.
+    let _instance = socket::claim(socket_path)?;
+    let result = daemon.await;
+    if let Err(error) = &result {
+        let _ = failure::record(socket_path, failure_kind(error));
+    }
+    result
 }
 
 fn device_name_override(name: &str) -> Result<String> {
@@ -117,8 +131,6 @@ fn device_name_override(name: &str) -> Result<String> {
 }
 
 async fn run(config: BackendConfig, socket_path: PathBuf, use_soloist: bool) -> Result<()> {
-    // Taken before anything starts, so a second backend cannot disturb a running one.
-    let _instance = socket::claim(&socket_path)?;
     let state = StateStore::new(BackendState::default());
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let mut runtime = if use_soloist {
@@ -179,6 +191,7 @@ async fn run_until_stopped(
 ) -> Result<()> {
     let mut mpris_ended = false;
     let outcome = tokio::select! {
+        biased;
         result = stop => result,
         result = runtime.wait_done() => Err(match result {
             Ok(()) => anyhow::anyhow!("playback engine stopped unexpectedly"),
@@ -302,6 +315,66 @@ mod tests {
         .await;
         assert!(outcome.is_ok());
         assert!(stopped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn a_stop_requested_as_the_engine_ends_is_still_a_clean_exit() {
+        // Repeated, because which of two ready outcomes won used to be left to chance.
+        for _ in 0..8 {
+            let (commands, _) = mpsc::channel(1);
+            let (shutdown, _asked) = watch::channel(false);
+            let (finished, done) = oneshot::channel();
+            finished.send(Ok(())).unwrap();
+            let mut runtime = engine::EngineRuntime {
+                commands,
+                shutdown,
+                done: Some(done),
+            };
+            let state = StateStore::new(BackendState::default());
+            let (shutdown_tx, _shutdown_rx) = watch::channel(false);
+            let outcome = run_until_stopped(
+                &mut runtime,
+                mpris_that_keeps_running(),
+                std::future::ready(Ok(())),
+                &state,
+                &shutdown_tx,
+            )
+            .await;
+            assert!(outcome.is_ok());
+        }
+    }
+
+    fn test_socket_path(name: &str) -> PathBuf {
+        std::env::temp_dir()
+            .join(format!("omaspotify-main-{name}-{}", std::process::id()))
+            .join("backend.sock")
+    }
+
+    #[tokio::test]
+    async fn a_refused_second_backend_does_not_report_a_failed_start() {
+        let socket_path = test_socket_path("refused");
+        let directory = socket_path.parent().unwrap();
+        let first = socket::claim(&socket_path).unwrap();
+        let refused = as_the_only_backend(&socket_path, async { Ok(()) }).await;
+        assert!(refused.is_err());
+        assert!(!directory.join("startup-error.json").exists());
+        drop(first);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[tokio::test]
+    async fn the_backend_that_owns_the_socket_reports_why_it_failed() {
+        let socket_path = test_socket_path("owner");
+        let directory = socket_path.parent().unwrap();
+        let failed = as_the_only_backend(&socket_path, async {
+            Err(failure::Failure::MissingCredentials.into())
+        })
+        .await;
+        assert!(failed.is_err());
+        let report = std::fs::read_to_string(directory.join("startup-error.json")).unwrap();
+        assert!(report.contains("missing_credentials"), "{report}");
+        drop(socket::claim(&socket_path).expect("the lock outlived the backend"));
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]

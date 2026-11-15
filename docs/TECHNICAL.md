@@ -22,9 +22,12 @@ Local audio defaults to Spotify Soloist, supervised as a child of the Rust
 `omaspotify-backend --soloist` adapter in `omaspotify-soloist.service`. The adapter
 translates Soloist's loopback WebSocket events into the existing private Unix
 socket and MPRIS interfaces. Commands are serialized and acknowledged, with bounded
-frames and timeouts. One unanswered command is reported and survived; a second in a
-row ends the adapter so systemd can restart it. A lock taken before anything starts
-keeps a second adapter from disturbing a running one. Position uses a monotonic
+frames and timeouts. One unanswered command is reported and survived; a second ends
+the adapter so systemd can restart it, unless Soloist answered a request for its
+state in between. A lock on the socket, and one in the state directory Soloist
+shares, are taken before anything starts, so a second adapter cannot disturb a
+running one whatever socket it was given. A client waiting for an answer still
+hears about state changes, and one that leaves gives up its place. Position uses a monotonic
 clock and publishes once a second.
 Playlist offsets that Soloist cannot express locally fall back to the Spotify
 Web API, preserving the chosen context and song. Volume uses Soloist's linear scale.
@@ -53,7 +56,8 @@ untrusted local programs or browser pages.
 An expired build (Soloist exit status 10) or a missing key is reported as a
 terminal failure through `startup-error.json` rather than burning the restart
 limit. Soloist is sent SIGTERM and given 1.5 seconds so it can remove its endpoint
-files, and the adapter also removes any stale ones before starting. While paused
+files, including when it was started but never became ready, and the adapter also
+removes any stale ones before starting. While paused
 or idle the adapter makes no wakeups at all.
 
 The optional `librespot` engine retains the commit-pinned upstream implementation,
@@ -198,6 +202,10 @@ streaming-only PKCE grant on port `8990`.
 
 No client secret or Spotify password enters the plugin. OAuth refresh tokens
 are written to GNOME Keyring over stdin and separated by client identity.
+Spotify replaces the refresh token on a refresh and the one it replaced stops
+working, so the newest is also held in memory until a write of it succeeds: it
+is used before the keyring's copy and written again after a failure. A token
+that came back unchanged is not written at all.
 Reusable local-playback authorization is stored with owner-only permissions in
 `$XDG_STATE_HOME/omaspotify`; older credentials under `$XDG_CACHE_HOME`
 are accepted once and migrated so clearing disposable caches cannot deauthorize
@@ -258,8 +266,11 @@ and may stop without notice. Everything else in the plugin uses documented APIs.
 
 ZeroConf has no way to authenticate a receiver, so anything on the LAN can claim to
 be a speaker and any helper request goes where its advertisement says. Discovery
-therefore probes only private addresses, refuses the cloud metadata address and any
-path with a query string, and is bounded in time. A receiver you pick is trusted
+therefore probes only private IPv4 addresses, refuses link-local ones (where
+cloud metadata services live) and any path with a query string, and is bounded
+in time. When two receivers claim one device id, the first one Avahi saw keeps
+it. This computer's own LAN address is still probed, because Soloist advertises
+there and that is how the plugin learns its own device. A receiver you pick is trusted
 with what it asks for, which can include the reusable credential if it advertises
 the `default` token type. That credential exists only if you have signed in with
 the librespot engine.

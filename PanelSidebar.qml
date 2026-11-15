@@ -268,6 +268,25 @@ Item {
     }
   }
 
+  // The library arrives as a whole new list whenever anything in it changes,
+  // and a view given a new list goes back to its top. So the list is handed
+  // over here, and the place the view was at is put back afterwards.
+  readonly property var libraryRows: part.panel.service ? part.panel.service.sidebarItems : []
+  onLibraryRowsChanged: {
+    showLibrary(playlistGrid)
+    showLibrary(playlistList)
+  }
+
+  function showLibrary(view) {
+    if (!view) return
+    var place = view.contentY
+    var index = view.currentIndex
+    view.model = view.visible ? libraryRows : []
+    if (index >= 0 && index < view.count) view.currentIndex = index
+    var last = Math.max(view.originY, view.contentHeight - view.height + view.originY)
+    view.contentY = Math.max(view.originY, Math.min(place, last))
+  }
+
   GridView {
     id: playlistGrid
     property bool pointerSeen: false
@@ -279,7 +298,8 @@ Item {
     anchors.top: libraryControls.bottom
     anchors.bottom: setupNavButton.top
     anchors.margins: Style.space(2)
-    model: visible && part.panel.service ? part.panel.service.sidebarItems : []
+    onVisibleChanged: part.showLibrary(playlistGrid)
+    Component.onCompleted: part.showLibrary(playlistGrid)
     cellWidth: Math.max(Style.space(56),
       Math.floor(width / Math.max(1, Math.floor(width / Style.space(84)))))
     cellHeight: part.panel.libraryViewIsCompact
@@ -343,7 +363,8 @@ Item {
     anchors.top: libraryControls.bottom
     anchors.bottom: setupNavButton.top
     anchors.margins: Style.space(2)
-    model: visible && part.panel.service ? part.panel.service.sidebarItems : []
+    onVisibleChanged: part.showLibrary(playlistList)
+    Component.onCompleted: part.showLibrary(playlistList)
     clip: true
     spacing: Style.space(1)
     reuseItems: true

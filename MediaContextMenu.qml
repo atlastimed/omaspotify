@@ -67,7 +67,9 @@ Popup {
       popup.panel.ensurePanelCursor(popup.panel.popupReturnRegion)
       popup.panel.syncCursorFocus()
     }
-    Qt.callLater(function() { popup.panel.restoreFocus() })
+    // A choice here can open another popup. By the time this runs that one has
+    // the keys, and taking them back left its arrows and Enter dead.
+    Qt.callLater(function() { if (!popup.panel.shortcutsBlocked) popup.panel.restoreFocus() })
   }
 
   background: BorderSurface {

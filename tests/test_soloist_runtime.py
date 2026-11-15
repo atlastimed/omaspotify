@@ -86,6 +86,24 @@ class SoloistRuntimeTests(unittest.TestCase):
         ):
             runtime.update()
 
+    def test_a_damaged_build_is_replaced_and_a_healthy_one_is_left_alone(self):
+        stamp = int(time.time()) - 100
+        version = subprocess.CompletedProcess([], 0, f"soloist build {stamp}", "")
+        with (
+            patch.object(runtime, "run", return_value=version),
+            patch.object(
+                runtime.urllib.request, "urlopen",
+                side_effect=lambda *_args, **_kwargs: Response(archive()),
+            ) as fetch,
+        ):
+            runtime.update()
+            runtime.update()
+            self.assertEqual(fetch.call_count, 1)
+            (runtime.RUNTIME / "soloist").write_bytes(b"te")
+            runtime.update()
+            self.assertEqual(fetch.call_count, 2)
+        self.assertEqual((runtime.RUNTIME / "soloist").read_bytes(), b"test")
+
     def test_restart_restores_volume_including_mute_and_rejects_bad_state(self):
         with patch.object(runtime, "STATE", self.root):
             self.assertEqual(runtime.initial_volume_args(), [])
@@ -324,6 +342,35 @@ class SoloistRuntimeTests(unittest.TestCase):
         updater = units["omaspotify-soloist-update.service"]
         for directive in ("LimitCORE=0", "ProtectSystem=strict", "TimeoutStartSec=15min"):
             self.assertIn(directive, updater)
+
+    def test_a_dollar_in_a_path_is_not_read_as_a_variable(self):
+        with patch.object(runtime, "RUNTIME", Path("/odd $HOME/runtime")):
+            units = runtime.unit_files(Path("/odd ${HOME}/backend"), Path("/odd $x/conf"))
+        self.assertIn(
+            'ExecStart="/odd $${HOME}/backend" --soloist --config-path="/odd $$x/conf"\n',
+            units[runtime.UNIT],
+        )
+        updater = units[runtime.UPDATE_UNIT]
+        self.assertIn('python3 "/odd $$HOME/runtime/soloist-runtime.py" update\n', updater)
+        # Only a command line expands variables.
+        self.assertIn('ReadWritePaths="/odd $HOME/runtime"\n', updater)
+
+    def test_the_runtime_directory_can_be_moved_and_the_service_is_told(self):
+        with patch.dict(runtime.os.environ, {"OMASPOTIFY_RUNTIME_DIR": "/moved/run time"}):
+            moved = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(moved)
+        self.assertEqual(moved.RUNTIME, Path("/moved/run time"))
+        units = moved.unit_files(moved.RUNTIME / "omaspotify-backend", Path("/conf"))
+        for name in (moved.UNIT, moved.UPDATE_UNIT):
+            self.assertIn(
+                '\nEnvironment="OMASPOTIFY_RUNTIME_DIR=/moved/run time"\n', units[name]
+            )
+        with patch.dict(runtime.os.environ, {"OMASPOTIFY_RUNTIME_DIR": ""}):
+            usual = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(usual)
+        self.assertEqual(usual.RUNTIME, Path.home() / ".local/lib/omaspotify")
+        units = usual.unit_files(usual.RUNTIME / "omaspotify-backend", Path("/conf"))
+        self.assertNotIn("OMASPOTIFY_RUNTIME_DIR", "".join(units.values()))
 
     def test_a_missing_key_and_an_unrenewable_build_exit_with_their_own_codes(self):
         runtime.RUNTIME.mkdir()

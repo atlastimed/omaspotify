@@ -6,7 +6,8 @@ set -eu
 umask 077
 
 config_root=${XDG_CONFIG_HOME:-"$HOME/.config"}
-backend="$HOME/.local/lib/omaspotify/omaspotify-backend"
+runtime_dir=${OMASPOTIFY_RUNTIME_DIR:-"$HOME/.local/lib/omaspotify"}
+backend="$runtime_dir/omaspotify-backend"
 [ -x "$backend" ] || {
   echo "playback-auth.sh: the playback backend is not installed" >&2
   exit 1

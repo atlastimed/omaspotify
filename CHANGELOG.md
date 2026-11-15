@@ -23,6 +23,47 @@
 
 Found by driving the real player with a real account, then fixed and run again.
 
+- A failed keyring write no longer signs you out an hour later. Spotify replaces the
+  refresh token on every refresh and the old one stops working; the new one is now
+  kept in memory until the keyring has it, and written again if a write fails.
+- The keyring is no longer written every hour when the token has not changed.
+- The library in the sidebar keeps its place when anything in it changes, instead
+  of jumping back to the top.
+- A new search opens at the top, not where the last search had been scrolled to.
+- The playlist picker and the confirmation opened from a row's menu take the arrow
+  keys and Enter.
+- Dragging a song to the end of a long playlist no longer drops it when more songs
+  load mid-drag.
+- A local playback command the backend never answers ends after twenty seconds
+  rather than leaving the click doing nothing.
+- A second backend started with a different socket can no longer delete a running
+  one's Soloist files and start a second Soloist on the same data.
+- A program that sends the backend a command and disconnects no longer holds one of
+  its places, and one waiting for an answer still hears about state changes.
+- Soloist is stopped politely when it starts but never becomes ready, as it already
+  was on an ordinary stop.
+- Two unanswered commands hours apart no longer end the adapter when Soloist was
+  answering in between.
+- A backend refused because one is already running no longer overwrites the running
+  one's startup error.
+- With librespot: a pause during a reconnect no longer fades to silence and then
+  comes back, and a relative seek from a media key lands where it should.
+- A volume that is not a number, sent over MPRIS, is ignored instead of muting.
+- "Update Soloist" and "Install or repair" repair a damaged Soloist. Both did
+  nothing while the recorded build was recent, even when the file on disk no longer
+  matched its recorded hash.
+- A device on the network can no longer point speaker discovery at a link-local
+  address, and cannot take a real speaker's place by claiming its id and answering
+  later.
+- `install-local.sh` links the plugin where Omarchy looks for it when
+  `XDG_CONFIG_HOME` is set elsewhere.
+- The sign-in helper gives up on a response it is never sent, after ten seconds.
+- An idle timeout of `08` or `09` minutes is accepted, and `00` to `07` no longer
+  write a configuration the backend cannot read.
+- A `$` in an install path no longer breaks the units that are written.
+- More shapes of credential are kept out of error text: unquoted and single-quoted
+  names, JSON inside a string, ID tokens and basic authorization.
+
 - Removing a song from a playlist works. It always failed with "No uris provided":
   Qt's request object sends DELETE without its body, and Spotify takes a playlist
   removal no other way. That one kind of request now goes through curl, with the

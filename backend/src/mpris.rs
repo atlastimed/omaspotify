@@ -169,7 +169,9 @@ impl PlayerInterface for MprisAdapter {
             .with(|state| f64::from(state.volume) / f64::from(u16::MAX)))
     }
     async fn set_volume(&self, volume: Volume) -> ZbusResult<()> {
-        let volume = (volume.clamp(0.0, 1.0) * f64::from(u16::MAX)).round() as u16;
+        let Some(volume) = native_volume(volume) else {
+            return Ok(());
+        };
         self.send(Command::SetVolume { volume }).map_err(Into::into)
     }
     async fn position(&self) -> fdo::Result<Time> {
@@ -224,6 +226,13 @@ fn live_position(state: &crate::protocol::BackendState) -> u32 {
         0
     };
     anchor.ms.saturating_add(moved).min(track_length(state))
+}
+
+/// Nothing for a value that is not a number, which would otherwise read as silence.
+fn native_volume(volume: Volume) -> Option<u16> {
+    volume
+        .is_finite()
+        .then(|| (volume.clamp(0.0, 1.0) * f64::from(u16::MAX)).round() as u16)
 }
 
 fn seek_target(position_ms: u32, offset_ms: i64, length_ms: u32) -> u32 {
@@ -416,6 +425,16 @@ mod tests {
             ..BackendState::default()
         };
         assert_eq!(live_position(&state), 10_000);
+    }
+
+    #[test]
+    fn a_volume_that_is_not_a_number_is_ignored_rather_than_muting() {
+        for odd in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(native_volume(odd), None, "{odd}");
+        }
+        assert_eq!(native_volume(-0.5), Some(0));
+        assert_eq!(native_volume(0.5), Some(32_768));
+        assert_eq!(native_volume(7.0), Some(u16::MAX));
     }
 
     #[test]

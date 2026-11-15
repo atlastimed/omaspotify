@@ -8,7 +8,9 @@ import "OAuth.js" as OAuth
 // OAuth and token storage live here so the rest of the plugin never needs to
 // know what a refresh token looks like. Access tokens exist only in memory;
 // refresh tokens cross the process boundary over stdin and are persisted by
-// GNOME Keyring.
+// GNOME Keyring. A refresh token Spotify has just replaced is also held in
+// memory until the keyring confirms it: the one it replaced no longer works,
+// so losing the new one to a failed write would end the session.
 Item {
   id: root
 
@@ -51,6 +53,15 @@ Item {
   property string lookupPurpose: ""
   property bool lookupHandled: false
   property string keyringWriteToken: ""
+  // The newest refresh token, until the keyring has it. Used before the keyring's.
+  property string heldRefreshToken: ""
+  property string heldRefreshIdentity: ""
+  property string writingRefreshToken: ""
+  property bool storeOpen: false
+  property int storeAttempts: 0
+  readonly property var storeRetryDelaysMs: [2000, 15000, 60000]
+  readonly property bool holdsRefreshToken: heldRefreshToken !== ""
+    && heldRefreshIdentity === resolvedClientId
 
   property string pkceVerifier: ""
   property string pkceChallenge: ""
@@ -77,6 +88,7 @@ Item {
     lookupHandled = true
     secretLookup.running = false
     resetMemorySession()
+    forgetHeldToken()
     sessionChecked = false
     finishWaiters("", "Spotify application changed. Sign in again.")
     if (wasSignedIn) loggedOut()
@@ -146,8 +158,16 @@ Item {
     next.push(callback)
     tokenWaiters = next
     if (refreshBusy || secretLookup.running) return
+    beginRefresh("request")
+  }
 
-    lookupPurpose = "request"
+  // The keyring is only asked when nothing newer is in hand.
+  function beginRefresh(purpose) {
+    if (holdsRefreshToken) {
+      refreshWithToken(heldRefreshToken, purpose)
+      return
+    }
+    lookupPurpose = purpose
     startSecretLookup()
   }
 
@@ -155,8 +175,7 @@ Item {
     if (switchingIdentity || !validClientId) return
     sessionChecked = false
     if (secretLookup.running || refreshBusy) return
-    lookupPurpose = "restore"
-    startSecretLookup()
+    beginRefresh("restore")
   }
 
   function startSecretLookup() {
@@ -228,7 +247,10 @@ Item {
           root.refreshRetryAt = Date.now() + root.refreshRetryDelayMs
         } else root.resetMemorySession()
         root.lastError = root.safeError(result.error)
-        if (result.invalidGrant) root.clearStoredToken()
+        if (result.invalidGrant) {
+          root.forgetHeldToken()
+          root.clearStoredToken()
+        }
         root.finishWaiters("", root.lastError)
         if (purpose !== "request") root.sessionUnavailable(root.lastError)
         return
@@ -244,15 +266,69 @@ Item {
     accessTokenExpiresAt = Date.now() + result.expiresIn * 1000
     loggedIn = true
     lastError = ""
-    if (result.refreshToken) storeRefreshToken(result.refreshToken)
+    if (result.refreshToken && result.rotated !== false) storeRefreshToken(result.refreshToken)
   }
 
   function storeRefreshToken(refreshToken) {
-    if (!refreshToken || keyringStore.running) return
-    keyringWriteToken = String(refreshToken)
-    keyringStore.command = [pluginDir + "/scripts/keyring-store.sh", String(resolvedClientId)]
-    keyringStore.identity = resolvedClientId
+    if (!refreshToken) return
+    heldRefreshToken = String(refreshToken)
+    heldRefreshIdentity = resolvedClientId
+    storeAttempts = 0
+    storeRetry.stop()
+    writeHeldToken()
+  }
+
+  // A write already running is carrying an older token; its exit writes this one.
+  function writeHeldToken() {
+    if (heldRefreshToken === "" || storeOpen || keyringStore.running) return
+    storeOpen = true
+    writingRefreshToken = heldRefreshToken
+    keyringWriteToken = heldRefreshToken
+    keyringStore.command = [pluginDir + "/scripts/keyring-store.sh", String(heldRefreshIdentity)]
+    keyringStore.identity = heldRefreshIdentity
     keyringStore.running = true
+  }
+
+  function forgetHeldToken() {
+    storeRetry.stop()
+    heldRefreshToken = ""
+    heldRefreshIdentity = ""
+    storeAttempts = 0
+  }
+
+  // Runs once per write, whether it stored, failed, or never started.
+  function storeFinished(stored) {
+    if (!storeOpen) return
+    storeOpen = false
+    storeSettle.stop()
+    var written = writingRefreshToken
+    var identity = keyringStore.identity
+    writingRefreshToken = ""
+    keyringWriteToken = ""
+    if (logoutPendingClear) {
+      logoutPendingClear = false
+      forgetHeldToken()
+      clearStoredToken(identity)
+      return
+    }
+    if (heldRefreshToken === "") return
+    if (stored && written === heldRefreshToken) {
+      forgetHeldToken()
+      return
+    }
+    // A newer token arrived while that one was being written.
+    if (stored) {
+      writeHeldToken()
+      return
+    }
+    if (storeAttempts < storeRetryDelaysMs.length) {
+      storeRetry.interval = storeRetryDelaysMs[storeAttempts]
+      storeAttempts++
+      storeRetry.restart()
+      return
+    }
+    if (identity === resolvedClientId && !switchingIdentity)
+      lastError = "Spotify connected, but the session could not be saved securely. It lasts until the shell restarts; unlock the keyring and it will be saved"
   }
 
   function clearStoredToken(identity) {
@@ -274,7 +350,8 @@ Item {
     sessionChecked = true
     lastError = ""
     finishWaiters("", "Logged out")
-    if (keyringStore.running) logoutPendingClear = true
+    forgetHeldToken()
+    if (storeOpen) logoutPendingClear = true
     else clearStoredToken()
     loggedOut()
   }
@@ -524,15 +601,21 @@ Item {
       write(root.keyringWriteToken + "\n")
       root.keyringWriteToken = ""
     }
-    onExited: function(exitCode) {
-      root.keyringWriteToken = ""
-      if (exitCode !== 0 && identity === root.resolvedClientId && !root.switchingIdentity)
-        root.lastError = "Spotify connected, but the session could not be saved securely. You may need to sign in again after restarting"
-      if (root.logoutPendingClear) {
-        root.logoutPendingClear = false
-        root.clearStoredToken(identity)
-      }
-    }
+    onExited: function(exitCode) { root.storeFinished(exitCode === 0) }
+    // A helper that never started reports no exit.
+    onRunningChanged: if (!running && root.storeOpen) storeSettle.restart()
+  }
+
+  Timer {
+    id: storeSettle
+    interval: 100
+    onTriggered: root.storeFinished(false)
+  }
+
+  // The keyring may only be locked or slow to start; the token waits in memory.
+  Timer {
+    id: storeRetry
+    onTriggered: root.writeHeldToken()
   }
 
   Process {

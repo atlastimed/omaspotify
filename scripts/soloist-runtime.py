@@ -26,7 +26,8 @@ def xdg_path(variable, fallback):
     return Path(value) if value.startswith("/") else Path.home() / fallback
 
 
-RUNTIME = Path.home() / ".local/lib/omaspotify"
+DEFAULT_RUNTIME = Path.home() / ".local/lib/omaspotify"
+RUNTIME = xdg_path("OMASPOTIFY_RUNTIME_DIR", ".local/lib/omaspotify")
 CONFIG = xdg_path("XDG_CONFIG_HOME", ".config")
 STATE = xdg_path("XDG_STATE_HOME", ".local/state") / "omaspotify/soloist"
 CACHE = xdg_path("XDG_CACHE_HOME", ".cache") / "omaspotify/soloist"
@@ -113,6 +114,17 @@ def build_time():
     return built_at if isinstance(built_at, int) and not isinstance(built_at, bool) else 0
 
 
+def build_damaged():
+    """Whether the installed build is no longer the file that was downloaded."""
+    recorded = installed_metadata().get("sha256")
+    if not isinstance(recorded, str):
+        return False
+    try:
+        return hashlib.sha256((RUNTIME / "soloist").read_bytes()).hexdigest() != recorded
+    except OSError:
+        return True
+
+
 def lock_for(lock, deadline):
     """Wait for the install lock, so a stalled renewal cannot block playback forever."""
     while True:
@@ -175,7 +187,8 @@ def update(force=False, deadline=INSTALL_DOWNLOAD_SECONDS):
         lock_for(lock, end)
         old_built_at = build_time()
         now = time.time()
-        if not force and (RUNTIME / "soloist").is_file():
+        # A damaged build is replaced however new it claims to be.
+        if not force and (RUNTIME / "soloist").is_file() and not build_damaged():
             if old_built_at + RENEW_AFTER > now:
                 return
             # Spotify had nothing newer a few hours ago, and this one still runs.
@@ -233,7 +246,18 @@ def systemd_quote(path):
     )
 
 
+def command_quote(path):
+    # A command line also expands $NAME, which other settings leave alone.
+    return systemd_quote(path).replace("$", "$$")
+
+
 def unit_files(backend, config):
+    # The service does not inherit the installer's environment.
+    moved = (
+        f"Environment={systemd_quote(f'OMASPOTIFY_RUNTIME_DIR={RUNTIME}')}\n"
+        if RUNTIME != DEFAULT_RUNTIME
+        else ""
+    )
     hardening = """UMask=0077
 NoNewPrivileges=true
 PrivateTmp=true
@@ -245,7 +269,7 @@ RestrictNamespaces=true
 SystemCallArchitectures=native
 RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 """
-    helper = systemd_quote(RUNTIME / "soloist-runtime.py")
+    helper = command_quote(RUNTIME / "soloist-runtime.py")
     return {
         UNIT: f"""[Unit]
 Description=OmaSpotify with Spotify Soloist
@@ -255,12 +279,12 @@ StartLimitIntervalSec=300
 StartLimitBurst=3
 
 [Service]
-ExecStart={systemd_quote(backend)} --soloist --config-path={systemd_quote(config)}
+ExecStart={command_quote(backend)} --soloist --config-path={command_quote(config)}
 Restart=on-failure
 RestartSec=5
 RestartPreventExitStatus=75 77 78
 TimeoutStopSec=5
-{hardening}""",
+{moved}{hardening}""",
         UPDATE_UNIT: f"""[Unit]
 Description=Renew expiring Spotify Soloist build
 
@@ -270,7 +294,7 @@ ExecStart=/usr/bin/python3 {helper} update
 TimeoutStartSec=15min
 ProtectHome=read-only
 ReadWritePaths={systemd_quote(RUNTIME)}
-{hardening}""",
+{moved}{hardening}""",
         TIMER_UNIT: """[Unit]
 Description=Check Spotify Soloist build lifetime daily
 

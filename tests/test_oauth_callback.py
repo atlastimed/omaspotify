@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import importlib.util
 import io
+import os
 import socket
 import sys
 import threading
@@ -100,6 +101,15 @@ class ResponseReading(unittest.TestCase):
         self.assertIsNone(helper.read_response(io.StringIO("")))
         huge = "A" * (helper.MAX_RESPONSE_BYTES + 10)
         self.assertIsNone(helper.read_response(io.StringIO(huge + "\n")))
+
+    def test_a_caller_that_never_answers_is_not_waited_on_forever(self):
+        reader, writer = os.pipe()
+        stream = os.fdopen(reader)
+        self.addCleanup(stream.close)
+        self.addCleanup(os.close, writer)
+        started = time.monotonic()
+        self.assertIsNone(helper.read_response(stream, timeout=0.2))
+        self.assertLess(time.monotonic() - started, 5)
 
 
 class ServingEndToEnd(unittest.TestCase):
@@ -232,6 +242,19 @@ class ServingEndToEnd(unittest.TestCase):
         thread.join(5)
         self.assertEqual(result, [0])
         self.assertEqual(stdout.getvalue(), "GET /callback?code=abc&state=xyz HTTP/1.1\n")
+
+    def test_an_accepted_redirect_ends_the_listener_even_if_no_page_follows(self):
+        reader, writer = os.pipe()
+        stdin = os.fdopen(reader)
+        self.addCleanup(stdin.close)
+        self.addCleanup(os.close, writer)
+        os.write(writer, b"xyz\n")
+        with mock.patch.object(helper, "RESPONSE_TIMEOUT", 0.2):
+            port, thread, result = self.serve_on_free_port(stdin, io.StringIO())
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as client:
+                client.sendall(b"GET /callback?code=abc&state=xyz HTTP/1.1\r\n\r\n")
+                thread.join(5)
+        self.assertEqual(result, [0])
 
     def test_gives_up_when_the_deadline_passes(self):
         port, thread, result = self.serve_on_free_port(

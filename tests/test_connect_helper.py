@@ -83,12 +83,47 @@ class ConnectHelperTests(unittest.TestCase):
             with self.assertRaises(helper.ConnectError, msg=bad):
                 helper.request_json("192.168.1.9", 5353, bad)
 
-    def test_cloud_metadata_address_is_not_a_receiver(self) -> None:
-        with self.assertRaises(helper.ConnectError):
-            helper.safe_address("169.254.169.254")
-        self.assertEqual(helper.safe_address("169.254.10.20"), "169.254.10.20")
-        with self.assertRaises(helper.ConnectError):
-            helper.safe_address("::ffff:169.254.169.254")
+    def test_link_local_and_ipv6_addresses_are_not_receivers(self) -> None:
+        # Cloud metadata services live on these, and no speaker that can stream does.
+        for address in (
+            "169.254.169.254", "169.254.170.2", "169.254.10.20",
+            "::ffff:169.254.169.254", "fd00:ec2::254", "fe80::1",
+        ):
+            with self.subTest(address=address), self.assertRaises(helper.ConnectError):
+                helper.safe_address(address)
+        self.assertEqual(helper.safe_address("192.168.1.20"), "192.168.1.20")
+        self.assertEqual(helper.safe_address("::ffff:10.0.0.7"), "10.0.0.7")
+
+    def test_a_second_claim_to_a_device_id_never_replaces_the_first(self) -> None:
+        browse = "\n".join([
+            '=;eth0;IPv4;Real;_spotify-connect._tcp;local;a.local;192.168.1.9;5353;"CPath=/zc"',
+            '=;eth0;IPv4;Copy;_spotify-connect._tcp;local;b.local;192.168.1.66;5353;"CPath=/zc"',
+        ])
+        for slow in ("192.168.1.66", "192.168.1.9"):
+            other_answered = threading.Event()
+
+            def fake_request_json(
+                address: str,
+                *_rest: object,
+                slow: str = slow,
+                other_answered: threading.Event = other_answered,
+            ) -> dict[str, object]:
+                if address == slow:
+                    other_answered.wait(5)
+                    time.sleep(0.05)
+                else:
+                    other_answered.set()
+                name = "Real" if address == "192.168.1.9" else "Copy"
+                return {"status": 101, "deviceID": "0123456789abcdef", "remoteName": name}
+
+            with self.subTest(slow=slow), \
+                    mock.patch.object(helper, "browse_spotify_connect", return_value=browse), \
+                    mock.patch.object(helper, "request_json", side_effect=fake_request_json):
+                devices = helper.discover_receivers()
+                self.assertEqual(
+                    [(item["name"], item["address"]) for item in devices],
+                    [("Real", "192.168.1.9")],
+                )
 
     def test_discovery_probes_each_receiver_once(self) -> None:
         browse = "\n".join(

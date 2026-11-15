@@ -206,8 +206,12 @@ Item {
       browseContexts: true
       loading: page.service && page.service.searchLoading
       hasMore: page.service && page.service.searchNext(page.panel.searchType) !== ""
-      restoredContentY: page.panel.scrollFor("search:" + page.panel.searchType)
-      stateKey: "search:" + page.panel.searchType
+      // The place kept belongs to one search. Keyed by type alone, the next
+      // search opened wherever the last one had been scrolled to.
+      readonly property string placeKey: "search:" + page.panel.searchType + ":"
+        + (page.service ? page.service.searchResultQuery : "")
+      restoredContentY: page.panel.scrollFor(placeKey)
+      stateKey: placeKey
       emptyGlyph: "󰍉"
       emptyMessage: page.service && page.service.searchLoading
         ? "Searching…"

@@ -283,6 +283,16 @@ Item {
       reorderRequested(source, destination)
   }
 
+  // More rows replace the list, and with it the row a drag is holding. So
+  // nothing is asked for mid-drag, and the end is looked at again once it is over.
+  function loadMoreAtEnd() {
+    if (dragSourceIndex >= 0 || !mediaList.atYEnd || mediaList.count <= 0 || !hasMore
+        || loading || filterText.trim() !== "") return
+    loadMoreRequested()
+  }
+
+  onDragSourceIndexChanged: if (dragSourceIndex < 0) loadMoreAtEnd()
+
   function cancelReorder() {
     finishReorder(dragSceneY, true)
   }
@@ -416,8 +426,7 @@ Item {
       highlightFollowsCurrentItem: false
       ScrollBar.vertical: ScrollBar { }
       onMovementEnded: root.rememberView()
-      onAtYEndChanged: if (atYEnd && count > 0 && root.hasMore && !root.loading
-          && root.filterText.trim() === "") root.loadMoreRequested()
+      onAtYEndChanged: root.loadMoreAtEnd()
       onCountChanged: {
         root.restoreView()
         if (root.dragSourceIndex >= count) root.cancelReorder()

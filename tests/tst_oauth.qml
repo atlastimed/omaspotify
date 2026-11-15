@@ -86,6 +86,17 @@ TestCase {
     compare(response.expiresIn, 1200)
   }
 
+  // Only a token Spotify replaced has to be written to the keyring again.
+  function test_refreshResponseSaysWhetherTheSecretWasReplaced() {
+    function answer(fields, previous) {
+      return OAuth.parseTokenResponse(200, JSON.stringify(fields), previous)
+    }
+    verify(answer({ access_token: "a", refresh_token: "new" }, "old").rotated)
+    verify(answer({ access_token: "a", refresh_token: "first" }, "").rotated, "a first sign-in")
+    verify(!answer({ access_token: "a" }, "old").rotated, "nothing came back")
+    verify(!answer({ access_token: "a", refresh_token: "old" }, "old").rotated, "the same one came back")
+  }
+
   function test_tokenFailuresSayWhetherTheyCanPass() {
     verify(OAuth.parseTokenResponse(0, "", "kept").transient, "no answer at all")
     verify(OAuth.parseTokenResponse(503, "", "kept").transient)
