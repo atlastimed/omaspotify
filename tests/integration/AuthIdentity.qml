@@ -116,7 +116,27 @@ ShellRoot {
     check(auth.lastError.indexOf("access_denied") >= 0, "Spotify's own refusal was hidden")
     auth.cancelLogin()
 
+    // Spotify replaces the refresh token and the old one stops working, so
+    // the new one is kept until the keyring has it. Here the keyring helper
+    // does not exist, so the write fails.
+    rotating = answering(200, '{"access_token":"a1","refresh_token":"rotated","expires_in":3600}')
+    auth.xhrFactory = function() { return rotating }
+    auth.refreshWithToken("old", "request")
+    rotating.readyState = XMLHttpRequest.DONE
+    rotating.onreadystatechange()
+    check(auth.loggedIn && auth.accessToken === "a1", "A good refresh was not accepted")
+    check(auth.heldRefreshToken === "rotated", "The replaced refresh token was not kept")
+
     identitySettled.start()
+    }
+  }
+  property var sent: []
+  property var rotating: null
+  function answering(status, text) {
+    return {
+      readyState: 1, status: status, responseText: text, open: function() {},
+      setRequestHeader: function() {}, abort: function() {},
+      send: function(body) { sent.push(String(body)) }
     }
   }
   // A changed client id takes a moment to drain before sign-in is allowed.
@@ -124,6 +144,22 @@ ShellRoot {
     id: identitySettled
     interval: 200
     onTriggered: {
+      check(auth.heldRefreshToken === "rotated",
+        "A failed keyring write dropped the only refresh token that still works")
+      // The next refresh uses it, not whatever older token the keyring holds.
+      // Settling after the identity change has usually asked for one already.
+      if (!auth.refreshBusy) auth.restoreSession()
+      check(auth.refreshBusy, "No refresh was started from the held token")
+      check(sent.length > 1 && sent[sent.length - 1].indexOf("refresh_token=rotated") >= 0,
+        "The next refresh did not use the held token")
+      rotating.responseText = '{"access_token":"a2","expires_in":3600}'
+      rotating.onreadystatechange()
+      check(auth.accessToken === "a2", "The held token's refresh was not accepted")
+      check(auth.heldRefreshToken === "rotated",
+        "An answer with no new refresh token dropped the held one")
+      auth.logout()
+      check(auth.heldRefreshToken === "", "Signing out kept a refresh token in memory")
+
       // A helper that cannot start must not leave sign-in busy for ever.
       auth.beginLogin()
       check(auth.loginBusy, "Sign-in did not start")

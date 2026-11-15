@@ -65,6 +65,9 @@ function parseTokenResponse(status, text, previousRefreshToken) {
     ok: true,
     accessToken: String(payload.access_token),
     refreshToken: String(payload.refresh_token || previousRefreshToken || ""),
+    // Only a token Spotify actually replaced needs writing to the keyring.
+    rotated: !!payload.refresh_token
+      && String(payload.refresh_token) !== String(previousRefreshToken || ""),
     expiresIn: Math.max(60, Number(payload.expires_in) || 3600),
     scope: String(payload.scope || "")
   }
