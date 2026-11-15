@@ -32,6 +32,8 @@ if command -v cargo >/dev/null 2>&1; then
 fi
 
 omarchy plugin validate .
+# The baked shaders must be the ones their sources describe.
+scripts/build-shaders.sh --check
 # Lint every source file so a new one is never missed.
 QMLLINT=$qmllint scripts/lint-qml.sh
 

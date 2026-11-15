@@ -1,5 +1,26 @@
 ## Unreleased
 
+**A new visualiser**
+
+- Now playing has a visualiser drawn on the graphics card, filling the view behind
+  the artwork. Five styles (`V`): bars with a glow, falling caps and a reflection;
+  ribbons of the spectrum; rays leaving the edge of the artwork; curtains of light;
+  and a wall of lamps.
+- Its colours come from the album cover by default, and glide to the next cover's
+  when the track changes. `Shift+V` switches to the theme or a fixed palette.
+- The cog in Now playing sets sensitivity, motion, glow, brightness, the number of
+  bands, bass in the middle and falling caps, with the result showing behind as
+  each is changed.
+- It works with Spotify Soloist. The equalizer it replaces listened to the wrong
+  PipeWire object under Soloist and only ever drew a flat line.
+- The cover keeps to the top half and the visualiser has the lower half to itself,
+  so a loud passage is never hidden behind the artwork. Only the halo, which is
+  drawn round the cover, and the soft light above an aurora go higher.
+- Nothing is drawn, and no frame asked for, once the picture has come to rest.
+- The scope and matrix styles are gone; Wave and Pixels take their place.
+
+**Fixes**
+
 Found by driving the real player with a real account, then fixed and run again.
 
 - Removing a song from a playlist works. It always failed with "No uris provided":

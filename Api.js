@@ -3237,6 +3237,191 @@ function mergeUnique(existing, incoming) {
   return result
 }
 
+// The visualiser in Now playing. Every choice is one of a short list, so the
+// view can step through them with a click and nothing needs a text field.
+var VISUALIZER_STYLES = ["bars", "wave", "halo", "aurora", "pixels"]
+var VISUALIZER_PALETTES = ["theme", "artwork", "spectrum", "ember", "glacier", "neon"]
+var VISUALIZER_CHOICES = {
+  bands: [32, 48, 64, 96],
+  sensitivity: [0.7, 1, 1.4, 1.9],
+  smoothing: [35, 60, 80],
+  glow: [0, 0.45, 0.9],
+  brightness: [0.55, 0.8, 1]
+}
+var VISUALIZER_CHOICE_NAMES = {
+  sensitivity: ["Low", "Normal", "High", "Highest"],
+  smoothing: ["Sharp", "Balanced", "Smooth"],
+  glow: ["Off", "Soft", "Bright"],
+  brightness: ["Dim", "Normal", "Full"]
+}
+var VISUALIZER_DEFAULTS = {
+  style: "bars", palette: "artwork", bands: 64, sensitivity: 1, smoothing: 60,
+  glow: 0.45, brightness: 0.8, mirror: false, peaks: true
+}
+var VISUALIZER_FIXED_PALETTES = {
+  spectrum: ["#22e58b", "#ffd23f", "#ff4d5a"],
+  ember: ["#c0261c", "#ff7a1a", "#ffe08a"],
+  glacier: ["#2f6bff", "#39d5ff", "#eafcff"],
+  neon: ["#ff2bd6", "#8a5cff", "#29f0ff"]
+}
+
+// The equalizer this replaced kept only a style name.
+function visualizerStyleFromLegacy(mode) {
+  var names = { bars: "bars", pixels: "pixels", scope: "wave", matrix: "pixels" }
+  return names[String(mode || "")] || ""
+}
+
+function nearestChoice(choices, value, fallback) {
+  var wanted = Number(value)
+  if (!isFinite(wanted)) return fallback
+  var best = choices[0]
+  for (var i = 1; i < choices.length; i++)
+    if (Math.abs(choices[i] - wanted) < Math.abs(best - wanted)) best = choices[i]
+  return best
+}
+
+function normalizedVisualizer(value, legacyMode) {
+  var source = value && typeof value === "object" && !Array.isArray(value) ? value : ({})
+  var defaults = VISUALIZER_DEFAULTS
+  var style = String(source.style || visualizerStyleFromLegacy(legacyMode) || "")
+  var palette = String(source.palette || "")
+  return {
+    style: VISUALIZER_STYLES.indexOf(style) >= 0 ? style : defaults.style,
+    palette: VISUALIZER_PALETTES.indexOf(palette) >= 0 ? palette : defaults.palette,
+    bands: nearestChoice(VISUALIZER_CHOICES.bands, source.bands, defaults.bands),
+    sensitivity: nearestChoice(VISUALIZER_CHOICES.sensitivity, source.sensitivity,
+      defaults.sensitivity),
+    smoothing: nearestChoice(VISUALIZER_CHOICES.smoothing, source.smoothing, defaults.smoothing),
+    glow: nearestChoice(VISUALIZER_CHOICES.glow, source.glow, defaults.glow),
+    brightness: nearestChoice(VISUALIZER_CHOICES.brightness, source.brightness,
+      defaults.brightness),
+    mirror: source.mirror === undefined ? defaults.mirror : source.mirror === true,
+    peaks: source.peaks === undefined ? defaults.peaks : source.peaks === true
+  }
+}
+
+// The settings with one of them moved to its next choice, wrapping at the end.
+function visualizerStepped(value, key) {
+  var next = normalizedVisualizer(value)
+  var name = String(key || "")
+  var choices = name === "style" ? VISUALIZER_STYLES
+    : (name === "palette" ? VISUALIZER_PALETTES : VISUALIZER_CHOICES[name])
+  if (choices) next[name] = choices[(choices.indexOf(next[name]) + 1) % choices.length]
+  else if (name === "mirror" || name === "peaks") next[name] = !next[name]
+  return next
+}
+
+function visualizerChoiceName(value, key) {
+  var settings = normalizedVisualizer(value)
+  var name = String(key || "")
+  var current = settings[name]
+  if (name === "mirror" || name === "peaks") return current ? "On" : "Off"
+  if (name === "bands") return String(current)
+  var names = VISUALIZER_CHOICE_NAMES[name]
+  if (names) return names[VISUALIZER_CHOICES[name].indexOf(current)]
+  var text = String(current || "")
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+function colorParts(color) {
+  if (color && typeof color === "object" && isFinite(Number(color.r)))
+    return { r: Number(color.r), g: Number(color.g), b: Number(color.b) }
+  var match = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(String(color || ""))
+  if (!match) return { r: 1, g: 1, b: 1 }
+  return { r: parseInt(match[1], 16) / 255, g: parseInt(match[2], 16) / 255,
+    b: parseInt(match[3], 16) / 255 }
+}
+
+function colorHex(parts) {
+  function channel(value) {
+    var byte = Math.round(Math.max(0, Math.min(1, Number(value) || 0)) * 255)
+    return (byte < 16 ? "0" : "") + byte.toString(16)
+  }
+  return "#" + channel(parts.r) + channel(parts.g) + channel(parts.b)
+}
+
+function mixedColor(from, to, amount) {
+  var a = colorParts(from)
+  var b = colorParts(to)
+  var t = Math.max(0, Math.min(1, Number(amount) || 0))
+  return colorHex({ r: a.r + (b.r - a.r) * t, g: a.g + (b.g - a.g) * t,
+    b: a.b + (b.b - a.b) * t })
+}
+
+// How much colour there is to a colour, and how light it is, each 0 to 1.
+function colorVividness(color) {
+  var c = colorParts(color)
+  var top = Math.max(c.r, c.g, c.b)
+  return top <= 0 ? 0 : (top - Math.min(c.r, c.g, c.b)) / top
+}
+
+// A cover's colours are often dark. Light drawn on a dark panel has to be
+// bright to read, so each is scaled up until its strongest channel is.
+function brightenedColor(color, floor) {
+  var c = colorParts(color)
+  var top = Math.max(c.r, c.g, c.b)
+  var wanted = Math.max(0, Math.min(1, Number(floor) || 0))
+  if (top <= 0) return colorHex({ r: wanted, g: wanted, b: wanted })
+  var scale = top < wanted ? wanted / top : 1
+  return colorHex({ r: c.r * scale, g: c.g * scale, b: c.b * scale })
+}
+
+// Where a colour sits round the colour wheel, 0 to 1. Greys have no place.
+function colorHue(color) {
+  var c = colorParts(color)
+  var top = Math.max(c.r, c.g, c.b)
+  var spread = top - Math.min(c.r, c.g, c.b)
+  if (spread <= 0) return 0
+  var turn = top === c.r ? ((c.g - c.b) / spread) % 6
+    : (top === c.g ? (c.b - c.r) / spread + 2 : (c.r - c.g) / spread + 4)
+  return ((turn / 6) % 1 + 1) % 1
+}
+
+// Three colours from a cover, low to high. The most colourful is taken first,
+// then whatever is furthest round the wheel from what is already held, so a
+// pink and purple cover gives both and not three purples. A cover with no
+// colours to give falls back to the theme.
+function artworkPalette(colors, fallback) {
+  var found = arrayValues(colors).map(function(color) {
+    var parts = colorParts(color)
+    var vivid = colorVividness(parts)
+    var light = colorLuminance(parts)
+    return { hex: colorHex(parts), hue: colorHue(parts), vivid: vivid, light: light,
+      worth: vivid * (0.35 + light) }
+  }).filter(function(entry) { return entry.light > 0.012 })
+  if (found.length === 0) return fallback
+  var picked = []
+  while (picked.length < 3 && found.length > 0) {
+    var best = 0
+    var bestWorth = -1
+    for (var i = 0; i < found.length; i++) {
+      var apart = 1
+      for (var p = 0; p < picked.length; p++) {
+        var gap = Math.abs(found[i].hue - picked[p].hue)
+        apart = Math.min(apart, Math.min(gap, 1 - gap) * 4)
+      }
+      var worth = found[i].worth * (0.2 + Math.min(1, apart))
+      if (worth > bestWorth) {
+        bestWorth = worth
+        best = i
+      }
+    }
+    picked.push(found.splice(best, 1)[0])
+  }
+  while (picked.length < 3) picked.push(picked[picked.length - 1])
+  picked.sort(function(a, b) { return a.light - b.light })
+  return [brightenedColor(picked[0].hex, 0.75), brightenedColor(picked[1].hex, 0.9),
+    brightenedColor(mixedColor(picked[2].hex, "#ffffff", 0.2), 1)]
+}
+
+function visualizerPalette(name, accent, foreground, artworkColors) {
+  var theme = [colorHex(colorParts(accent)), mixedColor(accent, foreground, 0.25),
+    mixedColor(accent, foreground, 0.7)]
+  var key = String(name || "")
+  if (key === "artwork") return artworkPalette(artworkColors, theme)
+  return VISUALIZER_FIXED_PALETTES[key] || theme
+}
+
 function contrastChannel(value) {
   return value <= 0.03928 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4)
 }

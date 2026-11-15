@@ -739,7 +739,7 @@ grep -qx 'Environment=PULSE_LATENCY_MSEC=250' \
 grep -qx 'Environment=TOKIO_WORKER_THREADS=2' \
   "$source_root/systemd/omaspotify.service"
 
-# The equalizer finds this plugin's audio by the name the backend installs as.
+# The visualiser finds this plugin's audio by the name the backend installs as.
 equalizer_bin="$test_root/equalizer-bin"
 mkdir -p "$equalizer_bin"
 cat >"$equalizer_bin/pw-dump" <<'EOF'
@@ -763,15 +763,39 @@ EOF
 printf '#!/usr/bin/env bash\nprintf "500;250;\\n"\n' >"$equalizer_bin/cava"
 chmod +x "$equalizer_bin/pw-dump" "$equalizer_bin/cava"
 equalizer_output=$(PATH="$equalizer_bin:$PATH" timeout 1 \
-  "$source_root/scripts/equalizer.sh" "$test_root/equalizer/cava.conf" 2 2>/dev/null || true)
+  "$source_root/scripts/visualizer.sh" "$test_root/equalizer/cava.conf" 2 2>/dev/null || true)
 grep -qx '500;250;' <<<"$equalizer_output"
 grep -qx 'source = 6655' "$test_root/equalizer/cava.conf"
 
 # Soloist owns the audio stream when selected; Chromium and other audio stay out.
 sed -i 's/"omaspotify-backend"/"soloist"/' "$equalizer_bin/pw-dump"
 equalizer_output=$(PATH="$equalizer_bin:$PATH" timeout 1 \
-  "$source_root/scripts/equalizer.sh" "$test_root/equalizer/cava.conf" 2 soloist 2>/dev/null || true)
+  "$source_root/scripts/visualizer.sh" "$test_root/equalizer/cava.conf" 2 soloist 2>/dev/null || true)
 grep -qx '500;250;' <<<"$equalizer_output"
 grep -qx 'source = 6655' "$test_root/equalizer/cava.conf"
+
+# What Soloist really looks like to PipeWire: the binary is named on a client,
+# and the stream that carries the audio only points at that client. A client
+# can carry the stream's media class too, and must not be taken for it.
+cat >"$equalizer_bin/pw-dump" <<'EOF'
+#!/usr/bin/env bash
+cat <<'JSON'
+[
+  { "id": 77, "type": "PipeWire:Interface:Node", "info": { "state": "running", "props": {
+      "media.class": "Stream/Output/Audio", "application.process.binary": "chromium",
+      "object.serial": 373 } } },
+  { "id": 85, "type": "PipeWire:Interface:Client", "info": { "props": {
+      "media.class": "Stream/Output/Audio", "application.process.binary": "soloist",
+      "object.serial": 415 } } },
+  { "id": 86, "type": "PipeWire:Interface:Node", "info": { "state": "running", "props": {
+      "media.class": "Stream/Output/Audio", "client.id": 85, "object.serial": 416 } } }
+]
+JSON
+EOF
+equalizer_output=$(PATH="$equalizer_bin:$PATH" timeout 1 \
+  "$source_root/scripts/visualizer.sh" "$test_root/equalizer/cava.conf" 2 soloist 40 2>/dev/null || true)
+grep -qx '500;250;' <<<"$equalizer_output"
+grep -qx 'source = 416' "$test_root/equalizer/cava.conf"
+grep -qx 'noise_reduction = 40' "$test_root/equalizer/cava.conf"
 
 echo "Script tests passed."

@@ -118,6 +118,39 @@ down counts as held, so a chord sent by a tool that sets modifiers without a key
 event, or a release that never arrives, cannot leave hints on. They appear after
 300 ms, and a second key before then cancels them as a chord being typed.
 
+## The visualiser
+
+`scripts/visualizer.sh` points `cava` at the player's own PipeWire stream and
+writes one line of levels per frame. The stream is a node that either names the
+player's binary itself or, as with Soloist, only points at the client that does;
+a client can carry the same media class and is never taken for it. The helper
+runs only while Now playing is open.
+
+`VisualizerStage.qml` knows nothing about audio. It eases the levels toward what
+was last heard on every frame (quick to rise, slower to fall, with a cap that
+hangs above each band), writes them into a one-row texture, and a fragment
+shader per style paints from that. Once everything has fallen to rest it stops
+asking for frames, so a paused player costs nothing.
+
+Now playing tells the stage how far down the cover and the names reach (`deck`).
+Everything below is the visualiser's room: bars stand on a floor inside it and
+the tallest just reaches its top, ribbons run through its middle, and lamps are
+sized to fill it. The halo is the exception, since it is drawn round the cover.
+
+The shaders live in `shaders/`. Each style is one `.glsl` file compiled behind
+`common.glsl` by `scripts/build-shaders.sh` into the `.qsb` file Qt loads. The
+baked files are committed, because a plugin cannot run a build step, and
+`build-shaders.sh --check` (part of the test suite) fails when a source no longer
+matches the hash recorded when it was baked. Rebuilding needs `qt6-shadertools`.
+
+The colours taken from a cover need a local file, and the cover on show usually
+came straight from the network, so a 64-pixel copy of it as drawn is written
+beside the artwork cache and read from there. Signing out removes it with the
+rest.
+
+Every setting is one of a short list (`Api.VISUALIZER_CHOICES`) and the whole set
+is kept in the session file, so the view can step through them without a form.
+
 ## Runtime requirements
 
 - Omarchy 4.5 with the Quickshell shell enabled

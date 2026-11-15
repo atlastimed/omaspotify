@@ -72,6 +72,7 @@ echo 'Quickshell Soloist failure and polling integration passed.'
 
 mkdir -p "$test_root/app/plugin" "$test_root/state"
 cp "$source_root/"*.qml "$source_root/"*.js "$test_root/app/plugin/"
+cp -r "$source_root/shaders" "$test_root/app/plugin/"
 cp -r /usr/share/omarchy/shell/Commons /usr/share/omarchy/shell/Ui "$test_root/app/"
 cp "$source_root/tests/integration/AppSmoke.qml" "$test_root/app/shell.qml"
 if [[ -z ${WAYLAND_DISPLAY:-} ]]; then
