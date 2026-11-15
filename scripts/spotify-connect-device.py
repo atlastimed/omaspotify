@@ -39,8 +39,6 @@ MAX_RESPONSE_BYTES = 65_536
 DEVICE_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{8,160}$")
 RECEIVER_PATH_RE = re.compile(r"^/[A-Za-z0-9/_.~-]*$")
 RECEIVER_QUERY_RE = re.compile(r"^[A-Za-z0-9_.~%+=&-]{1,256}$")
-# Cloud instance metadata lives here on every major provider.
-METADATA_ADDRESS = "169.254.169.254"
 # A receiver that drips bytes must not hold the whole helper open.
 COMMAND_DEADLINE_SECONDS = {"discover": 30, "activate": 90, "control": 20}
 PROBE_CONCURRENCY = 8
@@ -155,10 +153,13 @@ def safe_address(value: str) -> str:
     address = ipaddress.ip_address(value)
     # An IPv4 address dressed as IPv6 is judged as the address it really is.
     address = getattr(address, "ipv4_mapped", None) or address
+    # Link-local is where cloud metadata services live, and a speaker that can
+    # reach Spotify has a routed address as well.
     if address.is_unspecified or address.is_multicast or address.is_loopback \
-            or str(address) == METADATA_ADDRESS:
+            or address.is_link_local:
         raise ConnectError("unsafe receiver address")
-    if not (address.is_private or address.is_link_local):
+    # Discovery only ever probes IPv4.
+    if address.version != 4 or not address.is_private:
         raise ConnectError("receiver is not on the local network")
     return str(address)
 
@@ -423,14 +424,14 @@ def probe_receiver(record: dict[str, Any], include_volume: bool) -> dict[str, An
 
 def discover_receivers(include_volume: bool = False) -> list[dict[str, Any]]:
     records = browse_records(browse_spotify_connect())
-    pending = iter(records)
+    pending = iter(enumerate(records))
     lock = threading.Lock()
-    found: list[dict[str, Any]] = []
+    found: list[tuple[int, dict[str, Any]]] = []
 
     def worker() -> None:
         while True:
             with lock:
-                record = next(pending, None)
+                order, record = next(pending, (0, None))
             if record is None:
                 return
             try:
@@ -441,7 +442,7 @@ def discover_receivers(include_volume: bool = False) -> list[dict[str, Any]]:
                 device = None
             if device is not None:
                 with lock:
-                    found.append(device)
+                    found.append((order, device))
 
     # Daemon threads, so one silent receiver can never keep the process alive.
     threads = [
@@ -454,8 +455,12 @@ def discover_receivers(include_volume: bool = False) -> list[dict[str, Any]]:
     for thread in threads:
         thread.join(max(0.0, deadline - time.monotonic()))
 
+    discovered: dict[str, dict[str, Any]] = {}
     with lock:
-        discovered = {device["id"]: device for device in found}
+        # Two receivers claiming one id: the first Avahi saw keeps it, so answering
+        # slower or faster cannot take a speaker's place.
+        for _, device in sorted(found, key=lambda item: item[0]):
+            discovered.setdefault(device["id"], device)
     return sorted(discovered.values(), key=lambda item: item["name"].casefold())
 
 

@@ -31,7 +31,8 @@ if (( bitrate_specified )) && [[ $bitrate != 96 && $bitrate != 160 && $bitrate !
 fi
 if (( normalisation_specified )); then
   [[ $normalisation == true || $normalisation == false ]] || exit 3
-  [[ $pregain =~ ^-?[0-9]{1,2}$ ]] || exit 3
+  # No leading zeros: bash would read them as octal and the config rejects them.
+  [[ $pregain =~ ^-?(0|[1-9][0-9]?)$ ]] || exit 3
   (( pregain >= -15 && pregain <= 15 )) || exit 3
 fi
 if [[ ! -f $config_file ]]; then
