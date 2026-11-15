@@ -1,13 +1,15 @@
 // Three ribbons of the same spectrum, read at different scales so they move
 // together without tracing the same line. Each mirrors about a midline.
 
-const float MIDLINE = 0.66;
-const float REACH = 0.3;
+// The midline runs through the middle of the room, and the loudest ribbon
+// just fills it.
 
 void main() {
   vec2 px = qt_TexCoord0 * area;
   float x = px.x / area.x;
-  float from = (px.y - area.y * MIDLINE);
+  vec2 space = room();
+  float from = px.y - (space.x + space.y * 0.5);
+  float reach = space.y * 0.44;
   vec3 rgb = vec3(0.0);
   float alpha = 0.0;
   for (float layer = 0.0; layer < 3.0; layer += 1.0) {
@@ -16,7 +18,7 @@ void main() {
     float at = bandAt(clamp(x + drift, 0.0, 1.0)) * (1.0 - layer * 0.16) + layer * 1.7;
     float swell = 0.04 * sin(x * (5.0 + layer * 3.0) + time * (0.9 - layer * 0.25));
     float level = curve(at) * (1.0 - layer * 0.2) + swell * (0.3 + bass);
-    float edge = max(level, 0.0) * area.y * REACH + 1.5;
+    float edge = clamp(level, 0.0, 1.0) * reach + 1.5;
     float d = abs(from) - edge;
     float fill = (1.0 - smoothstep(-1.0, 1.0, d)) * (0.2 - layer * 0.045);
     float line = exp(-abs(d) / (1.2 + layer * 0.5)) * (0.95 - layer * 0.25);

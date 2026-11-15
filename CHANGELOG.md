@@ -13,6 +13,9 @@
   each is changed.
 - It works with Spotify Soloist. The equalizer it replaces listened to the wrong
   PipeWire object under Soloist and only ever drew a flat line.
+- The cover keeps to the top half and the visualiser has the lower half to itself,
+  so a loud passage is never hidden behind the artwork. Only the halo, which is
+  drawn round the cover, and the soft light above an aurora go higher.
 - Nothing is drawn, and no frame asked for, once the picture has come to rest.
 - The scope and matrix styles are gone; Wave and Pixels take their place.
 

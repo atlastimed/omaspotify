@@ -22,6 +22,7 @@ layout(std140, binding = 0) uniform buf {
   float treble;
   float strength;  // 0..1 overall brightness
   float span;      // pixels of room around the artwork
+  float deck;      // pixels down to where nothing else is drawn
   vec2 area;       // this item, in pixels
   vec4 art;        // the artwork inside it: x, y, width, height
   vec4 c0;         // palette, low to high
@@ -63,6 +64,13 @@ vec3 palette(float t) {
 float roundBox(vec2 p, vec2 extent, float r) {
   vec2 q = abs(p) - extent + r;
   return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+// The part of the view that is the visualiser's alone: from the deck, under
+// the artwork and the names, to the bottom. x is its top, y its height.
+vec2 room() {
+  float top = clamp(deck, 0.0, area.y * 0.8);
+  return vec2(top, area.y - top);
 }
 
 // Colour and coverage in, premultiplied out, which is what the scene expects.

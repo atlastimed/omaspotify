@@ -132,6 +132,11 @@ hangs above each band), writes them into a one-row texture, and a fragment
 shader per style paints from that. Once everything has fallen to rest it stops
 asking for frames, so a paused player costs nothing.
 
+Now playing tells the stage how far down the cover and the names reach (`deck`).
+Everything below is the visualiser's room: bars stand on a floor inside it and
+the tallest just reaches its top, ribbons run through its middle, and lamps are
+sized to fill it. The halo is the exception, since it is drawn round the cover.
+
 The shaders live in `shaders/`. Each style is one `.glsl` file compiled behind
 `common.glsl` by `scripts/build-shaders.sh` into the `.qsb` file Qt loads. The
 baked files are committed, because a plugin cannot run a build step, and

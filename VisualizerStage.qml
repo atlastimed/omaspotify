@@ -30,6 +30,9 @@ Item {
   property rect artRect: Qt.rect(0, 0, 0, 0)
   // How far out from the artwork the halo may reach.
   property real artSpan: 0
+  // How far down the view the artwork and names reach. Below it is the
+  // visualiser's alone, and no style but the halo draws its shapes above it.
+  property real deck: 0
 
   Behavior on low { ColorAnimation { duration: 700 } }
   Behavior on middle { ColorAnimation { duration: 700 } }
@@ -139,6 +142,7 @@ Item {
     property real treble: stage.treble
     property real strength: stage.strength
     property real span: stage.artSpan
+    property real deck: stage.deck
     property vector2d area: Qt.vector2d(width, height)
     property vector4d art: Qt.vector4d(stage.artRect.x, stage.artRect.y,
       stage.artRect.width, stage.artRect.height)

@@ -1,7 +1,13 @@
 // Rounded bars on a floor, with a glow, falling caps and a faint reflection.
 
-const float FLOOR = 0.84;   // where the bars stand, down the item
-const float REACH = 0.52;   // how much of the height the tallest bar takes
+const float FLOOR = 0.8;    // where the bars stand, down their room
+
+// The floor, and how tall the tallest bar is: up to the top of the room.
+vec2 stand() {
+  vec2 space = room();
+  float floorY = space.x + space.y * FLOOR;
+  return vec2(floorY, floorY - space.x - 4.0);
+}
 
 // Coverage and glow of the bars at a pixel. y runs up from the floor.
 vec2 barsAt(vec2 px, float y) {
@@ -11,7 +17,7 @@ vec2 barsAt(vec2 px, float y) {
   float own = floor(fi);
   float halfWidth = slot * 0.34;
   float radius = min(halfWidth, 5.0);
-  float reach = area.y * REACH;
+  float reach = stand().y;
   float cover = 0.0;
   float halo = 0.0;
   for (float k = -1.0; k <= 1.0; k += 1.0) {
@@ -33,8 +39,8 @@ vec2 barsAt(vec2 px, float y) {
 
 void main() {
   vec2 px = qt_TexCoord0 * area;
-  float floorY = area.y * FLOOR;
-  float reach = area.y * REACH;
+  float floorY = stand().x;
+  float reach = stand().y;
   float up = floorY - px.y;
   vec3 rgb = vec3(0.0);
   float alpha = 0.0;
@@ -47,7 +53,7 @@ void main() {
   } else {
     // The floor shows the bars again, upside down and fading.
     float depth = -up;
-    float fade = 1.0 - smoothstep(0.0, area.y * (1.0 - FLOOR), depth);
+    float fade = 1.0 - smoothstep(0.0, area.y - floorY, depth);
     vec2 hit = barsAt(px, depth * 1.6);
     vec3 tone = palette(depth * 1.6 / reach);
     float seen = (hit.x * 0.28 + hit.y * glow * 0.2) * fade;

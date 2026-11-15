@@ -37,6 +37,7 @@ Item {
   property string swatchSource: ""
   property rect artRect: Qt.rect(0, 0, 0, 0)
   property real artSpan: 0
+  property real deck: 0
 
   property var levels: []
   // Set only once the helper says nothing plays here, so the note about
@@ -221,5 +222,6 @@ Item {
     high: root.palette[2]
     artRect: root.artRect
     artSpan: root.artSpan
+    deck: root.deck
   }
 }

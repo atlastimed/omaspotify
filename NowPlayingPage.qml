@@ -39,9 +39,17 @@ Item {
     property real haloSpan: haloed
       ? Math.round(Math.min(height * 0.16, width * 0.1, Style.space(130))) : 0
     // Without a visualiser the artwork carries the whole page, centred in it.
-    readonly property real artSize: Math.max(Style.space(120), visualizerUseful
-      ? Math.min((height - haloSpan * 2) * 0.62, width * 0.44, Style.space(460))
-      : Math.min(height * 0.8, width * 0.5))
+    // With one it keeps to the top half, so the lower half is the visualiser's
+    // and nothing it draws is hidden behind the cover. The halo is drawn round
+    // the cover instead, so there the cover can be larger.
+    readonly property real artSize: Math.max(Style.space(120), !visualizerUseful
+      ? Math.min(height * 0.8, width * 0.5)
+      : (haloed ? Math.min((height - haloSpan * 2) * 0.62, width * 0.44, Style.space(460))
+        : Math.min(height * 0.5, width * 0.4, Style.space(460))))
+    // How far down the cover and the names reach, in the visualiser's own
+    // coordinates. Everything below is its room.
+    readonly property real deck: Math.max(heroArt.y + heroArt.height,
+      nameColumn.y + nameColumn.height) + Style.space(24)
     readonly property real heroTop: visualizerUseful ? 0 : Math.max(0, (height - artSize) / 2)
     Behavior on haloSpan { NumberAnimation { duration: Style.duration(260); easing.type: Easing.OutCubic } }
 
@@ -68,6 +76,7 @@ Item {
       artRect: Qt.rect(heroArt.x + Style.space(10), heroArt.y + Style.space(10),
         heroArt.width, heroArt.height)
       artSpan: stage.haloSpan
+      deck: stage.deck
     }
 
     Button {

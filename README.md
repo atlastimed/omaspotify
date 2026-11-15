@@ -122,8 +122,9 @@ listen, and top artists and songs sit underneath it across three ranges.
 
 ### The song, full size
 
-`E` or `Alt+Shift+N` gives the current track the whole window: artwork, title,
-and a live visualiser filling the view behind them. It listens only to
+`E` or `Alt+Shift+N` gives the current track the whole window: artwork and
+title in the top half, and a live visualiser with the lower half to itself, so
+nothing it draws is hidden behind the cover. It listens only to
 OmaSpotify's own audio and needs `cava` (`omarchy pkg add cava`).
 
 `V` steps through five styles:
