@@ -224,11 +224,14 @@ function plainLabel(value) {
 
 function redact(value) {
   var text = String(value || "")
-  text = text.replace(/(authorization\s*:\s*bearer\s+)[^\s]+/ig, "$1<redacted>")
+  text = text.replace(/(authorization\s*:\s*(?:bearer|basic)\s+)[^\s]+/ig, "$1<redacted>")
   // A token is long and has no spaces, which ordinary words after "bearer" are not.
   text = text.replace(/(\bbearer\s+)[A-Za-z0-9._~+\/=-]{6,}/ig, "$1<redacted>")
-  text = text.replace(/(^|[?&;,\s])((?:code|access_token|refresh_token|code_verifier|client_secret|password)=)[^&#\s]+/ig, "$1$2<redacted>")
-  text = text.replace(/("(?:access_token|refresh_token|code|code_verifier|client_secret|password)"\s*:\s*")[^"]+/ig, "$1<redacted>")
+  text = text.replace(/(^|[?&;,\s(])((?:code|access_token|refresh_token|id_token|code_verifier|client_secret|password)=)[^&#\s)]+/ig, "$1$2<redacted>")
+  text = text.replace(/("(?:access_token|refresh_token|id_token|code|code_verifier|client_secret|password)"\s*:\s*")[^"]+/ig, "$1<redacted>")
+  // The same names as other programs print them: unquoted, single-quoted, or
+  // inside JSON that was itself quoted. A bare "code:" is ordinary prose.
+  text = text.replace(/((?:\\?["'])?(?:access_token|refresh_token|id_token|code_verifier|client_secret|password)(?:\\?["'])?\s*:\s*(?:\\?["'])?)[^"'\\\s,}<]+/ig, "$1<redacted>")
   return text
 }
 
