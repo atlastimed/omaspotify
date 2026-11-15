@@ -156,7 +156,15 @@ Item {
     enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
       && part.panel.nowPlayingExpanded
     onActivated: {
-      part.panel.cycleEqualizerMode()
+      part.panel.stepVisualizer("style")
+    }
+  }
+  Shortcut {
+    sequence: "Shift+V"
+    enabled: !part.panel.shortcutsBlocked && !part.panel.textInputFocused()
+      && part.panel.nowPlayingExpanded
+    onActivated: {
+      part.panel.stepVisualizer("palette")
     }
   }
   Shortcut {

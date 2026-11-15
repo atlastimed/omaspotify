@@ -23,8 +23,9 @@ Item {
   property string currentTab: "home"
   property bool openedForLogin: false
   property bool nowPlayingExpanded: false
-  property string equalizerMode: "bars"
-  readonly property var equalizerModes: ["bars", "pixels", "scope", "matrix"]
+  // How the visualiser in Now playing looks. Api.normalizedVisualizer's shape.
+  property var visualizer: Api.normalizedVisualizer(null)
+  property bool visualizerTrayOpen: false
 
   property double searchClock: Date.now()
   readonly property int searchCooldownSeconds: service
@@ -552,8 +553,7 @@ Item {
       state.selectedPlaylistItemCount)
     restoredDetailItemCount = Api.normalizedPlaylistRestoreCount(
       state.detailItemCount)
-    equalizerMode = equalizerModes.indexOf(String(state.equalizerMode || "")) >= 0
-      ? String(state.equalizerMode) : "bars"
+    visualizer = Api.normalizedVisualizer(state.visualizer, state.equalizerMode)
     var restoredTab = String(state.tab || "home")
     if (["home", "discover", "search", "library", "playlists", "detail", "queue",
       "stats", "devices", "setup"]
@@ -612,7 +612,7 @@ Item {
       selectedPlaylistId: selected ? selected.id : restoredPlaylistId,
       selectedPlaylistItemCount: selectedItemCount,
       lastRadioPlaylist: service.lastRadioPlaylist,
-      equalizerMode: equalizerMode
+      visualizer: visualizer
     })
   }
 
@@ -682,9 +682,9 @@ Item {
     if (nowPlayingExpanded) setPanelCursor("footer", "play")
   }
 
-  function cycleEqualizerMode() {
-    var index = equalizerModes.indexOf(equalizerMode)
-    equalizerMode = equalizerModes[(index + 1) % equalizerModes.length]
+  // Moves one visualiser setting to its next choice: "style", "palette", "glow"...
+  function stepVisualizer(key) {
+    visualizer = Api.visualizerStepped(visualizer, key)
     persistUiState()
   }
 
@@ -1603,7 +1603,8 @@ Item {
       { action: "Open For You", keys: "Alt+Shift+H" },
       { action: "Open Queue", keys: "Alt+Shift+Q" },
       { action: "Open or close Now playing", keys: "E or Alt+Shift+N" },
-      { action: "Change the equalizer style in Now playing", keys: "V" },
+      { action: "Change the visualiser style in Now playing", keys: "V" },
+      { action: "Change the visualiser colours", keys: "Shift+V" },
       { action: "Open Your listening", keys: "Alt+Shift+I" },
       { action: "Open Devices", keys: "Alt+Shift+D" },
       { action: "Open the current artist", keys: "Ctrl+Shift+A" },

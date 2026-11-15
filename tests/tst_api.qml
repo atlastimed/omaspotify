@@ -1874,6 +1874,79 @@ TestCase {
     compare(Api.playlistReorderBody(0, 4, 4, "snapshot"), null)
   }
 
+  function test_visualizer_settingsAlwaysComeBackWhole() {
+    var defaults = Api.normalizedVisualizer(null)
+    compare(defaults.style, "bars")
+    compare(defaults.palette, "artwork", "a cover with no colour to give falls back to the theme")
+    compare(defaults.bands, 64)
+    compare(defaults.peaks, true)
+    compare(defaults.mirror, false)
+    var odd = Api.normalizedVisualizer({ style: "lasers", palette: 7, bands: 70,
+      sensitivity: "loud", glow: 5, mirror: "yes", peaks: false })
+    compare(odd.style, "bars")
+    compare(odd.palette, "artwork")
+    compare(odd.bands, 64, "an in-between number goes to the nearest choice")
+    compare(odd.sensitivity, 1)
+    compare(odd.glow, 0.9)
+    compare(odd.mirror, false)
+    compare(odd.peaks, false)
+  }
+
+  function test_visualizer_keepsTheStyleTheOldEqualizerHad() {
+    compare(Api.normalizedVisualizer(null, "scope").style, "wave")
+    compare(Api.normalizedVisualizer(null, "pixels").style, "pixels")
+    compare(Api.normalizedVisualizer(null, "matrix").style, "pixels")
+    compare(Api.normalizedVisualizer({ style: "halo" }, "pixels").style, "halo")
+  }
+
+  function test_visualizer_stepsThroughEveryChoiceAndWraps() {
+    var settings = Api.normalizedVisualizer(null)
+    var seen = []
+    for (var i = 0; i < Api.VISUALIZER_STYLES.length; i++) {
+      settings = Api.visualizerStepped(settings, "style")
+      seen.push(settings.style)
+    }
+    compare(seen.join(","), "wave,halo,aurora,pixels,bars")
+    compare(Api.visualizerStepped({ bands: 96 }, "bands").bands, 32)
+    compare(Api.visualizerStepped({ mirror: false }, "mirror").mirror, true)
+    compare(Api.visualizerStepped(settings, "nonsense").style, "bars")
+    compare(Api.visualizerChoiceName({ sensitivity: 1.4 }, "sensitivity"), "High")
+    compare(Api.visualizerChoiceName({ palette: "ember" }, "palette"), "Ember")
+    compare(Api.visualizerChoiceName({ peaks: false }, "peaks"), "Off")
+    compare(Api.visualizerChoiceName(null, "bands"), "64")
+  }
+
+  function test_visualizer_palettes() {
+    var theme = Api.visualizerPalette("theme", "#ff0000", "#ffffff", [])
+    compare(theme[0], "#ff0000")
+    compare(theme[2], "#ffb3b3")
+    compare(Api.visualizerPalette("ember", "#ff0000", "#ffffff", [])[0], "#c0261c")
+    compare(Api.visualizerPalette("unknown", "#00ff00", "#ffffff", [])[0], "#00ff00")
+    // A colour object, as the theme hands it over, reads the same as its hex.
+    compare(Api.visualizerPalette("theme", { r: 0, g: 0, b: 1 }, "#ffffff", [])[0], "#0000ff")
+  }
+
+  function test_visualizer_artworkPaletteIsBrightEnoughToSee() {
+    // A dark teal cover with a little red in it.
+    var picked = Api.visualizerPalette("artwork", "#ff00ff", "#ffffff",
+      ["#062b26", "#0f6f60", "#101010", "#5a1512"])
+    compare(picked.length, 3)
+    for (var i = 0; i < picked.length; i++) {
+      var parts = Api.colorParts(picked[i])
+      verify(Math.max(parts.r, parts.g, parts.b) >= 0.69, picked[i] + " is too dark to draw with")
+    }
+    verify(picked.indexOf("#101010") < 0 && picked.indexOf("#ffffff") < 0)
+    // Pink lettering and purple lettering on black: both, not three purples.
+    var two = Api.visualizerPalette("artwork", "#00ff00", "#ffffff",
+      ["#000000", "#5b3a9a", "#6a45ad", "#4e3188", "#d81b7a", "#3a2a66"])
+    var hues = two.map(function(hex) { return Api.colorHue(hex) })
+    verify(hues.some(function(hue) { return hue > 0.85 && hue < 0.97 }), "no pink in " + two)
+    verify(hues.some(function(hue) { return hue > 0.68 && hue < 0.8 }), "no purple in " + two)
+    // Nothing usable in the cover: the theme stands in.
+    compare(Api.visualizerPalette("artwork", "#ff00ff", "#ffffff", ["#000000"])[0], "#ff00ff")
+    compare(Api.visualizerPalette("artwork", "#ff00ff", "#ffffff", [])[0], "#ff00ff")
+  }
+
   function test_detailPageContainer_doesNotUnwrapALaterPage() {
     var first = { name: "p", items: { items: [1, 2], next: "more", offset: 0 } }
     compare(Api.detailPageContainer(first, "playlist").next, "more")

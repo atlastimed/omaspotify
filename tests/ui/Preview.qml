@@ -164,7 +164,7 @@ ShellRoot {
     { shot: "settings", tab: "setup" },
     { shot: "discover", tab: "discover" },
     { shot: "nowplaying", tab: "home", run: function() {
-      panel.equalizerMode = "bars"
+      panel.visualizer = Api.normalizedVisualizer({ style: "bars" })
       panel.nowPlayingExpanded = true
     } },
     { shot: "shortcuts", tab: "home", run: function() { panel.toggleShortcutHelp() },
@@ -205,17 +205,26 @@ ShellRoot {
     { shot: "confirm", tab: "setup", settled: function() {
       panel.askToConfirm("Log out of Spotify on this computer?", "Log out", function() {})
     }, after: function() { panel.dismissTransientPopup() } },
-    { shot: "eq-pixels", tab: "home", run: function() {
-      panel.equalizerMode = "pixels"
+    { shot: "viz-wave", tab: "home", wait: 2600, run: function() {
+      panel.visualizer = Api.normalizedVisualizer({ style: "wave", palette: "glacier", mirror: true })
       panel.nowPlayingExpanded = true
     } },
-    { shot: "eq-scope", tab: "home", run: function() {
-      panel.equalizerMode = "scope"
+    { shot: "viz-halo", tab: "home", wait: 2600, run: function() {
+      panel.visualizer = Api.normalizedVisualizer({ style: "halo", palette: "artwork", glow: 0.9 })
       panel.nowPlayingExpanded = true
     } },
-    { shot: "eq-matrix", tab: "home", run: function() {
-      panel.equalizerMode = "matrix"
+    { shot: "viz-aurora", tab: "home", wait: 2600, run: function() {
+      panel.visualizer = Api.normalizedVisualizer({ style: "aurora", palette: "neon" })
       panel.nowPlayingExpanded = true
+    } },
+    { shot: "viz-pixels", tab: "home", wait: 2600, run: function() {
+      panel.visualizer = Api.normalizedVisualizer({ style: "pixels", palette: "spectrum", mirror: true })
+      panel.nowPlayingExpanded = true
+    } },
+    { shot: "viz-options", tab: "home", wait: 2600, run: function() {
+      panel.visualizer = Api.normalizedVisualizer({ style: "bars", palette: "ember" })
+      panel.nowPlayingExpanded = true
+      panel.visualizerTrayOpen = true
     } },
     { shot: "mini", tab: "home", settled: function() {
       panel.close()

@@ -7,13 +7,13 @@ import qs.Ui
 import "Api.js" as Api
 
 // What is playing, full size: the artwork carries the page, with the names and
-// what comes next beside it and a live equalizer underneath. The player bar
-// below keeps playback controls, seek and volume.
+// what comes next beside it, over a live visualiser that fills the view behind
+// them. The player bar below keeps playback controls, seek and volume.
 Item {
   id: page
 
   property var panel: null
-  // The equalizer runs only while this is true, so a closed view costs nothing.
+  // The visualiser runs only while this is true, so a closed view costs nothing.
   property bool active: false
 
   readonly property var service: panel ? panel.service : null
@@ -22,19 +22,53 @@ Item {
   readonly property var upNext: service ? service.queue.slice(0, nextRows) : []
   readonly property int nextRows: stage.height > Style.space(460) ? 3 : 0
 
-  onActiveChanged: if (active && service) service.loadQueue()
+  onActiveChanged: {
+    if (active && service) service.loadQueue()
+    if (!active && panel) panel.visualizerTrayOpen = false
+  }
 
   Item {
     id: stage
     anchors.fill: parent
     anchors.margins: Style.space(10)
 
-    readonly property bool equalizerUseful: !equalizer.unavailable
-    // Without an equalizer the artwork carries the whole page, centred in it.
-    readonly property real artSize: Math.max(Style.space(120), equalizerUseful
-      ? Math.min(height * 0.62, width * 0.44, Style.space(460))
+    readonly property bool visualizerUseful: !visualizer.unavailable
+    // The halo is drawn around the artwork, which steps in to leave it room.
+    readonly property bool haloed: visualizerUseful && page.active
+      && page.panel.visualizer.style === "halo" && heroArt.visible
+    property real haloSpan: haloed
+      ? Math.round(Math.min(height * 0.16, width * 0.1, Style.space(130))) : 0
+    // Without a visualiser the artwork carries the whole page, centred in it.
+    readonly property real artSize: Math.max(Style.space(120), visualizerUseful
+      ? Math.min((height - haloSpan * 2) * 0.62, width * 0.44, Style.space(460))
       : Math.min(height * 0.8, width * 0.5))
-    readonly property real heroTop: equalizerUseful ? 0 : Math.max(0, (height - artSize) / 2)
+    readonly property real heroTop: visualizerUseful ? 0 : Math.max(0, (height - artSize) / 2)
+    Behavior on haloSpan { NumberAnimation { duration: Style.duration(260); easing.type: Easing.OutCubic } }
+
+    Visualizer {
+      id: visualizer
+      anchors.fill: parent
+      // Out to the edges of the view, behind everything on it.
+      anchors.margins: -Style.space(10)
+      active: page.active
+      playing: page.service && page.service.playing
+      backendBinary: page.service && page.service.usesSoloist ? "soloist" : "omaspotify-backend"
+      configPath: page.service && page.service.stateDir
+        ? page.service.stateDir + "/cava.conf" : ""
+      scriptPath: page.service && page.service.pluginDir
+        ? page.service.pluginDir + "/scripts/visualizer.sh" : ""
+      settings: page.panel.visualizer
+      accent: page.panel.accent
+      foreground: page.panel.foreground
+      muted: page.panel.muted
+      fontFamily: page.panel.fontFamily
+      artworkItem: heroImage
+      artworkKey: heroImage.status === Image.Ready ? String(heroImage.source) : ""
+      swatchDir: page.service ? page.service.artworkDir : ""
+      artRect: Qt.rect(heroArt.x + Style.space(10), heroArt.y + Style.space(10),
+        heroArt.width, heroArt.height)
+      artSpan: stage.haloSpan
+    }
 
     Button {
       id: closeButton
@@ -49,14 +83,97 @@ Item {
       onClicked: page.panel.toggleNowPlayingExpanded()
     }
 
+    Button {
+      id: tuneButton
+      z: 2
+      anchors.top: parent.top
+      anchors.right: closeButton.left
+      anchors.rightMargin: Style.space(4)
+      visible: stage.visualizerUseful
+      iconText: "󰒓"
+      text: Api.visualizerChoiceName(page.panel.visualizer, "style")
+      foreground: page.panel.foreground
+      horizontalPadding: Style.space(7)
+      focusable: false
+      selected: page.panel.visualizerTrayOpen
+      tooltipText: page.panel.shortcutHint("Visualiser options", "V")
+      onClicked: page.panel.visualizerTrayOpen = !page.panel.visualizerTrayOpen
+    }
+
+    // Every choice is a short list, so a click steps to the next one and the
+    // view behind shows the change straight away.
+    BorderSurface {
+      id: tray
+      objectName: "visualizer-tray"
+      z: 3
+      visible: page.panel.visualizerTrayOpen && stage.visualizerUseful
+      anchors.top: tuneButton.bottom
+      anchors.topMargin: Style.space(6)
+      anchors.right: closeButton.right
+      width: Style.space(250)
+      height: trayRows.implicitHeight + Style.space(12)
+      radius: Style.cornerRadius
+      color: page.panel.popupBackground
+      borderSpec: page.panel.popupBorderSpec
+
+      readonly property string style: page.panel.visualizer.style
+      readonly property var rows: [
+        { key: "style", label: "Style", shown: true },
+        { key: "palette", label: "Colours", shown: true },
+        { key: "sensitivity", label: "Sensitivity", shown: true },
+        { key: "smoothing", label: "Motion", shown: true },
+        { key: "glow", label: "Glow", shown: true },
+        { key: "brightness", label: "Brightness", shown: true },
+        { key: "bands", label: "Bands", shown: true },
+        { key: "mirror", label: "Bass in the middle", shown: style !== "halo" },
+        { key: "peaks", label: "Falling caps", shown: ["bars", "halo", "pixels"].indexOf(style) >= 0 }
+      ]
+
+      Column {
+        id: trayRows
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.margins: Style.space(6)
+
+        Repeater {
+          model: tray.rows
+
+          Button {
+            required property var modelData
+            width: trayRows.width
+            visible: modelData.shown
+            leftAlign: true
+            focusable: false
+            foreground: page.panel.foreground
+            fontFamily: page.panel.fontFamily
+            text: modelData.label
+            onClicked: page.panel.stepVisualizer(modelData.key)
+
+            Text {
+              anchors.right: parent.right
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              text: Api.visualizerChoiceName(page.panel.visualizer, parent.modelData.key)
+              textFormat: Text.PlainText
+              color: page.panel.accent
+              font.family: page.panel.fontFamily
+              font.pixelSize: Style.font.body
+            }
+          }
+        }
+      }
+    }
+
     BorderSurface {
       id: heroArt
       width: page.service && page.service.artworkEnabled ? stage.artSize : 0
       height: width
       visible: width > 0
       anchors.left: parent.left
+      anchors.leftMargin: stage.haloSpan
       anchors.top: parent.top
-      anchors.topMargin: stage.heroTop
+      anchors.topMargin: stage.heroTop + stage.haloSpan
       radius: Style.cornerRadius
       color: Style.normalFillFor(page.panel.foreground, page.panel.accent)
       borderSpec: Border.none()
@@ -92,8 +209,8 @@ Item {
     Column {
       id: nameColumn
       anchors.left: heroArt.right
-      anchors.leftMargin: heroArt.visible ? Style.space(22) : 0
-      anchors.right: closeButton.left
+      anchors.leftMargin: (heroArt.visible ? Style.space(22) : 0) + stage.haloSpan
+      anchors.right: tuneButton.left
       anchors.rightMargin: Style.space(8)
       anchors.top: heroArt.top
       spacing: Style.space(5)
@@ -191,33 +308,28 @@ Item {
       }
     }
 
-    Equalizer {
-      id: equalizer
-      anchors.left: parent.left
-      anchors.right: parent.right
-      anchors.top: heroArt.visible && heroArt.height > nameColumn.height
-        ? heroArt.bottom : nameColumn.bottom
-      anchors.topMargin: Style.space(16)
+    // Why the view is still: nothing local is playing.
+    Text {
+      anchors.horizontalCenter: parent.horizontalCenter
       anchors.bottom: parent.bottom
-      visible: !unavailable || !heroArt.visible
-      active: page.active
-      playing: page.service && page.service.playing
-      backendBinary: page.service && page.service.usesSoloist ? "soloist" : "omaspotify-backend"
-      configPath: page.service && page.service.stateDir
-        ? page.service.stateDir + "/cava.conf" : ""
-      scriptPath: page.service && page.service.pluginDir
-        ? page.service.pluginDir + "/scripts/equalizer.sh" : ""
-      mode: page.panel.equalizerMode
-      muted: page.panel.muted
-      onModeCycleRequested: page.panel.cycleEqualizerMode()
+      anchors.bottomMargin: Style.space(18)
+      visible: stage.visualizerUseful && visualizer.note !== ""
+      width: Math.min(parent.width, Style.space(460))
+      text: visualizer.note
+      textFormat: Text.PlainText
+      color: page.panel.muted
+      font.family: page.panel.fontFamily
+      font.pixelSize: Style.font.caption
+      horizontalAlignment: Text.AlignHCenter
+      wrapMode: Text.WordWrap
     }
 
     Text {
       anchors.left: nameColumn.left
       anchors.right: nameColumn.right
       anchors.bottom: heroArt.bottom
-      visible: equalizer.unavailable
-      text: equalizer.unavailableReason
+      visible: visualizer.unavailable
+      text: visualizer.unavailableReason
       textFormat: Text.PlainText
       color: page.panel.muted
       font.family: page.panel.fontFamily

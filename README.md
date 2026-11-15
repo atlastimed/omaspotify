@@ -122,12 +122,27 @@ listen, and top artists and songs sit underneath it across three ranges.
 
 ### The song, full size
 
-`E` or `Alt+Shift+N` gives the current track the whole window—artwork, title,
-and a live equalizer drawn in your theme's colours. `V` switches between bars,
-pixels, scope and matrix. The equalizer listens only to OmaSpotify's own audio
-and needs `cava` (`omarchy pkg add cava`).
+`E` or `Alt+Shift+N` gives the current track the whole window: artwork, title,
+and a live visualiser filling the view behind them. It listens only to
+OmaSpotify's own audio and needs `cava` (`omarchy pkg add cava`).
 
-![The Now playing screen with album artwork above a live equalizer](docs/screenshots/now-playing.png)
+`V` steps through five styles:
+
+| Style | What it draws |
+|---|---|
+| Bars | Rounded bars on a floor, with a glow, falling caps and a reflection |
+| Wave | Three ribbons of the spectrum around a midline |
+| Halo | Rays leaving the edge of the artwork, with a ring that swells on the bass |
+| Aurora | Curtains of light across the whole view, one each for low, middle and high |
+| Pixels | A wall of square lamps |
+
+`Shift+V` steps through the colours: taken from the album cover (the default),
+your theme, or one of Spectrum, Ember, Glacier and Neon. The cog beside the
+close button opens the rest: sensitivity, motion, glow, brightness, the number
+of bands, bass in the middle, and falling caps. Each is a short list that a
+click steps through, and the view behind shows the change as you make it.
+
+![The Now playing screen: rays in the cover's colours leaving the edge of the artwork](docs/screenshots/now-playing.png)
 
 ### Everything you were just listening to
 

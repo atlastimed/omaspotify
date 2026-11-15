@@ -798,7 +798,7 @@ ShellRoot {
       svc.togglePinnedItem({ uri: "spotify:album:pinned" })
       top.check(svc.pinnedUris.length === 1, "the pin was not kept")
       // What the full player saves every time it closes.
-      svc.mergeSession({ tab: "home", searchText: "", equalizerMode: "bars" })
+      svc.mergeSession({ tab: "home", searchText: "", visualizer: { style: "bars" } })
       top.check(svc.pinnedUris.length === 1 && svc.pinnedUris[0] === "spotify:album:pinned",
         "closing the player dropped the pin")
       top.check(svc.sessionState.tab === "home", "the surface's own state was not saved")

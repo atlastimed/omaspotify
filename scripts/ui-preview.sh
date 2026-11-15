@@ -52,7 +52,9 @@ cp -r "$omarchy_path/shell/Commons" "$omarchy_path/shell/Ui" "$work/app/"
 cp "$source_root/tests/ui/Preview.qml" "$work/app/shell.qml"
 cp "$source_root/tests/ui/FixtureApi.js" "$work/app/"
 cp -r "$source_root/scripts" "$work/app/plugin/scripts"
-# Pretend audio, so the equalizer has something to draw.
+cp -r "$source_root/shaders" "$work/app/plugin/shaders"
+# Pretend audio, so the visualiser has something to draw: a kick on the low
+# end, a wandering middle and some air, as many bands as it was asked for.
 mkdir -p "$work/bin"
 cat > "$work/bin/pw-dump" <<'FAKE'
 #!/usr/bin/env bash
@@ -60,14 +62,23 @@ echo '[{"id":1,"info":{"props":{"media.class":"Stream/Output/Audio","application
 FAKE
 cat > "$work/bin/cava" <<'FAKE'
 #!/usr/bin/env bash
-t=0
-while true; do
-  line=""
-  for b in {0..47}; do line+="$(( (b * 37 + t * 53) % 400 + 500 - (b > 24 ? (b - 24) * 18 : (24 - b) * 12) ));"; done
-  printf '%s\n' "${line//-/}"
-  t=$((t + 1))
-  sleep 0.1
-done
+bars=$(sed -n 's/^bars = //p' "$2")
+exec awk -v n="${bars:-64}" 'BEGIN {
+  for (t = 0; ; t += 0.033) {
+    beat = sin(t * 6.2); beat = beat > 0 ? beat ^ 6 : 0
+    line = ""
+    for (i = 0; i < n; i++) {
+      x = i / (n - 1)
+      v = exp(-x * 5) * (0.55 + 0.45 * beat) \
+        + 0.38 * exp(-((x - 0.38 - 0.1 * sin(t * 1.3)) * 4) ^ 2) \
+        + 0.22 * exp(-((x - 0.8) * 5) ^ 2) * (0.5 + 0.5 * sin(t * 9 + i)) \
+        + 0.06 * (0.5 + 0.5 * sin(i * 12.9898 + int(t * 20) * 78.233))
+      line = line int((v > 1 ? 1 : v) * 1000) ";"
+    }
+    print line; fflush()
+    system("sleep 0.033")
+  }
+}'
 FAKE
 chmod +x "$work/bin/pw-dump" "$work/bin/cava"
 
